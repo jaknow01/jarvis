@@ -2,6 +2,22 @@ services:
   agent:
     build: .
     container_name: jarvis
+    volumes:
+      - .:/app
     working_dir: /app
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
 
-  
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    ports:
+    - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data

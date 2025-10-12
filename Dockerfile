@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ENV PYTHONBUFFERED=1\
+ENV PYTHONUNBUFFERED=1\
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/root/.local/bin:$PATH"
 
@@ -11,6 +11,7 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock* ./
 
 RUN poetry install --no-interaction --no-ansi
-COPY /app /app
-COPY /lib /lib
+COPY . .
+
+CMD [ "poetry", "run", "python", "app/main.py" ]
 
