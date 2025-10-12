@@ -1,0 +1,7 @@
+services:
+  agent:
+    build: .
+    container_name: jarvis
+    working_dir: /app
+
+  #probably some database
