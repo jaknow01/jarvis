@@ -2,10 +2,11 @@
 name = "app"
 version = "0.1.0"
 description = "Personal_assistant"
+package-mode = false
 authors = [
     {name = "kuba",email = "jakub.nowakowski01@onet.pl"}
 ]
-readme = "README.md"
+readme = ""
 requires-python = ">=3.10,<4.0"
 dependencies = [
     "langchain (>=0.3.27,<0.4.0)",

@@ -1,23 +1,18 @@
+
 services:
   agent:
     build: .
     container_name: jarvis
     volumes:
-      - .:/app
-    working_dir: /app
+      - ./app:/app/app
+      - ./lib:/app/lib
+    ports:
+      - "8002:8002"
     depends_on:
       - redis
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
 
   redis:
-    image: redis:7.2-alpine
+    image: redis:7
     container_name: redis
     ports:
-    - "6379:6379"
-    volumes:
-      - redis_data:/data
-
-volumes:
-  redis_data
+      - "6379:6379"
