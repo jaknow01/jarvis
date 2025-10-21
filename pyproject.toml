@@ -21,6 +21,8 @@ dependencies = [
     "langgraph (>=1.0.0,<2.0.0)"
 ]
 
+[tool.poetry]
+packages = [{include = "lib"}, {include = "app"}]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

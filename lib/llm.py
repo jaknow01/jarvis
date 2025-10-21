@@ -16,6 +16,8 @@ def llm_usage(agent_names: list[str]):
 def open_ai_llm() -> ChatOpenAI:
     llm = ChatOpenAI(
         model = os.getenv("OPENAI_DEFAULT_MODEL"),
-        api_key=os.getenv("OPENAI_API_KEY")
+        api_key=os.getenv("OPENAI_API_KEY"),
+        output_version="responses/v1",
+        use_previous_response_id=True
     )
     return llm

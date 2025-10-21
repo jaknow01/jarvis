@@ -1,7 +1,7 @@
 from lib.tools import TOOLS_BY_AGENT
 from lib.llm import LLM_BY_AGENT
 from langchain_core.prompts import ChatPromptTemplate
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 AGENTS: dict = {}
 
@@ -15,10 +15,10 @@ def agents_decorator(name: str):
 def create_coordinator_agent():
     name = "coordinator"
 
-    agent = create_react_agent(
+    agent = create_agent(
         model = LLM_BY_AGENT[name](),
         tools = TOOLS_BY_AGENT[name],
-        prompt="Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."
+        system_prompt="Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."
     )
     
     return agent
