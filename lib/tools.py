@@ -1,5 +1,4 @@
-from langchain_core.tools import tool
-from langchain.tools import BaseTool
+from agents import RunContextWrapper, function_tool
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 
@@ -12,10 +11,10 @@ def tool_ownership(agent_name: str):
         return func
     return wrapper
 
-@tool_ownership("coordinator")
-@tool
-def test():
-    """
-    Doesnt do anything
-    """
-    pass
+# @tool_ownership("coordinator")
+# @function_tool
+# def test():
+#     """
+#     Doesnt do anything
+#     """
+#     pass
