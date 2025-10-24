@@ -11,6 +11,12 @@ def tool_ownership(agent_name: str):
         return func
     return wrapper
 
+class Ctx():
+    def __init__(self):
+        # do zastanowienia się co mogę chcieć przekazywać między toolami tego samego agenta
+        # właściwie to narzędzia każdego podagenta muszą mieć swoje
+        pass
+
 # @tool_ownership("coordinator")
 # @function_tool
 # def test():

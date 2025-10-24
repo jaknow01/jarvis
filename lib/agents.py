@@ -11,9 +11,11 @@ def agents_decorator(name: str):
     return wrapper
 
 @agents_decorator(name="coordinator")
-def create_coordinator_agent():
+def create_coordinator_agent() -> Agent:
     name = "coordinator"
     model_settings = LLM_BY_AGENT[name]()
+
+    # create_subagents() - trzeba stworzyc pomocnikow
 
     agent = Agent(
         name = "Coordinator",
@@ -25,3 +27,13 @@ def create_coordinator_agent():
     )
     
     return agent
+
+@agents_decorator(name="iot_operator")
+def create_iot_agent():
+    name = "iot_operator"
+
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+
+    )
