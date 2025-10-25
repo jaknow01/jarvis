@@ -1,5 +1,4 @@
-from langchain_core.tools import tool
-from langchain.tools import BaseTool
+from agents import RunContextWrapper, function_tool
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 
@@ -12,10 +11,16 @@ def tool_ownership(agent_name: str):
         return func
     return wrapper
 
-@tool_ownership("coordinator")
-@tool
-def test():
-    """
-    Doesnt do anything
-    """
-    pass
+class Ctx():
+    def __init__(self):
+        # do zastanowienia się co mogę chcieć przekazywać między toolami tego samego agenta
+        # właściwie to narzędzia każdego podagenta muszą mieć swoje
+        pass
+
+# @tool_ownership("coordinator")
+# @function_tool
+# def test():
+#     """
+#     Doesnt do anything
+#     """
+#     pass

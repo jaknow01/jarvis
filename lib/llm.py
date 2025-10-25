@@ -1,9 +1,7 @@
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
+from agents import ModelSettings
 import os
 
-LLM_BY_AGENT: dict[str: BaseChatModel] = {}
+LLM_BY_AGENT: dict = {}
 
 def llm_usage(agent_names: list[str]):
     def wrapper(func):
@@ -12,12 +10,13 @@ def llm_usage(agent_names: list[str]):
         return func
     return wrapper
 
-@llm_usage(["coordinator"])
-def open_ai_llm() -> ChatOpenAI:
-    llm = ChatOpenAI(
-        model = os.getenv("OPENAI_DEFAULT_MODEL"),
-        api_key=os.getenv("OPENAI_API_KEY"),
-        output_version="responses/v1",
-        use_previous_response_id=True
-    )
-    return llm
+
+
+@llm_usage(["coordinator", "iot_operator"])
+def open_ai_llm() -> dict:
+    settings = ModelSettings(parallel_tool_calls=True)
+
+    return {
+        "model_name" : os.getenv("OPENAI_DEFAULT_MODEL"),
+        "settings" : settings
+    }
