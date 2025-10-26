@@ -1,6 +1,8 @@
 # import aioredis
 from typing import Any
 import redis.asyncio as redis
+from lib.smart_device import SmartDevice
+
 
 class Cache():
     def __init__(self, ttl:int = 3600 * 24 * 5):
@@ -19,3 +21,8 @@ class Cache():
         """Retrieves information from cache"""
         data = await self.redis_cache.get(key)
         return data
+
+class Ctx():
+    def __init__(self, cache: Cache = Cache()):
+        self.cache = cache
+        self.devices: dict[str, SmartDevice] = {}

@@ -1,4 +1,4 @@
-from lib.tools import TOOLS_BY_AGENT
+from lib.tools import get_devices_state
 from lib.llm import LLM_BY_AGENT
 from agents import Agent
 
@@ -30,9 +30,9 @@ def create_coordinator_agent() -> Agent:
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
     )
+    print("Utworzony koord")
     
     return agent
-
 
 @agents_decorator(name="iot_operator")
 def create_iot_agent():
@@ -42,9 +42,11 @@ def create_iot_agent():
 
     agent = Agent(
         name = name,
-        tools = [],
+        instructions="You controll all smart devices in a household.",
+        tools = [get_devices_state],
         model=model_settings["model_name"],
-        model_settings=model_settings["model_settings"]
+        model_settings=model_settings["settings"]
     )
+    print("Utworzony iot")
 
     return agent
