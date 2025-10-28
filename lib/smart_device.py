@@ -1,5 +1,7 @@
-import tinytuya
+from tinytuya import BulbDevice
 from enum import Enum
+from pydantic import BaseModel, Field, ConfigDict
+from typing import List
 
 class RGB():
     def __init__(self, r: int, g: int, b: int):
@@ -12,90 +14,82 @@ class ColorMode(Enum):
     COLOR = "colour"
 
 
-class SmartDevice():
+class SmartDevice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    dev_id: str
+    ip: str
+    local_key: str
+    room: str
+    zones: List[str]
+    port: int = 6668
 
-    def __init__ (self,
-                        name: str,
-                        dev_id: str,
-                        ip: str,
-                        local_key: str,
-                        room: str,
-                        zones: list[str],
-                        port: int = 6668):
-        self.name = name
-        self.dev_id = dev_id
-        self.ip = ip
-        self.local_key = local_key
-        self.room = room
-        self.zones = zones
-        self.port = port
+    # device: BulbDevice | None = None
+    state: dict = Field(default_factory=dict) 
 
-        self.state = {}
-
-        self.device = tinytuya.BulbDevice(dev_id=dev_id, address=ip, local_key=local_key, port=port, version=3.3)
+    async def _create_device(self):
+        return BulbDevice(
+            dev_id=self.dev_id, 
+            address=self.ip, 
+            local_key=self.local_key, 
+            port=self.port, 
+            version=3.3
+        )
 
     async def get_status(self) -> dict:
-        print(f"Chcecking status of {self.name}")
-        state = self.device.status()
+        print(f"Checking status of {self.name}")
+        device = await self._create_device()
+        state = device.status()
         state_translated = {}
 
         if "Error" in state.keys():
             self.state = state
         else:
             params = state["dps"]
-            state_translated["is_on"] = params["20"]
-            state_translated["mode"] = params["21"]
-            state_translated["brightness"] = params["22"] if "22" in params.keys() else "unknown"
-            state_translated["contrast"] = params["23"] if "23" in params.keys() else "unknown"
+            state_translated["is_on"] = params.get("20")
+            state_translated["mode"] = params.get("21")
+            state_translated["brightness"] = params.get("22", "unknown")
+            state_translated["contrast"] = params.get("23", "unknown")
             self.state = state_translated
 
-        device_info = await self.describe_as_json()
-
-        full_state = {"device_info" : device_info, "device_state": self.state}
-        
-        return full_state
+        device_info = self.describe_as_json()
+        return {"device_info": device_info, "device_state": self.state}
 
     async def _check_status(self) -> bool:
-        return "Error" in self.state
-    
+        device = await self._create_device()
+        return "Error" not in device.status()
+
     async def turn_on(self):
         if await self._check_status():
-            self.device.turn_on()
+            await self._create_device().turn_on()
 
     async def turn_off(self):
         if await self._check_status():
-            self.device.turn_off()
+            await self._create_device().turn_off()
 
-    async def change_color(self, new_color: RGB):
+    async def change_color(self, new_color):
         if await self._check_status():
-            self.device.set_colour(new_color.r, new_color.g, new_color.b)
+            await self._create_device().set_colour(new_color.r, new_color.g, new_color.b)
 
-    async def change_mode(self, new_mode: ColorMode):
+    async def change_mode(self, new_mode):
         if await self._check_status():
-            self.device.set_mode(new_mode.value)
+            await self._create_device().set_mode(new_mode.value)
 
-    async def describe_as_json(self) -> dict:
-        return {
-            "name" : self.name,
-            "device_id" : self.dev_id,
-            "local_ip" : self.ip,
-            "local_key" : self.local_key,
-            "room" : self.room,
-            "zones" : self.zones
-        }
-      
+    def describe_as_json(self) -> dict:
+        return self.model_dump(exclude={"device", "state"})
+
     @classmethod
-    async def from_json(self, json_data: dict):
+    async def create_from_json(cls, json_data: dict):
         name = json_data["custom_name"]
         params = json_data["params"]
-
-        return SmartDevice(name=name, 
-                           dev_id=params["id"], 
-                           ip=params["local_ip"], 
-                           local_key=params["local_key"],
-                           room=params["room"],
-                           zones=params["zones"]
-                        )
+        return cls(
+            name=name,
+            dev_id=params["id"],
+            ip=params["local_ip"],
+            local_key=params["local_key"],
+            room=params["room"],
+            zones=params["zones"]
+        )
     
 
 

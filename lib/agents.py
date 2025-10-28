@@ -1,4 +1,4 @@
-from lib.tools import get_devices_state
+from lib.tools import get_devices_state, turn_on_devices
 from lib.llm import LLM_BY_AGENT
 from agents import Agent
 
@@ -42,8 +42,12 @@ def create_iot_agent():
 
     agent = Agent(
         name = name,
-        instructions="You controll all smart devices in a household.",
-        tools = [get_devices_state],
+        instructions=(
+            "You can monitor and control all smart devices in a household (smart lights).\
+            You can monitor and control all smart devices. Only call get_devices_state if the current state of devices is unknown.\
+            otherwise you won't have necessary information about them to perform any action."
+        ),
+        tools = [get_devices_state, turn_on_devices],
         model=model_settings["model_name"],
         model_settings=model_settings["settings"]
     )
