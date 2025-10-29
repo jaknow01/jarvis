@@ -12,7 +12,7 @@ def llm_usage(agent_names: list[str]):
 
 
 
-@llm_usage(["coordinator", "iot_operator"])
+@llm_usage(["coordinator", "iot_operator", "maps_agent"])
 def open_ai_llm() -> dict:
     settings = ModelSettings(parallel_tool_calls=True)
 

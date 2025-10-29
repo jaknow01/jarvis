@@ -1,4 +1,4 @@
-from lib.tools import get_devices_state, turn_on_devices
+from lib.tools import get_devices_state, turn_on_devices, get_route_details
 from lib.llm import LLM_BY_AGENT
 from agents import Agent
 
@@ -22,9 +22,13 @@ def create_coordinator_agent() -> Agent:
         instructions = ("Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."),
         # tools = TOOLS_BY_AGENT[name],
         tools = [
-            create_iot_agent().as_tool(
-                tool_name="iot_operator",
-                tool_description="Controls smart devices in a houshold."
+            # create_iot_agent().as_tool(
+            #     tool_name="iot_operator",
+            #     tool_description="Controls smart devices in a houshold."
+            # ),
+            create_maps_agent().as_tool(
+                tool_name="maps_agent",
+                tool_description="Controls access to maps and navigation. Can calculate routes."
             )
         ],
         model = model_settings["model_name"],
@@ -53,4 +57,23 @@ def create_iot_agent():
     )
     print("Utworzony iot")
 
+    return agent
+
+@agents_decorator(name="maps_agent")
+def create_maps_agent():
+    name = "maps_agent"
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions = (
+            "You are a Google Maps operator. Your task is to plan trips based on the traffic and the preferences\
+            of the user."
+        ),
+        tools = [get_route_details],
+        model=model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    print("Utworzony google agent")
     return agent
