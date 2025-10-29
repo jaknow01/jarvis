@@ -1,7 +1,7 @@
 from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
 from lib.smart_device import SmartDevice, RGB, ColorMode
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 import json
 import asyncio
 import googlemaps
@@ -83,11 +83,23 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice
     return new_states
 
 @function_tool
+async def get_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
+    """
+    Description:
+    This tool is used to download necessary maps data such as favourite places,
+    known routes and other information which will facilitate understanding user's
+    query in natural language.
+    """
+    pass
+
+
+@function_tool
 async def get_route_details(ctx: RunContextWrapper[Ctx],
                             origin: str,
                             destination: str,
-                            transport_mode: str,
-                            departure_time: Optional[str] = "now",
+                            transport_mode: Literal["driving", "walking", "bicycling", "transit"],
+                            transit_mode: Optional[Literal["bus", "subway", "tram", None]] = None,
+                            departure_time: Optional[Union[str, datetime]] = "now",
                             #arrival_time: Optional[str] = None
                             ) -> dict:
     """
@@ -101,15 +113,21 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
         Context in which the tool operates
     
     origin: str
-        The starting point of the journey. Most of the time this will be a specific adress but it can also
-        be a specific bus/metro/train stop.
+        The starting point of the journey. This can be a specific adress, specific bus/metro/train stop
+        ,a known landmark or a point from navigation memory.
 
     destination: str
-        The end of the journey. Most of the time this will be a specific adress but it can also
-        be a specific bus/metro/train stop.
+        The end of the journey. This can be a specific adress, specific bus/metro/train stop
+        ,a known landmark or a point from navigation memory.
 
     transport_mode: str
         User's preffered mode of communication such as 'car', 'transit' etc.
+
+    transit_mode: str
+        Limits the public transit options to only one specified mode. When left with default value of None
+        the route may consist of any combination of public transport modes such as buses, trams, subways etc.
+        If a given mode is specified the route will be limited to only one mode of public transport.
+        Note: this parameter can only be provided if transport_mode = 'transit'. Otherwise it should remain None
 
     departure_time: Optional[str] = "now"
         Time at which user wishes to leave. By default is set to 'now'.
@@ -126,10 +144,14 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
 
     gmaps_client = googlemaps.Client(os.getenv("GOOGLE_MAPS_API_KEY"))
 
+    if transport_mode != "transit" and transit_mode is not None:
+        transit_mode = None
+
     directions_result = gmaps.directions(
         origin=origin,
         destination=destination,
-        mode=transport_mode,       # driving, walking, bicycling, transit
+        mode=transport_mode,
+        transit_mode=transit_mode,
         departure_time=departure_time
     )
 
