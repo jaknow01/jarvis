@@ -4,6 +4,7 @@ from lib.tools import (
     get_route_details,
     get_maps_memory)
 from lib.llm import LLM_BY_AGENT
+from lib.tools import TOOLS_BY_AGENT
 from agents import Agent
 
 AGENTS: dict = {}
@@ -33,6 +34,10 @@ def create_coordinator_agent() -> Agent:
             create_maps_agent().as_tool(
                 tool_name="maps_agent",
                 tool_description="Controls access to maps and navigation. Can calculate routes."
+            ),
+            create_news_agent().as_tool(
+                tool_name="news_agent",
+                tool_description="Summarizes current political news."
             )
         ],
         model = model_settings["model_name"],
@@ -77,10 +82,48 @@ def create_maps_agent():
             to understand user's requests in natural language. Without the output of this tool you may not be able to understand \
             user's requests."
         ),
-        tools = [get_route_details, get_maps_memory],
+        tools = TOOLS_BY_AGENT[name],
         model=model_settings["model_name"],
         model_settings=model_settings["settings"]
     )
 
     print("Utworzony google agent")
+    return agent
+
+@agents_decorator(name="memory_operator")
+def create_memory_agent():
+    name = "memory_operator"
+
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions = (
+            "You are responsible for managing the program's long term memory.\
+            You can modify existing data, set reminders etc."
+        ),
+        tools = [],
+        model=model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    print("Utworzony memory agent")
+    return agent
+
+@agents_decorator(name="news_agent")
+def create_news_agent():
+    name = "news_agent"
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions = (
+            "You are a news reporter. Your task is to search twitter and create \
+            summaries of the events mentioned by the user."),
+        tools = [],
+        model = model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    print("Utworzony agent do wiadomości")
     return agent

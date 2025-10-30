@@ -24,7 +24,7 @@ class Chatbot():
             )
 
             await ctx.cache.save_to_cache("previous_response_id", result.last_response_id)
-            print(result.final_output)
+            print(f"[ASSISTANT] {result.final_output}")
 
 # TODO
 # 1. Zacząć zachowywać previous response id w redisie -> czyli napisać kod do zapisu i odczytu z redisa --DONE
