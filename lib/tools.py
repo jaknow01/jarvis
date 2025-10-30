@@ -1,6 +1,7 @@
 from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
 from lib.smart_device import SmartDevice, RGB, ColorMode
+from lib.tools_utils import simplify_directions_response
 from typing import List, Literal, Optional, Union
 import json
 import asyncio
@@ -10,20 +11,20 @@ from datetime import datetime
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
+MAPS_PARAMS_PATH = "data/maps_data/maps_memory.json"
 
 
-# def tool_ownership(agent_name: str):
-#     def wrapper(function_tool):
-#         if agent_name in TOOLS_BY_AGENT:
-#             TOOLS_BY_AGENT[agent_name].append(function_tool)
-#         else:
-#             TOOLS_BY_AGENT[agent_name] = [func]
-#         return func
-#     return wrapper
+def tool_ownership(agent_name: str):
+    def wrapper(function_tool):
+        if agent_name in TOOLS_BY_AGENT:
+            TOOLS_BY_AGENT[agent_name].append(function_tool)
+        else:
+            TOOLS_BY_AGENT[agent_name] = [function_tool]
+        return function_tool
+    return wrapper
 
-
+@tool_ownership("iot_operator")
 @function_tool
-# @tool_ownership("iot_operator")
 async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     """
     This tool is used to download neccessary data about all smart devices which is then
@@ -50,8 +51,8 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
 
     return states
 
+@tool_ownership("iot_operator")
 @function_tool(strict_mode=False)
-# @tool_ownership("iot_operator")
 async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice]):
     """
     Description:
@@ -82,6 +83,7 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice
         print(e)
     return new_states
 
+@tool_ownership("maps_agent")
 @function_tool
 async def get_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
     """
@@ -90,17 +92,24 @@ async def get_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
     known routes and other information which will facilitate understanding user's
     query in natural language.
     """
-    pass
+    print("Sprawdzam znane adresy")
+    with open(MAPS_PARAMS_PATH, "r", encoding="utf-8") as f:
+        list_of_jsons = json.load(f)
+    
+    ctx.context.known_adresses = list_of_jsons
 
+    return list_of_jsons
 
+@tool_ownership("maps_agent")
 @function_tool
 async def get_route_details(ctx: RunContextWrapper[Ctx],
                             origin: str,
                             destination: str,
-                            transport_mode: Literal["driving", "walking", "bicycling", "transit"],
+                            transport_mode: Literal["driving", "walking", "bicycling", "transit"] = "transit",
                             transit_mode: Optional[Literal["bus", "subway", "tram", None]] = None,
                             departure_time: Optional[Union[str, datetime]] = "now",
-                            #arrival_time: Optional[str] = None
+                            #arrival_time: Optional[str] = None,
+                            show_alternatives: Optional[bool] = True
                             ) -> dict:
     """
     Description:
@@ -120,17 +129,24 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
         The end of the journey. This can be a specific adress, specific bus/metro/train stop
         ,a known landmark or a point from navigation memory.
 
-    transport_mode: str
+    transport_mode: Literal["driving", "walking", "bicycling", "transit"] = 'transit'
         User's preffered mode of communication such as 'car', 'transit' etc.
+        Note: should remain with defalut value 'transit' unless user specifies otherwise
 
-    transit_mode: str
+    transit_mode: Optional[Literal["bus", "subway", "tram", None]] = None
         Limits the public transit options to only one specified mode. When left with default value of None
         the route may consist of any combination of public transport modes such as buses, trams, subways etc.
         If a given mode is specified the route will be limited to only one mode of public transport.
         Note: this parameter can only be provided if transport_mode = 'transit'. Otherwise it should remain None
 
-    departure_time: Optional[str] = "now"
+    departure_time: Optional[Union[str, datetime]] = "now"
         Time at which user wishes to leave. By default is set to 'now'.
+
+    show_alternatives: Optional[bool] = True
+        This parameter controls whether the navigation API returns only one most optimal route
+        or multiple options.
+        When True only one route is returned, otherwise multiple options
+        Note: it sholud remain True unless user specifies otherwise
 
     Output:
         This function returns a json file with all of the steps of the most optimal route from origin to destination
@@ -147,15 +163,23 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
     if transport_mode != "transit" and transit_mode is not None:
         transit_mode = None
 
-    directions_result = gmaps.directions(
-        origin=origin,
-        destination=destination,
-        mode=transport_mode,
-        transit_mode=transit_mode,
-        departure_time=departure_time
-    )
+    print("Rozpoczynam planowanie trasy")
 
-    return directions_result
+    try:
+        directions_result = gmaps_client.directions(
+            origin=origin,
+            destination=destination,
+            mode=transport_mode,
+            transit_mode=transit_mode,
+            departure_time=departure_time,
+            alternatives=show_alternatives
+        )
+
+        result = simplify_directions_response(directions_result)
+    except Exception as e:
+        print(e)
+
+    return result
 
 
 
