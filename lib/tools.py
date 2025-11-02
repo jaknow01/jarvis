@@ -1,6 +1,6 @@
 from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
-from lib.smart_device import SmartDevice, RGB, ColorMode
+from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
 from typing import List, Literal, Optional, Union
 import json
@@ -22,6 +22,8 @@ def tool_ownership(agent_name: str):
             TOOLS_BY_AGENT[agent_name] = [function_tool]
         return function_tool
     return wrapper
+
+# ------- iot operator -------
 
 @tool_ownership("iot_operator")
 @function_tool
@@ -46,8 +48,10 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
 
 
     states = await asyncio.gather(*(d.get_status() for d in devices))
+    ctx.context.devices_states = states
 
-    ctx.context.devices = states
+    devices_dict = {d.name : d for d in devices}
+    ctx.context.devices = devices_dict
 
     return states
 
@@ -112,6 +116,56 @@ async def turn_off_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevic
     except Exception as e:
         print(e)
     return new_states
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device: SmartDevice, new_mode: Mode) -> dict:
+    """
+    Description:
+    This tool is used to change the lighting mode of a given smart device. Lighting mode can either
+    be set to white or colour mode. When in colour mode various rgb settings can be applied to the
+    device
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    device: SmartDevice
+        The device that is to be affected by the mode change
+
+    new_mode: Mode
+        The mode that will be applied to the chosen device
+    """
+
+    print("Zmieniam tryb")
+    await device.change_mode(new_mode)
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def change_color(ctx: RunContextWrapper[Ctx], device: SmartDevice, new_color: RGB) -> dict:
+    """
+    Description:
+    This tool is used to change the colour of the given smart device.
+    In order to set a new RGB value device must be in 'colour' lighting mode.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    device: SmartDevice
+        The device that is to be affected by the color change
+        Note: this device must be in 'colour' lighting mode in order for the change to be possible
+
+    new_color: RGB
+        The new color that the device will be set to as an RGB value.
+        RGB values are integers from 0 to 255 where R = red, G = green, B = blue
+    """
+
+    print("Zmieniam kolor")
+    await device.change_color(new_color)
+    
+
+# ------- maps agent -------
 
 @tool_ownership("maps_agent")
 @function_tool

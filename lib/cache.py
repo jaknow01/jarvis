@@ -25,5 +25,6 @@ class Cache():
 class Ctx():
     def __init__(self, cache: Cache = Cache()):
         self.cache = cache
-        self.devices: dict[str, dict] = {}
+        self.devices_states: dict[str, dict] = {}
+        self.devices: dict[str, SmartDevice]
         self.known_adresses: dict = {}

@@ -1,18 +1,15 @@
 from tinytuya import BulbDevice
-from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Literal
 from asyncio import wait_for, to_thread
 
-class RGB():
-    def __init__(self, r: int, g: int, b: int):
-         self.r = r
-         self.g = g
-         self.b = b
+class RGB(BaseModel):
+    R: int = Field(..., description="Red channel, 0-255")
+    G: int = Field(..., description="Green channel, 0-255")
+    B: int = Field(..., description="Blue channel, 0-255")
 
-class ColorMode(Enum):
-    WHITE = "white"
-    COLOR = "colour"
+class Mode(BaseModel):
+    mode: Literal["white", "colour"]
 
 TIMEOUT = 4
 RETRIES = 3
@@ -81,15 +78,15 @@ class SmartDevice(BaseModel):
             device = await self._create_device()
             device.turn_off()
 
-    async def change_color(self, new_color):
+    async def change_color(self, new_color: RGB):
         if await self._check_status():
             device = await self._create_device()
-            device.set_colour(new_color.r, new_color.g, new_color.b)
+            device.set_colour(new_color.R, new_color.G, new_color.B)
 
-    async def change_mode(self, new_mode):
+    async def change_mode(self, new_mode: Mode):
         if await self._check_status():
             device = await self._create_device()
-            device.set_mode(new_mode.value)
+            device.set_mode(new_mode.mode)
 
     def describe_as_json(self) -> dict:
         return self.model_dump(exclude={"device", "state"})
