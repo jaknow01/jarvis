@@ -27,18 +27,18 @@ def create_coordinator_agent() -> Agent:
         instructions = ("Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."),
         # tools = TOOLS_BY_AGENT[name],
         tools = [
-            # create_iot_agent().as_tool(
-            #     tool_name="iot_operator",
-            #     tool_description="Controls smart devices in a houshold."
-            # ),
-            create_maps_agent().as_tool(
-                tool_name="maps_agent",
-                tool_description="Controls access to maps and navigation. Can calculate routes."
+            create_iot_agent().as_tool(
+                tool_name="iot_operator",
+                tool_description="Controls smart devices in a houshold."
             ),
-            create_news_agent().as_tool(
-                tool_name="news_agent",
-                tool_description="Summarizes current political news."
-            )
+            # create_maps_agent().as_tool(
+            #     tool_name="maps_agent",
+            #     tool_description="Controls access to maps and navigation. Can calculate routes."
+            # ),
+            # create_news_agent().as_tool(
+            #     tool_name="news_agent",
+            #     tool_description="Summarizes current political news."
+            # )
         ],
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]

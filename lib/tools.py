@@ -71,11 +71,41 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice
     Output:
     This tool returns the new states of the affected devices
     """
-    print("Uruchamiam drugi tool")
-
+    print("Włączam urządzenia")
 
     try:
         await asyncio.gather(*(dev.turn_on() for dev in devices))
+
+        new_states = await asyncio.gather(*(dev.get_status() for dev in devices))
+        
+    except Exception as e:
+        print(e)
+    return new_states
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def turn_off_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice]):
+    """
+    Description:
+    This tool is used to turn off all mentioned devices.
+
+    Note:
+    This tool should always be preceded by the usage of get_devices_state tool.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+    
+    devices : List[SmartDevice]
+        List of all devices that should be turned on based on the user's request
+
+    Output:
+    This tool returns the new states of the affected devices
+    """
+    print("Wyłączam urządzenia")
+
+    try:
+        await asyncio.gather(*(dev.turn_off() for dev in devices))
 
         new_states = await asyncio.gather(*(dev.get_status() for dev in devices))
         

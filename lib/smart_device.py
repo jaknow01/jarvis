@@ -2,6 +2,7 @@ from tinytuya import BulbDevice
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List
+from asyncio import wait_for, to_thread
 
 class RGB():
     def __init__(self, r: int, g: int, b: int):
@@ -13,6 +14,8 @@ class ColorMode(Enum):
     WHITE = "white"
     COLOR = "colour"
 
+TIMEOUT = 4
+RETRIES = 3
 
 class SmartDevice(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -38,8 +41,8 @@ class SmartDevice(BaseModel):
 
     async def get_status(self) -> dict:
         print(f"Checking status of {self.name}")
-        device = await self._create_device()
-        state = device.status()
+
+        state = await self._check_status(full_status=True)
         state_translated = {}
 
         if "Error" in state.keys():
@@ -55,25 +58,38 @@ class SmartDevice(BaseModel):
         device_info = self.describe_as_json()
         return {"device_info": device_info, "device_state": self.state}
 
-    async def _check_status(self) -> bool:
-        device = await self._create_device()
-        return "Error" not in device.status()
+    async def _check_status(self, full_status: bool = False) -> bool | dict:
+        try:
+            device = await self._create_device()
+            status = await wait_for(
+                to_thread(device.status),
+                timeout=TIMEOUT
+            )
+        except Exception as e:
+            status = {"Error":"Timeout: device is not responding"}
+            print(e)
+
+        return status if full_status else "Error" not in status
 
     async def turn_on(self):
         if await self._check_status():
-            await self._create_device().turn_on()
+            device = await self._create_device()
+            device.turn_on()
 
     async def turn_off(self):
         if await self._check_status():
-            await self._create_device().turn_off()
+            device = await self._create_device()
+            device.turn_off()
 
     async def change_color(self, new_color):
         if await self._check_status():
-            await self._create_device().set_colour(new_color.r, new_color.g, new_color.b)
+            device = await self._create_device()
+            device.set_colour(new_color.r, new_color.g, new_color.b)
 
     async def change_mode(self, new_mode):
         if await self._check_status():
-            await self._create_device().set_mode(new_mode.value)
+            device = await self._create_device()
+            device.set_mode(new_mode.value)
 
     def describe_as_json(self) -> dict:
         return self.model_dump(exclude={"device", "state"})
