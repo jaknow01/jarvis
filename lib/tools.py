@@ -2,7 +2,7 @@ from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union, Annotated
 import json
 import asyncio
 import googlemaps
@@ -84,6 +84,7 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice
         
     except Exception as e:
         print(e)
+
     return new_states
 
 @tool_ownership("iot_operator")
@@ -159,11 +160,40 @@ async def change_color(ctx: RunContextWrapper[Ctx], device: SmartDevice, new_col
     new_color: RGB
         The new color that the device will be set to as an RGB value.
         RGB values are integers from 0 to 255 where R = red, G = green, B = blue
+
+    Output:
+        This tool returns short information whether the attempt was successful
     """
 
     print("Zmieniam kolor")
-    await device.change_color(new_color)
-    
+    task_status = await device.change_color(new_color)
+    return task_status
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def change_light_temperature(ctx: RunContextWrapper, device: SmartDevice, new_temp: Annotated[int, "range 0-1000"]) -> dict:
+    """
+    Description:
+    This tool is used to change the colour temperature of the given device.
+    In order to set a new color temperature the device must be in 'white' lighting mode.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    device: SmartDevice
+        The device that is to be affected by the lighting temperature change
+        Note: this device must be in 'white' lighting mode in order for the change to be possible
+
+    new_temp: Annotated[int, "range 0-1000"]
+        This parameter controls the temperature value where 0 is the brightest and 1000 the coldest
+
+    Output:
+        This tool returns short information whether the attempt was successful
+    """
+    print("Zmieniam temperature")
+    task_status = await device.change_temperature(new_temp)
+    return task_status
 
 # ------- maps agent -------
 

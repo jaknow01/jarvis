@@ -39,7 +39,7 @@ class SmartDevice(BaseModel):
     async def get_status(self) -> dict:
         print(f"Checking status of {self.name}")
 
-        state = await self._check_status(full_status=True)
+        state = await self._check_status()
         state_translated = {}
 
         if "Error" in state.keys():
@@ -55,7 +55,7 @@ class SmartDevice(BaseModel):
         device_info = self.describe_as_json()
         return {"device_info": device_info, "device_state": self.state}
 
-    async def _check_status(self, full_status: bool = False) -> bool | dict:
+    async def _check_status(self) -> dict:
         try:
             device = await self._create_device()
             status = await wait_for(
@@ -66,27 +66,50 @@ class SmartDevice(BaseModel):
             status = {"Error":"Timeout: device is not responding"}
             print(e)
 
-        return status if full_status else "Error" not in status
+        return status
+    
+    async def _is_responding(self, state: dict) -> bool:
+        return "Error" not in state
 
     async def turn_on(self):
-        if await self._check_status():
+        state = await self._check_status()
+        if await self._is_responding(state):
             device = await self._create_device()
             device.turn_on()
 
     async def turn_off(self):
-        if await self._check_status():
+        state = await self._check_status()
+        if await self._is_responding(state):
             device = await self._create_device()
             device.turn_off()
 
-    async def change_color(self, new_color: RGB):
-        if await self._check_status():
+    async def change_color(self, new_color: RGB) -> dict:
+        state = await self.get_status()
+
+        if await self._is_responding(state):
             device = await self._create_device()
-            device.set_colour(new_color.R, new_color.G, new_color.B)
+            if state["mode"] == "colour":
+                device.set_colour(new_color.R, new_color.G, new_color.B)
+                return {"Success": "New colour has been set"}
+            else:
+                return {"Failed": "Device must be in 'colour' mode to change its colour."}
 
     async def change_mode(self, new_mode: Mode):
-        if await self._check_status():
+        state = await self._check_status()
+        if await self._is_responding(state):
             device = await self._create_device()
             device.set_mode(new_mode.mode)
+
+    async def change_temperature(self, new_temp: int) -> dict:
+        state = await self.get_status()
+
+        if await self._is_responding(state):
+            device = await self._create_device()
+            if state["mode"] == "white":
+                device.set_colourtemp(new_temp)
+                return {"Success": "New lighting temperature has been set"}
+            else:
+                return {"Failed": "Device must be in 'white' mode to change its temp."}
 
     def describe_as_json(self) -> dict:
         return self.model_dump(exclude={"device", "state"})
