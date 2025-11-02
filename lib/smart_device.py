@@ -11,7 +11,7 @@ class RGB(BaseModel):
 class Mode(BaseModel):
     mode: Literal["white", "colour"]
 
-TIMEOUT = 4
+TIMEOUT = 3
 RETRIES = 3
 
 class SmartDevice(BaseModel):
@@ -85,10 +85,9 @@ class SmartDevice(BaseModel):
 
     async def change_color(self, new_color: RGB) -> dict:
         state = await self.get_status()
-
         if await self._is_responding(state):
             device = await self._create_device()
-            if state["mode"] == "colour":
+            if state['device_state']["mode"] == "colour":
                 device.set_colour(new_color.R, new_color.G, new_color.B)
                 return {"Success": "New colour has been set"}
             else:
@@ -105,7 +104,7 @@ class SmartDevice(BaseModel):
 
         if await self._is_responding(state):
             device = await self._create_device()
-            if state["mode"] == "white":
+            if state['device_state']["mode"] == "white":
                 device.set_colourtemp(new_temp)
                 return {"Success": "New lighting temperature has been set"}
             else:
@@ -113,6 +112,9 @@ class SmartDevice(BaseModel):
 
     def describe_as_json(self) -> dict:
         return self.model_dump(exclude={"device", "state"})
+    
+    def get_name(self) -> str:
+        return self.name
 
     @classmethod
     async def create_from_json(cls, json_data: dict):

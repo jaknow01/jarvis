@@ -11,6 +11,7 @@ from datetime import datetime
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
+DEVICES_PREFERENCES_PATH = "data/smart_device_data/preferences.json"
 MAPS_PARAMS_PATH = "data/maps_data/maps_memory.json"
 
 
@@ -29,12 +30,22 @@ def tool_ownership(agent_name: str):
 @function_tool
 async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     """
-    This tool is used to download neccessary data about all smart devices which is then
-    used to establish connection and check their current status.
+    Description:
+        This tool is used to download initial neccessary data about all smart devices from a database. 
+        It is then used to establish connection and check their current states.
+    Note:
+        This tool should only be run at the beginning of agent's tool calls. This provides an initial scan
+        but due to accessing of the database it has a large overhead therefore it should only be run once.
     """
     print("Sprawdzam dostępne urządzenia")
     with open(DEVICES_PARAMS_PATH, "r", encoding="utf-8") as f:
         list_of_jsons = json.load(f)
+
+    print("Wczytuje preferencje użytkownika")
+    with open(DEVICES_PREFERENCES_PATH, "r", encoding="utf-8") as f:
+        preferences = json.load(f)
+
+    ctx.context.devices_preferences = preferences
 
     configs = list_of_jsons["list_of_elements"]
     devices = []
@@ -53,7 +64,36 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     devices_dict = {d.name : d for d in devices}
     ctx.context.devices = devices_dict
 
-    return states
+    return {"states" : states, "known_user_preferences": preferences}
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def get_one_device_status(ctx: RunContextWrapper[Ctx], device: SmartDevice) -> dict:
+    """
+    Description:
+    This tool is used to check the status of a given device without the unnecessary overhead
+    of checking all devices in the system. It should be used as an intermediate tool between tool calls
+    instead of the tool get_devices_state.
+
+    Note:
+        When agents wants to interact with multiple devices this tool should be run in parallel.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+    
+    devices : SmartDevice
+        Devices that should have its status checked
+
+    Output:
+        State of the given device
+    """
+
+    print("Sprawdzam stan jednego urzadzenia")
+    state = await device.get_status()
+
+    ctx.context.devices_states[device.get_name()] = state
+    return state
 
 @tool_ownership("iot_operator")
 @function_tool(strict_mode=False)
@@ -125,7 +165,7 @@ async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device: SmartDevice,
     Description:
     This tool is used to change the lighting mode of a given smart device. Lighting mode can either
     be set to white or colour mode. When in colour mode various rgb settings can be applied to the
-    device
+    device. When in white mode the lighting temperature can be adjusted.
 
     Parameters:
     ctx : RunContextWrapper[Ctx]
@@ -138,7 +178,7 @@ async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device: SmartDevice,
         The mode that will be applied to the chosen device
     """
 
-    print("Zmieniam tryb")
+    print(f"Zmieniam tryb na {new_mode.mode}")
     await device.change_mode(new_mode)
 
 @tool_ownership("iot_operator")
@@ -165,7 +205,7 @@ async def change_color(ctx: RunContextWrapper[Ctx], device: SmartDevice, new_col
         This tool returns short information whether the attempt was successful
     """
 
-    print("Zmieniam kolor")
+    print(f"Zmieniam kolor na {new_color.R} {new_color.G} {new_color.B}")
     task_status = await device.change_color(new_color)
     return task_status
 
