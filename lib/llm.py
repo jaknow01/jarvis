@@ -24,7 +24,7 @@ def open_ai_llm() -> dict:
 
 @llm_usage(["news_agent"])
 def xai_llm() -> dict:
-    model = "xai/grok-3-mini-beta"
+    model = "xai/grok-4-fast-non-reasoning"
     api_key = os.getenv("XAI_API_KEY")
 
     settings = ModelSettings(include_usage=True)
