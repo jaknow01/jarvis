@@ -2,10 +2,15 @@ from lib.agents import create_coordinator_agent
 from agents import Runner
 from lib.cache import Cache, Ctx
 from lib.run_config import Config
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Chatbot():
     async def start_chatbot(self):
-        print("Wiadomość powitalna")
+
+        # print("Wiadomość powitalna")
+        logger.conversation("[ASSISTANT] Wiadomość powitalna")
         ctx = Ctx()
         ctx.cache = Cache()
 
@@ -24,7 +29,7 @@ class Chatbot():
             )
 
             await ctx.cache.save_to_cache("previous_response_id", result.last_response_id)
-            print(f"[ASSISTANT] {result.final_output}")
+            logger.conversation(f"[ASSISTANT] {result.final_output}")
 
 # TODO
 # 1. Zacząć zachowywać previous response id w redisie -> czyli napisać kod do zapisu i odczytu z redisa --DONE

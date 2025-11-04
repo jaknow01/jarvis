@@ -6,7 +6,9 @@ from lib.tools import (
 from lib.llm import LLM_BY_AGENT
 from lib.tools import TOOLS_BY_AGENT
 from agents import Agent
+import logging
 
+logger = logging.getLogger(__name__)
 AGENTS: dict = {}
 
 def agents_decorator(name: str):
@@ -43,7 +45,7 @@ def create_coordinator_agent() -> Agent:
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
     )
-    print("Utworzony koord")
+    logger.info("Coordinator initiated")
     
     return agent
 
@@ -64,7 +66,7 @@ def create_iot_agent():
         model=model_settings["model_name"],
         model_settings=model_settings["settings"]
     )
-    print("Utworzony iot")
+    logger.info("IoT agent initiated")
 
     return agent
 
@@ -87,7 +89,7 @@ def create_maps_agent():
         model_settings=model_settings["settings"]
     )
 
-    print("Utworzony google agent")
+    logger.info("Maps agent created")
     return agent
 
 @agents_decorator(name="memory_operator")
@@ -107,7 +109,7 @@ def create_memory_agent():
         model_settings=model_settings["settings"]
     )
 
-    print("Utworzony memory agent")
+    logger.info("Memory agent created")
     return agent
 
 @agents_decorator(name="news_agent")
@@ -125,5 +127,5 @@ def create_news_agent():
         model_settings=model_settings["settings"]
     )
 
-    print("Utworzony agent do wiadomości")
+    logger.info("News agent created")
     return agent
