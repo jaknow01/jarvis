@@ -8,10 +8,13 @@ import asyncio
 import googlemaps
 import os
 from datetime import datetime
+import logging
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
 MAPS_PARAMS_PATH = "data/maps_data/maps_memory.json"
+
+logger = logging.getLogger(__name__)
 
 
 def tool_ownership(agent_name: str):
@@ -30,7 +33,7 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     This tool is used to download neccessary data about all smart devices which is then
     used to establish connection and check their current status.
     """
-    print("Sprawdzam dostępne urządzenia")
+    logger.info("Checking all available devices")
     with open(DEVICES_PARAMS_PATH, "r", encoding="utf-8") as f:
         list_of_jsons = json.load(f)
 
@@ -42,8 +45,7 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
             dev = await SmartDevice.create_from_json(c)
             devices.append(dev)
         except Exception as e:
-            print(f"Error creating device: {e}")
-
+            logging.error(f"Error creating device: {e}")
 
     states = await asyncio.gather(*(d.get_status() for d in devices))
 
@@ -71,16 +73,14 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice
     Output:
     This tool returns the new states of the affected devices
     """
-    print("Uruchamiam drugi tool")
-
-
+    logger.info("Turning on a device")
     try:
         await asyncio.gather(*(dev.turn_on() for dev in devices))
 
         new_states = await asyncio.gather(*(dev.get_status() for dev in devices))
         
     except Exception as e:
-        print(e)
+        logger.error(f"Error while turning a device on {e}")
     return new_states
 
 @tool_ownership("maps_agent")
@@ -92,7 +92,7 @@ async def get_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
     known routes and other information which will facilitate understanding user's
     query in natural language.
     """
-    print("Sprawdzam znane adresy")
+    logging.info("Checking known adresses")
     with open(MAPS_PARAMS_PATH, "r", encoding="utf-8") as f:
         list_of_jsons = json.load(f)
     
@@ -163,7 +163,7 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
     if transport_mode != "transit" and transit_mode is not None:
         transit_mode = None
 
-    print("Rozpoczynam planowanie trasy")
+    logging.info("Starting route planning")
 
     try:
         directions_result = gmaps_client.directions(
