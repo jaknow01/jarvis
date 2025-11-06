@@ -30,10 +30,3 @@ class Chatbot():
 
             await ctx.cache.save_to_cache("previous_response_id", result.last_response_id)
             logger.conversation(f"[ASSISTANT] {result.final_output}")
-
-# TODO
-# 1. Zacząć zachowywać previous response id w redisie -> czyli napisać kod do zapisu i odczytu z redisa --DONE
-# 2. Ogarnąć co z tym ctx dla narzędzi - potencjalnie kod dla tego kontekstu ale nie wiem co by się miało w nim znajdować
-# 3. Przenieść tworzenie run_configu do oddzielnego pliku --DONE
-# 4. Jakieś testowe narzędzia --DONE
-# 5. ZAPOMNIEĆ O LANGCHAINIE - ALL MY HOMIES HATE LANGCHAIN

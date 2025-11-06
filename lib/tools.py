@@ -9,6 +9,7 @@ import googlemaps
 import os
 from datetime import datetime
 import logging
+from pyowm import OWM
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
@@ -180,6 +181,89 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
         print(e)
 
     return result
+
+@tool_ownership("weather_agent")
+@function_tool
+async def current_weather(ctx: RunContextWrapper[Ctx], city: str = "Warsaw") -> dict:
+    """
+    Description:
+        This tool is used to get the current weather conditions in a specified city.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    city: str = "Warsaw"
+        Name of the city where the weather conditions are to be checked.
+        Unless specified otherwise by the user the default city is Warsaw.
+        Return the city name in nominative form (base form) — do not inflect or decline it.
+
+    Output:
+        JSON object with current weather conditions in a specified place.
+    """
+
+    owm_client = OWM(os.getenv("OPENWEATHER_API_KEY"))
+    owm_manager = owm_client.weather_manager()
+
+    logging.info(f"Getting weather at {city}")
+
+    try:
+        current_weather = owm_manager.weather_at_place(city)
+    except Exception as e:
+        logging.error(f"Couldnt get weather at {city}")
+        return {"message": f"Couldnt get weather at {city}",
+                "exception": e}
+
+    return current_weather
+
+# @tool_ownership("weather_agent")
+# @function_tool
+# async def weather_forecast(ctx: RunContextWrapper[Ctx],
+#                            limit: int,
+#                            city: str = "Warsaw"
+#                            ) -> dict:
+#     """
+#     Description:
+#         This tool is used to check a current weather forecast in a given location.
+#         It can be either a short-term (min 3 hours) or a long-term (max 5 days) forecast
+#         with different granularity (3h or daily intervals).
+
+#     Parameters:
+#     ctx : RunContextWrapper[Ctx]
+#         Context in which the tool operates
+
+ 
+#     limit: int
+#         Maximum number of forecast data points (time steps) to retrieve.
+#         Each data point represents a single forecasted moment - one 3-hour period
+#         For example, setting `limit=8` with `interval='3h'` returns approximately 24 hours
+#         of forecast data (8 x 3 hours), while `limit=5`.
+#         If set to None, all available forecast points are returned.
+
+#     city: str = "Warsaw"
+#         Name of the city where the weather conditions are to be checked.
+#         Unless specified otherwise by the user the default city is Warsaw.
+#         Return the city name in nominative form (base form) — do not inflect or decline it.
+
+#     Output:
+#         JSON object with the weather forecast made according to specifications
+#     """
+
+#     owm_client = OWM(os.getenv("OPENWEATHER_API_KEY"))
+#     owm_manager = owm_client.weather_manager()
+#     interval ='3h'
+
+#     logging.info(f"Getting weather forecast for {city} with {limit} x {interval} intervals")
+
+#     try:
+#         forecast = owm_manager.forecast_at_place(name=city, interval=interval, limit=limit)
+#     except Exception as e:
+#         logging.error(f"Couldnt get forecast for {city} with {limit} x {interval} intervals")
+#         logging.error(e)
+#         return {"message":f"Couldnt get forecast for {city} with {limit} x {interval} intervals",
+#                 "exception":e}
+    
+#     return forecast
 
 
 

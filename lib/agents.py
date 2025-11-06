@@ -27,12 +27,11 @@ def create_coordinator_agent() -> Agent:
     agent = Agent(
         name = name,
         instructions = ("Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."),
-        # tools = TOOLS_BY_AGENT[name],
         tools = [
-            # create_iot_agent().as_tool(
-            #     tool_name="iot_operator",
-            #     tool_description="Controls smart devices in a houshold."
-            # ),
+            create_iot_agent().as_tool(
+                tool_name="iot_operator",
+                tool_description="Controls smart devices in a houshold."
+            ),
             create_maps_agent().as_tool(
                 tool_name="maps_agent",
                 tool_description="Controls access to maps and navigation. Can calculate routes."
@@ -40,6 +39,10 @@ def create_coordinator_agent() -> Agent:
             create_news_agent().as_tool(
                 tool_name="news_agent",
                 tool_description="Summarizes current political news."
+            ),
+            create_weather_agent().as_tool(
+                tool_name="weather_agent",
+                tool_description="Checks current weather and weather forecast at a given location"
             )
         ],
         model = model_settings["model_name"],
@@ -90,6 +93,24 @@ def create_maps_agent():
     )
 
     logger.info("Maps agent created")
+    return agent
+
+@agents_decorator(name="weather_agent")
+def create_weather_agent():
+    name="weather_agent"
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions=(
+            "You can check current weather conditions as well as a short-term forecast"
+        ),
+        tools = TOOLS_BY_AGENT[name],
+        model=model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    logger.info("Weather agent created")
     return agent
 
 @agents_decorator(name="memory_operator")
