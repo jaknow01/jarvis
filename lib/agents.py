@@ -28,10 +28,10 @@ def create_coordinator_agent() -> Agent:
         name = name,
         instructions = ("Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."),
         tools = [
-            create_iot_agent().as_tool(
-                tool_name="iot_operator",
-                tool_description="Controls smart devices in a houshold."
-            ),
+            # create_iot_agent().as_tool(
+            #     tool_name="iot_operator",
+            #     tool_description="Controls smart devices in a houshold."
+            # ),
             create_maps_agent().as_tool(
                 tool_name="maps_agent",
                 tool_description="Controls access to maps and navigation. Can calculate routes."

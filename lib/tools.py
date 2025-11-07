@@ -1,7 +1,7 @@
 from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
 from lib.smart_device import SmartDevice, RGB, ColorMode
-from lib.tools_utils import simplify_directions_response
+from lib.tools_utils import simplify_directions_response, get_forecast
 from typing import List, Literal, Optional, Union
 import json
 import asyncio
@@ -10,6 +10,8 @@ import os
 from datetime import datetime
 import logging
 from pyowm import OWM
+import requests
+from requests import HTTPError
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
@@ -50,7 +52,7 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
 
     states = await asyncio.gather(*(d.get_status() for d in devices))
 
-    ctx.context.devices = states
+    ctx.context.devices = devices
 
     return states
 
@@ -176,9 +178,13 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
             alternatives=show_alternatives
         )
 
-        result = simplify_directions_response(directions_result)
+        result = await simplify_directions_response(directions_result)
     except Exception as e:
-        print(e)
+        logging.error("Error while getting routes from Google")
+        return {
+            "Message" : "Error while getting routes from Google",
+            "Error": e
+        }
 
     return result
 
@@ -216,54 +222,112 @@ async def current_weather(ctx: RunContextWrapper[Ctx], city: str = "Warsaw") -> 
 
     return current_weather
 
-# @tool_ownership("weather_agent")
-# @function_tool
-# async def weather_forecast(ctx: RunContextWrapper[Ctx],
-#                            limit: int,
-#                            city: str = "Warsaw"
-#                            ) -> dict:
-#     """
-#     Description:
-#         This tool is used to check a current weather forecast in a given location.
-#         It can be either a short-term (min 3 hours) or a long-term (max 5 days) forecast
-#         with different granularity (3h or daily intervals).
+@tool_ownership("weather_agent")
+@function_tool
+async def get_current_date_and_time(ctx: RunContextWrapper[Ctx]) -> dict:
+    """
+    Description:
+        This tool is used to obtain today's date and current time. It is neccessary
+        to use it before getting the weather forecasts otherwise agent will not be
+        able to process user's request properly when it comes to dates and time.
+    """
 
-#     Parameters:
-#     ctx : RunContextWrapper[Ctx]
-#         Context in which the tool operates
+@tool_ownership("weather_agent")
+@function_tool
+async def weather_forecast(ctx: RunContextWrapper[Ctx],
+                           forecast_days: Literal["1", "3", "7"],
+                           forecast_type: Literal["hourly", "daily"],
+                           city: str = "Warsaw"
+                           ) -> dict:
+    """
+    Important: 
 
+    Description:
+        This tool is used to check a current weather forecast in a given location.
+        It can be either a short-term (min 3 hours) or a long-term (max 5 days) forecast
+        with different granularity (3h or daily intervals).
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
  
-#     limit: int
-#         Maximum number of forecast data points (time steps) to retrieve.
-#         Each data point represents a single forecasted moment - one 3-hour period
-#         For example, setting `limit=8` with `interval='3h'` returns approximately 24 hours
-#         of forecast data (8 x 3 hours), while `limit=5`.
-#         If set to None, all available forecast points are returned.
+    forecast_days: Literal["1", "3", "7"]
+        How long into the future should the forecast reach measured in days.
 
-#     city: str = "Warsaw"
-#         Name of the city where the weather conditions are to be checked.
-#         Unless specified otherwise by the user the default city is Warsaw.
-#         Return the city name in nominative form (base form) — do not inflect or decline it.
+    forecast_type: Literal["hourly", "daily"]
+        Time intervals in which the forecast will be divided. When asking for a short-term forecast
+        more granular data obtained with 'hourly' may be more optimal wheras for long-term forecast
+        it usually is better to provide 'daily' intervals.
 
-#     Output:
-#         JSON object with the weather forecast made according to specifications
-#     """
+    city: str = "Warsaw"
+        Name of the city where the weather conditions are to be checked.
+        Unless specified otherwise by the user the default city is Warsaw. The city name should be in polish.
+        Return the city name in nominative form (base form) — do not inflect or decline it.
 
-#     owm_client = OWM(os.getenv("OPENWEATHER_API_KEY"))
-#     owm_manager = owm_client.weather_manager()
-#     interval ='3h'
+    Output:
+        JSON object with the weather forecast made according to specifications
+    """
+    multiple_results = False
+    geolocation_url = f"https://nominatim.openstreetmap.org/search?q={city}&format=json"
 
-#     logging.info(f"Getting weather forecast for {city} with {limit} x {interval} intervals")
+    headers = {
+        "User-Agent":"Jarvis (lkc86484@laoia.com)",
+        "Accept":"application/json"
+    }
 
-#     try:
-#         forecast = owm_manager.forecast_at_place(name=city, interval=interval, limit=limit)
-#     except Exception as e:
-#         logging.error(f"Couldnt get forecast for {city} with {limit} x {interval} intervals")
-#         logging.error(e)
-#         return {"message":f"Couldnt get forecast for {city} with {limit} x {interval} intervals",
-#                 "exception":e}
+    logging.info(f"Starting geolocation for {city}")
+    try:
+        geolocation = requests.get(geolocation_url, headers=headers)
+        geolocation = geolocation.json()
+        logging.info("Geolocation obtained")
+    except HTTPError as e:
+        logging.error(f"Couldnt geolocate {city} - issue with API")
+        return {"message" : f"Couldnt geolocate this location {city}",
+                "status_code" : e}
+
+    output = [
+        {"name" : result["display_name"], "long" : result["lon"], "lat" : result["lat"]}
+        for result in geolocation
+    ]
+
+    if len(output) > 1:
+        logging.info("Found more than one geolocation")
+        multiple_results = True
+        if len(output) > 3:
+            logging.info("Found more than three geolocations")
+            output = output[:3]
+
+    logging.info(f"Getting {forecast_type} in {forecast_days} intervals")
+    tasks = [
+        get_forecast(p, forecast_days, forecast_type)
+        for p in output
+    ]
+
+    forecasts = await asyncio.gather(*tasks)
+
+    result = {
+        "Message" : f"Successfully obtained weather forecasts for {city}",
+        "Forecast" : forecasts
+    }
+
+    if multiple_results:
+        location_names = ",".join([l["name"] for l in output])
+        result["Note"] = f"Multiple geolocations have been found for {city}.\
+            If they are not actually the same city listed out multiple times inform the user about this.\
+                Location names: {location_names}"
+
+    return result
+
+
+
+
     
-#     return forecast
+
+    
+
+
+
+
 
 
 
