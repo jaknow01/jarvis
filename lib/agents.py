@@ -109,7 +109,7 @@ def create_finance_agent():
             "You are responsible for retrieving and analyzing financial data based on user's requests.\
             Make sure to use all necessary tools."
         ),
-        tools = [get_exchange_rate],
+        tools = TOOLS_BY_AGENT[name],
         model=model_settings["model_name"],
         model_settings=model_settings["settings"]
     )
