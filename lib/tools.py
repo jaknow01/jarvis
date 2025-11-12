@@ -1,7 +1,7 @@
 from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
-from lib.smart_device import SmartDevice, RGB, ColorMode
-from lib.tools_utils import simplify_directions_response, get_forecast validate_currency_code
+from lib.smart_device import SmartDevice, RGB, Mode
+from lib.tools_utils import simplify_directions_response, get_forecast, validate_currency_code
 from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
@@ -130,7 +130,7 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice
         new_states = await asyncio.gather(*(dev.get_status() for dev in devices))
         
     except Exception as e:
-        logging.error(f"Error while turning devices off {e}"}"
+        logging.error(f"Error while turning devices off {e}")
 
     return new_states
 

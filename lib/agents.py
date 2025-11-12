@@ -40,14 +40,15 @@ def create_coordinator_agent() -> Agent:
             create_weather_agent().as_tool(
                 tool_name="weather_agent",
                 tool_description="Checks current weather and weather forecast at a given location"
+            ),
             create_finance_agent().as_tool(
                 tool_name="finance_agent",
                 tool_description="Retrieves and analyzes financial data."
-            )
-            # create_maps_agent().as_tool(
-            #     tool_name="maps_agent",
-            #     tool_description="Controls access to maps and navigation. Can calculate routes."
-            # ),
+            ),
+            create_maps_agent().as_tool(
+                tool_name="maps_agent",
+                tool_description="Controls access to maps and navigation. Can calculate routes."
+            ),
             # create_news_agent().as_tool(
             #     tool_name="news_agent",
             #     tool_description="Summarizes current political news."
