@@ -5,6 +5,7 @@ from retry_requests import retry
 from typing import Literal
 from datetime import timedelta, datetime
 import logging
+import pycountry
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +110,5 @@ async def get_forecast(params: dict,
     logging.info("Forecasts obtained successfully")
 
     return result
+def validate_currency_code(code: str) -> bool:
+    return pycountry.currencies.get(alpha_3 = code) is not None

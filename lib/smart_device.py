@@ -1,18 +1,18 @@
 from tinytuya import BulbDevice
-from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Literal
+from asyncio import wait_for, to_thread
 
-class RGB():
-    def __init__(self, r: int, g: int, b: int):
-         self.r = r
-         self.g = g
-         self.b = b
+class RGB(BaseModel):
+    R: int = Field(..., description="Red channel, 0-255")
+    G: int = Field(..., description="Green channel, 0-255")
+    B: int = Field(..., description="Blue channel, 0-255")
 
-class ColorMode(Enum):
-    WHITE = "white"
-    COLOR = "colour"
+class Mode(BaseModel):
+    mode: Literal["white", "colour"]
 
+TIMEOUT = 3
+RETRIES = 3
 
 class SmartDevice(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -38,8 +38,8 @@ class SmartDevice(BaseModel):
 
     async def get_status(self) -> dict:
         print(f"Checking status of {self.name}")
-        device = await self._create_device()
-        state = device.status()
+
+        state = await self._check_status()
         state_translated = {}
 
         if "Error" in state.keys():
@@ -55,28 +55,66 @@ class SmartDevice(BaseModel):
         device_info = self.describe_as_json()
         return {"device_info": device_info, "device_state": self.state}
 
-    async def _check_status(self) -> bool:
-        device = await self._create_device()
-        return "Error" not in device.status()
+    async def _check_status(self) -> dict:
+        try:
+            device = await self._create_device()
+            status = await wait_for(
+                to_thread(device.status),
+                timeout=TIMEOUT
+            )
+        except Exception as e:
+            status = {"Error":"Timeout: device is not responding"}
+            print(e)
+
+        return status
+    
+    async def _is_responding(self, state: dict) -> bool:
+        return "Error" not in state
 
     async def turn_on(self):
-        if await self._check_status():
-            await self._create_device().turn_on()
+        state = await self._check_status()
+        if await self._is_responding(state):
+            device = await self._create_device()
+            device.turn_on()
 
     async def turn_off(self):
-        if await self._check_status():
-            await self._create_device().turn_off()
+        state = await self._check_status()
+        if await self._is_responding(state):
+            device = await self._create_device()
+            device.turn_off()
 
-    async def change_color(self, new_color):
-        if await self._check_status():
-            await self._create_device().set_colour(new_color.r, new_color.g, new_color.b)
+    async def change_color(self, new_color: RGB) -> dict:
+        state = await self.get_status()
+        if await self._is_responding(state):
+            device = await self._create_device()
+            if state['device_state']["mode"] == "colour":
+                device.set_colour(new_color.R, new_color.G, new_color.B)
+                return {"Success": "New colour has been set"}
+            else:
+                return {"Failed": "Device must be in 'colour' mode to change its colour."}
 
-    async def change_mode(self, new_mode):
-        if await self._check_status():
-            await self._create_device().set_mode(new_mode.value)
+    async def change_mode(self, new_mode: Mode):
+        state = await self._check_status()
+        if await self._is_responding(state):
+            device = await self._create_device()
+            device.set_mode(new_mode.mode)
+
+    async def change_temperature(self, new_temp: int) -> dict:
+        state = await self.get_status()
+
+        if await self._is_responding(state):
+            device = await self._create_device()
+            if state['device_state']["mode"] == "white":
+                device.set_colourtemp(new_temp)
+                return {"Success": "New lighting temperature has been set"}
+            else:
+                return {"Failed": "Device must be in 'white' mode to change its temp."}
 
     def describe_as_json(self) -> dict:
         return self.model_dump(exclude={"device", "state"})
+    
+    def get_name(self) -> str:
+        return self.name
 
     @classmethod
     async def create_from_json(cls, json_data: dict):

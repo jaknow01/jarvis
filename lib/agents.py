@@ -2,7 +2,8 @@ from lib.tools import (
     get_devices_state,
     turn_on_devices,
     get_route_details,
-    get_maps_memory)
+    get_maps_memory,
+    get_exchange_rate)
 from lib.llm import LLM_BY_AGENT
 from lib.tools import TOOLS_BY_AGENT
 from agents import Agent
@@ -28,13 +29,9 @@ def create_coordinator_agent() -> Agent:
         name = name,
         instructions = ("Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."),
         tools = [
-            # create_iot_agent().as_tool(
-            #     tool_name="iot_operator",
-            #     tool_description="Controls smart devices in a houshold."
-            # ),
-            create_maps_agent().as_tool(
-                tool_name="maps_agent",
-                tool_description="Controls access to maps and navigation. Can calculate routes."
+            create_iot_agent().as_tool(
+                tool_name="iot_operator",
+                tool_description="Controls smart devices (lighting) in a houshold."
             ),
             create_news_agent().as_tool(
                 tool_name="news_agent",
@@ -43,7 +40,18 @@ def create_coordinator_agent() -> Agent:
             create_weather_agent().as_tool(
                 tool_name="weather_agent",
                 tool_description="Checks current weather and weather forecast at a given location"
+            create_finance_agent().as_tool(
+                tool_name="finance_agent",
+                tool_description="Retrieves and analyzes financial data."
             )
+            # create_maps_agent().as_tool(
+            #     tool_name="maps_agent",
+            #     tool_description="Controls access to maps and navigation. Can calculate routes."
+            # ),
+            # create_news_agent().as_tool(
+            #     tool_name="news_agent",
+            #     tool_description="Summarizes current political news."
+            # )
         ],
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
@@ -61,9 +69,12 @@ def create_iot_agent():
     agent = Agent(
         name = name,
         instructions=(
-            "You can monitor and control all smart devices in a household (smart lights).\
-            You can monitor and control all smart devices. Only call get_devices_state if the current state of devices is unknown.\
-            otherwise you won't have necessary information about them to perform any action."
+            "You are an operator of all smart devices (lighting) in the household.\
+            Your task is to manipulate devices' states based on the user's preferences. \
+            You must start your tool run by utilizing get_devices_state in order to initially access\
+            the device database and establish connection, as well as to understand user's preferences\
+            that are stored in long term memory database." \
+            "Always try to run as many necessary tools as possible in paralel."
         ),
         tools = TOOLS_BY_AGENT[name],
         model=model_settings["model_name"],
@@ -94,7 +105,7 @@ def create_maps_agent():
 
     logger.info("Maps agent created")
     return agent
-
+          
 @agents_decorator(name="weather_agent")
 def create_weather_agent():
     name="weather_agent"
@@ -111,6 +122,26 @@ def create_weather_agent():
     )
 
     logger.info("Weather agent created")
+    return agent
+
+@agents_decorator(name="finance_agent")
+def create_finance_agent():
+    name = "finance_agent"
+
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions = (
+            "You are responsible for retrieving and analyzing financial data based on user's requests.\
+            Make sure to use all necessary tools."
+        ),
+        tools = TOOLS_BY_AGENT[name],
+        model=model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    logger.info("Finance agent created")
     return agent
 
 @agents_decorator(name="memory_operator")

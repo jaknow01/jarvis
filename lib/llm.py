@@ -13,7 +13,7 @@ def llm_usage(agent_names: list[str]):
 
 
 
-@llm_usage(["coordinator", "iot_operator", "maps_agent", "memory_operator", "weather_agent"])
+@llm_usage(["coordinator", "iot_operator", "maps_agent", "memory_operator" , "finance_agent" , "weather_agent"])
 def open_ai_llm() -> dict:
     settings = ModelSettings(parallel_tool_calls=True)
     return {
@@ -26,7 +26,7 @@ def xai_llm() -> dict:
     model = "xai/grok-4-fast-non-reasoning"
     api_key = os.getenv("XAI_API_KEY")
 
-    settings = ModelSettings(include_usage=True)
+    settings = ModelSettings(include_usage=True, parallel_tool_calls=True, tool_choice='required')
     lite_model = LitellmModel(model=model, api_key=api_key)
 
     return {
