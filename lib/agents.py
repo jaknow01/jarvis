@@ -29,18 +29,18 @@ def create_coordinator_agent() -> Agent:
         instructions = ("Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."),
         # tools = TOOLS_BY_AGENT[name],
         tools = [
-            # create_iot_agent().as_tool(
-            #     tool_name="iot_operator",
-            #     tool_description="Controls smart devices in a houshold."
-            # ),
-            create_maps_agent().as_tool(
-                tool_name="maps_agent",
-                tool_description="Controls access to maps and navigation. Can calculate routes."
+            create_iot_agent().as_tool(
+                tool_name="iot_operator",
+                tool_description="Controls smart devices (lighting) in a houshold."
             ),
-            create_news_agent().as_tool(
-                tool_name="news_agent",
-                tool_description="Summarizes current political news."
-            )
+            # create_maps_agent().as_tool(
+            #     tool_name="maps_agent",
+            #     tool_description="Controls access to maps and navigation. Can calculate routes."
+            # ),
+            # create_news_agent().as_tool(
+            #     tool_name="news_agent",
+            #     tool_description="Summarizes current political news."
+            # )
         ],
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
@@ -58,9 +58,12 @@ def create_iot_agent():
     agent = Agent(
         name = name,
         instructions=(
-            "You can monitor and control all smart devices in a household (smart lights).\
-            You can monitor and control all smart devices. Only call get_devices_state if the current state of devices is unknown.\
-            otherwise you won't have necessary information about them to perform any action."
+            "You are an operator of all smart devices (lighting) in the household.\
+            Your task is to manipulate devices' states based on the user's preferences. \
+            You must start your tool run by utilizing get_devices_state in order to initially access\
+            the device database and establish connection, as well as to understand user's preferences\
+            that are stored in long term memory database." \
+            "Always try to run as many necessary tools as possible in paralel."
         ),
         tools = TOOLS_BY_AGENT[name],
         model=model_settings["model_name"],

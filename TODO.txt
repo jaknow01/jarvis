@@ -1,8 +1,7 @@
 Co do zrobienia:
-    1. ogarnac do konca narzedzia iot (zmiana koloru wskazanych, zmiana trybu wskazanych, wylaczenie wskazanych), spiecie jakos kinkietow
-    2. agent google - wyznacz trase od do wskazanych miejsc - DONE
     3. agent finansowy - znaleźć jakies api dla danych (jedno to otwarte ale to dla amerykanskich i walut, potrzebne jeszcze dla polskiej gieldy)
     4. agent memory - wymyslic w jakim ukladzie trzymac dane (jsony w data na razie spoko), jak dostarczac te dane do kontekstu
+        4.5. cachowanie - pobierać do redisa i potem szukać czy już nie pobraliśmy wcześniej z bazy
     5. logger zamiast printow
     6. scheduler - jak dostarczac "bokiem" komunikaty do agenta - moze agent musi dzialac w jednym mikroserwisie i odbierac np. http na jakims porcie
     7. api telegrama
