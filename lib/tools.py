@@ -1,7 +1,7 @@
 from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
 from lib.smart_device import SmartDevice, RGB, ColorMode
-from lib.tools_utils import simplify_directions_response, validate_currency_code
+from lib.tools_utils import simplify_directions_response, get_forecast validate_currency_code
 from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
@@ -12,6 +12,7 @@ import googlemaps
 import os
 from datetime import datetime
 import logging
+from pyowm import OWM
 import requests
 from requests import HTTPError
 
@@ -335,11 +336,16 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
             alternatives=show_alternatives
         )
 
-        result = simplify_directions_response(directions_result)
+        result = await simplify_directions_response(directions_result)
     except Exception as e:
-        print(e)
+        logging.error("Error while getting routes from Google")
+        return {
+            "Message" : "Error while getting routes from Google",
+            "Error": e
+        }
 
     return result
+                     
 
 @tool_ownership("finance_agent")
 @function_tool
@@ -375,6 +381,179 @@ async def get_exchange_rate(ctx: RunContextWrapper[Ctx],
             "Error" : f"Currency codes must always have exactly 3 letters. One of these codes {base_currency}, {foreign_currency} is incorrect.",
             "Tip": "You should rerun this tool with correct currency codes."
         }
+
+    base_currency = base_currency.upper()
+    foreign_currency = foreign_currency.upper()
+    is_base_valid = validate_currency_code(base_currency)
+    is_foreign_valid = validate_currency_code(foreign_currency)
+
+    if not is_base_valid or not is_foreign_valid:
+        return {
+            "Error" : f"{base_currency if not is_base_valid else foreign_currency} is not a valid currency code." 
+        }
+
+    try:
+        data = requests.get(f"https://api.frankfurter.dev/v1/latest?base={base_currency}&to={foreign_currency}")
+        data_json = data.json()
+
+        base = float(data_json["amount"])
+        rate = float(data_json["rates"][foreign_currency])
+
+        exchange_rate = base/rate
+
+    except HTTPError as e:
+        logging.error(f"Invalid request for Frankfurter API [base: {base_currency}, to: {foreign_currency}]")
+        return {
+            "message" : "Invalid request for Frankfurter API",
+            "error" : e, 
+            "tip" : "Remember that the foreign_currency must be a correct three-letter currency code."
+        }
+    
+    return {
+        "message" : f"{base_currency}/{foreign_currency} exchange rate is {exchange_rate}"
+    }
+
+@tool_ownership("weather_agent")
+@function_tool
+async def current_weather(ctx: RunContextWrapper[Ctx], city: str = "Warsaw") -> dict:
+    """
+    Description:
+        This tool is used to get the current weather conditions in a specified city.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    city: str = "Warsaw"
+        Name of the city where the weather conditions are to be checked.
+        Unless specified otherwise by the user the default city is Warsaw.
+        Return the city name in nominative form (base form) — do not inflect or decline it.
+
+    Output:
+        JSON object with current weather conditions in a specified place.
+    """
+
+    owm_client = OWM(os.getenv("OPENWEATHER_API_KEY"))
+    owm_manager = owm_client.weather_manager()
+
+    logging.info(f"Getting weather at {city}")
+
+    try:
+        current_weather = owm_manager.weather_at_place(city)
+    except Exception as e:
+        logging.error(f"Couldnt get weather at {city}")
+        return {"message": f"Couldnt get weather at {city}",
+                "exception": e}
+
+    return current_weather
+
+@tool_ownership("weather_agent")
+@function_tool
+async def get_current_date_and_time(ctx: RunContextWrapper[Ctx]) -> dict:
+    """
+    Description:
+        This tool is used to obtain today's date and current time. It is neccessary
+        to use it before getting the weather forecasts otherwise agent will not be
+        able to process user's request properly when it comes to dates and time.
+    """
+
+@tool_ownership("weather_agent")
+@function_tool
+async def weather_forecast(ctx: RunContextWrapper[Ctx],
+                           forecast_days: Literal["1", "3", "7"],
+                           forecast_type: Literal["hourly", "daily"],
+                           city: str = "Warsaw"
+                           ) -> dict:
+    """
+    Important: 
+
+    Description:
+        This tool is used to check a current weather forecast in a given location.
+        It can be either a short-term (min 3 hours) or a long-term (max 5 days) forecast
+        with different granularity (3h or daily intervals).
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+ 
+    forecast_days: Literal["1", "3", "7"]
+        How long into the future should the forecast reach measured in days.
+
+    forecast_type: Literal["hourly", "daily"]
+        Time intervals in which the forecast will be divided. When asking for a short-term forecast
+        more granular data obtained with 'hourly' may be more optimal wheras for long-term forecast
+        it usually is better to provide 'daily' intervals.
+
+    city: str = "Warsaw"
+        Name of the city where the weather conditions are to be checked.
+        Unless specified otherwise by the user the default city is Warsaw. The city name should be in polish.
+        Return the city name in nominative form (base form) — do not inflect or decline it.
+
+    Output:
+        JSON object with the weather forecast made according to specifications
+    """
+    multiple_results = False
+    geolocation_url = f"https://nominatim.openstreetmap.org/search?q={city}&format=json"
+
+    headers = {
+        "User-Agent":"Jarvis (lkc86484@laoia.com)",
+        "Accept":"application/json"
+    }
+
+    logging.info(f"Starting geolocation for {city}")
+    try:
+        geolocation = requests.get(geolocation_url, headers=headers)
+        geolocation = geolocation.json()
+        logging.info("Geolocation obtained")
+    except HTTPError as e:
+        logging.error(f"Couldnt geolocate {city} - issue with API")
+        return {"message" : f"Couldnt geolocate this location {city}",
+                "status_code" : e}
+
+    output = [
+        {"name" : result["display_name"], "long" : result["lon"], "lat" : result["lat"]}
+        for result in geolocation
+    ]
+
+    if len(output) > 1:
+        logging.info("Found more than one geolocation")
+        multiple_results = True
+        if len(output) > 3:
+            logging.info("Found more than three geolocations")
+            output = output[:3]
+
+    logging.info(f"Getting {forecast_type} in {forecast_days} intervals")
+    tasks = [
+        get_forecast(p, forecast_days, forecast_type)
+        for p in output
+    ]
+
+    forecasts = await asyncio.gather(*tasks)
+
+    result = {
+        "Message" : f"Successfully obtained weather forecasts for {city}",
+        "Forecast" : forecasts
+    }
+
+    if multiple_results:
+        location_names = ",".join([l["name"] for l in output])
+        result["Note"] = f"Multiple geolocations have been found for {city}.\
+            If they are not actually the same city listed out multiple times inform the user about this.\
+                Location names: {location_names}"
+
+    return result
+
+
+
+
+    
+
+    
+
+
+
+
+
 
     base_currency = base_currency.upper()
     foreign_currency = foreign_currency.upper()

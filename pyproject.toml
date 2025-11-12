@@ -20,6 +20,10 @@ dependencies = [
     "googlemaps (>=4.10.0,<5.0.0)",
     "datetime (>=5.5,<6.0)",
     "litellm (>=1.79.0,<2.0.0)",
+    "pyowm (>=3.5.0,<4.0.0)",
+    "openmeteo-requests (>=1.7.4,<2.0.0)",
+    "requests-cache (>=1.2.1,<2.0.0)",
+    "retry-requests (>=2.0.0,<3.0.0)",
     "pycountry (>=24.6.1,<25.0.0)",
 ]
 
