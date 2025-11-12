@@ -3,6 +3,9 @@ from lib.cache import Cache, Ctx
 from lib.smart_device import SmartDevice, RGB, ColorMode
 from lib.tools_utils import simplify_directions_response, validate_currency_code
 from typing import List, Literal, Optional, Union
+from lib.smart_device import SmartDevice, RGB, Mode
+from lib.tools_utils import simplify_directions_response
+from typing import List, Literal, Optional, Union, Annotated
 import json
 import asyncio
 import googlemaps
@@ -14,6 +17,7 @@ from requests import HTTPError
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
+DEVICES_PREFERENCES_PATH = "data/smart_device_data/preferences.json"
 MAPS_PARAMS_PATH = "data/maps_data/maps_memory.json"
 
 logger = logging.getLogger(__name__)
@@ -28,16 +32,28 @@ def tool_ownership(agent_name: str):
         return function_tool
     return wrapper
 
+# ------- iot operator -------
+
 @tool_ownership("iot_operator")
 @function_tool
 async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     """
-    This tool is used to download neccessary data about all smart devices which is then
-    used to establish connection and check their current status.
+    Description:
+        This tool is used to download initial neccessary data about all smart devices from a database. 
+        It is then used to establish connection and check their current states.
+    Note:
+        This tool should only be run at the beginning of agent's tool calls. This provides an initial scan
+        but due to accessing of the database it has a large overhead therefore it should only be run once.
     """
     logger.info("Checking all available devices")
     with open(DEVICES_PARAMS_PATH, "r", encoding="utf-8") as f:
         list_of_jsons = json.load(f)
+
+    print("Wczytuje preferencje użytkownika")
+    with open(DEVICES_PREFERENCES_PATH, "r", encoding="utf-8") as f:
+        preferences = json.load(f)
+
+    ctx.context.devices_preferences = preferences
 
     configs = list_of_jsons["list_of_elements"]
     devices = []
@@ -50,10 +66,41 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
             logging.error(f"Error creating device: {e}")
 
     states = await asyncio.gather(*(d.get_status() for d in devices))
+    ctx.context.devices_states = states
 
-    ctx.context.devices = states
+    devices_dict = {d.name : d for d in devices}
+    ctx.context.devices = devices_dict
 
-    return states
+    return {"states" : states, "known_user_preferences": preferences}
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def get_one_device_status(ctx: RunContextWrapper[Ctx], device: SmartDevice) -> dict:
+    """
+    Description:
+    This tool is used to check the status of a given device without the unnecessary overhead
+    of checking all devices in the system. It should be used as an intermediate tool between tool calls
+    instead of the tool get_devices_state.
+
+    Note:
+        When agents wants to interact with multiple devices this tool should be run in parallel.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+    
+    devices : SmartDevice
+        Devices that should have its status checked
+
+    Output:
+        State of the given device
+    """
+
+    print("Sprawdzam stan jednego urzadzenia")
+    state = await device.get_status()
+
+    ctx.context.devices_states[device.get_name()] = state
+    return state
 
 @tool_ownership("iot_operator")
 @function_tool(strict_mode=False)
@@ -82,8 +129,119 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice
         new_states = await asyncio.gather(*(dev.get_status() for dev in devices))
         
     except Exception as e:
+        logging.error(f"Error while turning devices off {e}"}"
+
+    return new_states
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def turn_off_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevice]):
+    """
+    Description:
+    This tool is used to turn off all mentioned devices.
+
+    Note:
+    This tool should always be preceded by the usage of get_devices_state tool.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+    
+    devices : List[SmartDevice]
+        List of all devices that should be turned on based on the user's request
+
+    Output:
+    This tool returns the new states of the affected devices
+    """
+    print("Wyłączam urządzenia")
+
+    try:
+        await asyncio.gather(*(dev.turn_off() for dev in devices))
+
+        new_states = await asyncio.gather(*(dev.get_status() for dev in devices))
+        
+    except Exception as e:
         logger.error(f"Error while turning a device on {e}")
     return new_states
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device: SmartDevice, new_mode: Mode) -> dict:
+    """
+    Description:
+    This tool is used to change the lighting mode of a given smart device. Lighting mode can either
+    be set to white or colour mode. When in colour mode various rgb settings can be applied to the
+    device. When in white mode the lighting temperature can be adjusted.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    device: SmartDevice
+        The device that is to be affected by the mode change
+
+    new_mode: Mode
+        The mode that will be applied to the chosen device
+    """
+
+    print(f"Zmieniam tryb na {new_mode.mode}")
+    await device.change_mode(new_mode)
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def change_color(ctx: RunContextWrapper[Ctx], device: SmartDevice, new_color: RGB) -> dict:
+    """
+    Description:
+    This tool is used to change the colour of the given smart device.
+    In order to set a new RGB value device must be in 'colour' lighting mode.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    device: SmartDevice
+        The device that is to be affected by the color change
+        Note: this device must be in 'colour' lighting mode in order for the change to be possible
+
+    new_color: RGB
+        The new color that the device will be set to as an RGB value.
+        RGB values are integers from 0 to 255 where R = red, G = green, B = blue
+
+    Output:
+        This tool returns short information whether the attempt was successful
+    """
+
+    print(f"Zmieniam kolor na {new_color.R} {new_color.G} {new_color.B}")
+    task_status = await device.change_color(new_color)
+    return task_status
+
+@tool_ownership("iot_operator")
+@function_tool(strict_mode=False)
+async def change_light_temperature(ctx: RunContextWrapper, device: SmartDevice, new_temp: Annotated[int, "range 0-1000"]) -> dict:
+    """
+    Description:
+    This tool is used to change the colour temperature of the given device.
+    In order to set a new color temperature the device must be in 'white' lighting mode.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    device: SmartDevice
+        The device that is to be affected by the lighting temperature change
+        Note: this device must be in 'white' lighting mode in order for the change to be possible
+
+    new_temp: Annotated[int, "range 0-1000"]
+        This parameter controls the temperature value where 0 is the brightest and 1000 the coldest
+
+    Output:
+        This tool returns short information whether the attempt was successful
+    """
+    print("Zmieniam temperature")
+    task_status = await device.change_temperature(new_temp)
+    return task_status
+
+# ------- maps agent -------
 
 @tool_ownership("maps_agent")
 @function_tool
