@@ -20,6 +20,7 @@ dependencies = [
     "googlemaps (>=4.10.0,<5.0.0)",
     "datetime (>=5.5,<6.0)",
     "litellm (>=1.79.0,<2.0.0)",
+    "pycountry (>=24.6.1,<25.0.0)",
 ]
 
 [tool.poetry]

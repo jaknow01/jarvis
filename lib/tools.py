@@ -1,5 +1,8 @@
 from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
+from lib.smart_device import SmartDevice, RGB, ColorMode
+from lib.tools_utils import simplify_directions_response, validate_currency_code
+from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
 from typing import List, Literal, Optional, Union, Annotated
@@ -9,6 +12,8 @@ import googlemaps
 import os
 from datetime import datetime
 import logging
+import requests
+from requests import HTTPError
 
 TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
@@ -336,9 +341,73 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
 
     return result
 
+@tool_ownership("finance_agent")
+@function_tool
+async def get_exchange_rate(ctx: RunContextWrapper[Ctx],
+                            foreign_currency: str,
+                            base_currency: str = "PLN") -> dict:
+    f"""
+    Description:
+        This tool is used to obtain the current exchange rate between a given foreign and
+        the base currency.
 
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
 
+    foreign_currency: str
+        Currency code of the currency that is to be checked against the base currency.
+        Important: currency code **must** be a 3-letter code that is compatible with 
+        ISO 4217 standard e.g. us dollar -> USD, euro -> EUR etc.
 
+    base_currency: str
+        Currency code of the base currency in the exchange rate. Unless specified clearly
+        in the user's query this should always remain "PLN" by default.
+
+    Output:
+        JSON object with the current exchange rate of the foreign_currency and base currency
+    """
+
+    logging.info(f"Getting exchange data for {base_currency} and {foreign_currency}")
+
+    if len(base_currency)>3 or len(foreign_currency)>3:
+        return {
+            "Error" : f"Currency codes must always have exactly 3 letters. One of these codes {base_currency}, {foreign_currency} is incorrect.",
+            "Tip": "You should rerun this tool with correct currency codes."
+        }
+
+    base_currency = base_currency.upper()
+    foreign_currency = foreign_currency.upper()
+    is_base_valid = validate_currency_code(base_currency)
+    is_foreign_valid = validate_currency_code(foreign_currency)
+
+    if not is_base_valid or not is_foreign_valid:
+        return {
+            "Error" : f"{base_currency if not is_base_valid else foreign_currency} is not a valid currency code." 
+        }
+
+    try:
+        data = requests.get(f"https://api.frankfurter.dev/v1/latest?base={base_currency}&to={foreign_currency}")
+        data_json = data.json()
+
+        base = float(data_json["amount"])
+        rate = float(data_json["rates"][foreign_currency])
+
+        exchange_rate = base/rate
+
+    except HTTPError as e:
+        logging.error(f"Invalid request for Frankfurter API [base: {base_currency}, to: {foreign_currency}]")
+        return {
+            "message" : "Invalid request for Frankfurter API",
+            "error" : e, 
+            "tip" : "Remember that the foreign_currency must be a correct three-letter currency code."
+        }
+    
+    return {
+        "message" : f"{base_currency}/{foreign_currency} exchange rate is {exchange_rate}"
+    }
+    
+    
 
 
 

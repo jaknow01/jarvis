@@ -1,4 +1,5 @@
 import json
+import pycountry
 
 def simplify_directions_response(data):
     routes_summary = []
@@ -38,3 +39,6 @@ def simplify_directions_response(data):
             routes_summary.append(summary)
 
     return routes_summary
+
+def validate_currency_code(code: str) -> bool:
+    return pycountry.currencies.get(alpha_3 = code) is not None
