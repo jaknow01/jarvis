@@ -173,9 +173,9 @@ def create_news_agent():
     agent = Agent(
         name=name,
         instructions = (
-            "You are a news reporter. Your task is to search twitter and create \
+            "You are a news reporter. Your task is to search the internet and use reputable sources to create \
             summaries of the events mentioned by the user."),
-        tools = [],
+        tools = TOOLS_BY_AGENT[name],
         model = model_settings["model_name"],
         model_settings=model_settings["settings"]
     )

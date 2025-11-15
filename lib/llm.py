@@ -22,14 +22,16 @@ def open_ai_llm() -> dict:
     }
 
 @llm_usage(["news_agent"])
-def xai_llm() -> dict:
-    model = "xai/grok-4-fast-non-reasoning"
-    api_key = os.getenv("XAI_API_KEY")
+def open_ai_reasoning_llm() -> dict:
+    model_name = "gpt-5-mini"
+    reasoning = {"effort" : "medium"}
 
-    settings = ModelSettings(include_usage=True, parallel_tool_calls=True, tool_choice='required')
-    lite_model = LitellmModel(model=model, api_key=api_key)
+    settings = ModelSettings(
+        parallel_tool_calls=True,
+        reasoning=reasoning
+    )
 
     return {
-        "model_name" : lite_model,
+        "model_name" : model_name,
         "settings" : settings
     }

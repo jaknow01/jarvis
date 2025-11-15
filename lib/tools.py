@@ -346,6 +346,7 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
 
     return result
                      
+# ------- finance agent -------
 
 @tool_ownership("finance_agent")
 @function_tool
@@ -412,6 +413,8 @@ async def get_exchange_rate(ctx: RunContextWrapper[Ctx],
     return {
         "message" : f"{base_currency}/{foreign_currency} exchange rate is {exchange_rate}"
     }
+
+# ------- weather agent -------
 
 @tool_ownership("weather_agent")
 @function_tool
@@ -544,49 +547,6 @@ async def weather_forecast(ctx: RunContextWrapper[Ctx],
     return result
 
 
-
-
-    
-
-    
-
-
-
-
-
-
-    base_currency = base_currency.upper()
-    foreign_currency = foreign_currency.upper()
-    is_base_valid = validate_currency_code(base_currency)
-    is_foreign_valid = validate_currency_code(foreign_currency)
-
-    if not is_base_valid or not is_foreign_valid:
-        return {
-            "Error" : f"{base_currency if not is_base_valid else foreign_currency} is not a valid currency code." 
-        }
-
-    try:
-        data = requests.get(f"https://api.frankfurter.dev/v1/latest?base={base_currency}&to={foreign_currency}")
-        data_json = data.json()
-
-        base = float(data_json["amount"])
-        rate = float(data_json["rates"][foreign_currency])
-
-        exchange_rate = base/rate
-
-    except HTTPError as e:
-        logging.error(f"Invalid request for Frankfurter API [base: {base_currency}, to: {foreign_currency}]")
-        return {
-            "message" : "Invalid request for Frankfurter API",
-            "error" : e, 
-            "tip" : "Remember that the foreign_currency must be a correct three-letter currency code."
-        }
-    
-    return {
-        "message" : f"{base_currency}/{foreign_currency} exchange rate is {exchange_rate}"
-    }
-    
-    
 
 
 
