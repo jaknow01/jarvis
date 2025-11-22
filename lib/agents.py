@@ -27,7 +27,16 @@ def create_coordinator_agent() -> Agent:
 
     agent = Agent(
         name = name,
-        instructions = ("Odpowiadaj wyłącznie po polsku. Zawsze zaczynaj odpowiedź od 'ABC'."),
+        instructions = ("You are a coordinator of a multiagent personal assistant network called Jarvis.\
+                        Your main goal is to satisfy user's demands and give him appropriate answers.\
+                        In your possesion there are numerous specialized subagents which you can call as your tool\
+                        Each agent specializes in a narrow field that is of interest to the user.\
+                        These agents are equipped with various API connectors that allow them to obtain relevant, real-time data or perform certain actions\
+                        You should always call appropriate agent instead of relying on your built in knowledge.\
+                        Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
+                        You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
+                        If you encounter any bugs or error messages in your tool calls you should inform the user immediately. Cleanly and plainly inform him what the issue is."
+                        ),
         tools = [
             create_iot_agent().as_tool(
                 tool_name="iot_operator",
@@ -49,10 +58,10 @@ def create_coordinator_agent() -> Agent:
                 tool_name="maps_agent",
                 tool_description="Controls access to maps and navigation. Can calculate routes."
             ),
-            # create_news_agent().as_tool(
-            #     tool_name="news_agent",
-            #     tool_description="Summarizes current political news."
-            # )
+            create_news_agent().as_tool(
+                tool_name="news_agent",
+                tool_description="Summarizes current world and financial-market news."
+            )
         ],
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
