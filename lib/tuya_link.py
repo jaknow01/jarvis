@@ -13,6 +13,7 @@ operations live in ``lib/smart_device.py``.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import logging
@@ -28,10 +29,33 @@ SOCKET_TIMEOUT = 3.0     # per-call tinytuya socket timeout (s)
 RETRY_LIMIT = 1          # tinytuya's own internal retry count
 HARD_TIMEOUT = 8.0       # absolute cap per call, enforced by callers via wait_for (s)
 MAX_ATTEMPTS = 3         # bounded reconnect-and-retry per logical operation
-IDLE_RELEASE = 120.0     # close a connection unused for this long (s)
-REAP_INTERVAL = 30.0     # how often the idle reaper runs (s)
+REAP_INTERVAL = 30.0     # upper bound on how often the idle reaper runs (s)
 SCAN_TIMEOUT = 8         # bounded discovery scan for IP self-heal (s)
 DEFAULT_VERSION = 3.3
+
+# How long a connection may sit unused before the reaper closes it (good-citizen
+# release). Configurable in seconds via env; read at runtime so it picks up .env
+# (loaded after import in app/main.py). See docs/TUYA_LOCAL.md.
+IDLE_RELEASE_ENV = "TUYA_IDLE_RELEASE_SECONDS"
+DEFAULT_IDLE_RELEASE = 120.0
+_MIN_REAP_WAIT = 5.0     # floor so a tiny idle value can't spin the reaper
+
+
+def get_idle_release() -> float:
+    """Seconds a connection may stay idle before release, from
+    ``TUYA_IDLE_RELEASE_SECONDS`` (falls back to the default on unset/invalid)."""
+    raw = os.getenv(IDLE_RELEASE_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_IDLE_RELEASE
+    try:
+        val = float(raw)
+    except ValueError:
+        logger.warning(f"{IDLE_RELEASE_ENV}={raw!r} is not a number; using {DEFAULT_IDLE_RELEASE}s")
+        return DEFAULT_IDLE_RELEASE
+    if val <= 0:
+        logger.warning(f"{IDLE_RELEASE_ENV}={val} must be > 0; using {DEFAULT_IDLE_RELEASE}s")
+        return DEFAULT_IDLE_RELEASE
+    return val
 
 
 @dataclass
@@ -117,13 +141,18 @@ class TuyaConnectionManager:
             self._reaper.start()
 
     def _reap_loop(self) -> None:
-        while not self._reaper_stop.wait(REAP_INTERVAL):
+        while True:
+            idle_release = get_idle_release()
+            # wake often enough to honour small idle values, but never busy-spin
+            wait = max(_MIN_REAP_WAIT, min(REAP_INTERVAL, idle_release))
+            if self._reaper_stop.wait(wait):
+                return
             now = time.monotonic()
             expired = []
             with self._guard:
                 for dev_id, conn in list(self._conns.items()):
                     # do not reap a connection mid-operation
-                    if now - conn.last_used >= IDLE_RELEASE and conn.lock.acquire(blocking=False):
+                    if now - conn.last_used >= idle_release and conn.lock.acquire(blocking=False):
                         try:
                             expired.append(self._conns.pop(dev_id))
                         finally:

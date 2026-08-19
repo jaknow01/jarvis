@@ -94,8 +94,8 @@ pay the cold penalty — the benefit of always-warm, only when actually needed.
 | `RETRY_LIMIT` | 1 | tinytuya's own internal retry count |
 | `HARD_TIMEOUT` | 8.0 s | absolute cap per call (`wait_for`); guarantees no hang |
 | `MAX_ATTEMPTS` | 3 | bounded reconnect-and-retry per operation |
-| `IDLE_RELEASE` | 120 s | close a connection unused for this long (good citizen) |
-| `REAP_INTERVAL` | 30 s | how often the idle reaper runs |
+| `IDLE_RELEASE` | 120 s | close a connection unused for this long (good citizen). **Configurable in seconds via the `TUYA_IDLE_RELEASE_SECONDS` env var** (read at runtime; falls back to 120 on unset/invalid). |
+| `REAP_INTERVAL` | 30 s | upper bound on how often the idle reaper runs (it also wakes sooner to honour small idle values) |
 | `SCAN_TIMEOUT` | 8 s | bounded discovery scan for IP self-heal |
 
 ## Explicitly out of scope (for now)
