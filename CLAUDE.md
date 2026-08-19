@@ -1,0 +1,152 @@
+# Jarvis — Personal Multi-Agent Assistant
+
+## What this project is
+
+Jarvis is a **personal AI assistant built as a multi-agent network**. A central
+**coordinator** agent talks to the user and delegates work to specialized
+**sub-agents**, each equipped with real-world tools (smart-home control, maps,
+weather, finance, news search). The long-term goal is an assistant the owner can
+talk to from their phone, that **remembers preferences and adapts over time**,
+and that can **run recurring jobs on its own** (e.g. a morning news brief pushed
+without being asked).
+
+**Owner / single user:** this is a personal assistant for one person, not a
+multi-tenant product. Defaults are tailored to the owner (Warsaw, Poland; Polish
+language for user-facing replies; PLN as base currency).
+
+### Vision (end state we are building toward)
+1. **Chat from the phone** — a messaging front-end. Original plan was Telegram;
+   preferred target is **Messenger or iMessage**. Today the only interface is a
+   terminal REPL.
+2. **Long-term memory** — a `memory_operator` agent that stores/refines user
+   preferences and habits so the assistant personalizes and anticipates.
+3. **Proactive scheduling** — the assistant can create recurring/one-off jobs
+   (cron-like) that act as an *alternate entry path* into it: e.g. "every morning
+   check the news and send me a press brief." The memory agent is expected to be
+   able to edit the scheduler to set reminders.
+
+## Architecture
+
+Built on the **OpenAI Agents SDK** (`agents` package), with LiteLLM as a model
+adapter layer so non-OpenAI models (xAI/Grok, Groq) can be plugged in per agent.
+
+```
+app/main.py            Entry point: load env, configure logging, run the chatbot loop
+lib/chatbot.py         REPL loop: reads input, runs coordinator, persists conversation id
+lib/agents.py          Coordinator + all sub-agent factories (registered via decorator)
+lib/tools.py           All function-tools, grouped per agent via @tool_ownership
+lib/tools_utils.py     Pure helpers for tools (directions parsing, forecast fetch, currency)
+lib/llm.py             Per-agent model + ModelSettings selection (registered via decorator)
+lib/smart_device.py    Tuya smart-bulb model & control (pydantic + tinytuya)
+lib/cache.py           Redis-backed cache + Ctx (shared run context object)
+lib/run_config.py      Builds the Agents SDK RunConfig (OpenAI Responses model)
+lib/logger.py          Root logger config + custom CONVERSATION log level
+data/                  JSON "databases" (devices, preferences, maps memory, memory)
+logs/                  Per-run log files
+```
+
+### How a turn flows
+1. `Chatbot.start_chatbot()` loops on `input()`.
+2. Each turn builds a fresh `RunConfig` (`lib/run_config.py`) and a fresh
+   coordinator (`create_coordinator_agent()`).
+3. `Runner.run(coordinator, input=text, previous_response_id=..., context=ctx)`
+   executes. The **previous response id** is stored in Redis so the OpenAI
+   Responses API keeps conversation continuity across turns.
+4. The coordinator calls sub-agents **as tools** (`agent.as_tool(...)`), possibly
+   in parallel. Sub-agents call their own function-tools.
+
+### Registration patterns (important conventions)
+The codebase uses three decorator-backed registries. Follow them when adding things:
+
+- **Agents** — `@agents_decorator(name)` in `lib/agents.py` registers a factory
+  into `AGENTS`. Each sub-agent is a `create_*_agent()` factory returning an
+  `Agent`; the coordinator wires them in via `.as_tool(tool_name=, tool_description=)`.
+- **Tools** — `@tool_ownership(agent_name)` **above** `@function_tool` in
+  `lib/tools.py` appends the tool to `TOOLS_BY_AGENT[agent_name]`. An agent picks
+  up its tools with `tools = TOOLS_BY_AGENT[name]`. Decorator order matters:
+  `@tool_ownership` outermost, `@function_tool` innermost.
+- **Models** — `@llm_usage([agent_names])` in `lib/llm.py` maps agents to a model
+  factory returning `{"model_name", "settings"}`. Agents read it via
+  `LLM_BY_AGENT[name]()`.
+
+### Shared context
+`Ctx` (`lib/cache.py`) is passed as `context=` into `Runner.run` and reaches every
+tool as `RunContextWrapper[Ctx]`. Tools stash intermediate state on it
+(`ctx.context.devices`, `ctx.context.devices_preferences`, `ctx.context.known_adresses`).
+It also holds the Redis `Cache`.
+
+## Agents & their status
+
+| Agent | Purpose | Tools / APIs | Status |
+|-------|---------|--------------|--------|
+| `coordinator` | Routes user requests, aggregates answers | sub-agents as tools | Working |
+| `iot_operator` | Smart lighting control | Tuya (tinytuya): state, on/off, mode, color, temp | Working (needs real device data in `data/smart_device_data/`) |
+| `maps_agent` | Routes & navigation | Google Maps Directions | Working |
+| `weather_agent` | Current weather + forecast | OpenWeather (current) + Open-Meteo (forecast) | Working — but `get_current_date_and_time` tool has an **empty body** (returns None); needs implementing |
+| `finance_agent` | Financial data | Frankfurter (FX rates) | **Partial** — only currency exchange. TODO: stock/market data, incl. Polish (GPW) market |
+| `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
+| `memory_operator` | Long-term memory & reminders | none yet | **Stub** — defined but has no tools and is not wired into the coordinator |
+
+## Running it
+
+Requires **Redis** on `localhost:6379`, a `.env` (copy from `.env_template`), and
+Poetry.
+
+```bash
+# 1. Fill in .env (see .env_template for required keys)
+# 2. Start Redis (locally or via docker compose)
+docker compose up -d redis
+# 3. Install deps and run
+poetry install
+poetry run python app/main.py
+```
+
+There is also a `Dockerfile` / `docker-compose.yml` (the app container is
+scaffolded; note the compose file exposes port 8002 for a future HTTP entry point
+that does not exist yet). When running the whole stack in Docker, switch the Redis
+URL in `lib/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
+
+### Environment variables (`.env`)
+`OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
+`OPENWEATHER_API_KEY`, `TAVILY_API_KEY`. (`memory_operator` and any Messenger/
+Telegram integration will add more.)
+
+## Conventions & gotchas
+- **User-facing replies are in Polish**; tool/agent *instructions* and code are in
+  English. Keep that split.
+- **Tool docstrings are the tool spec** the LLM sees — write them carefully
+  (description, parameters, output, notes). Match the existing detailed style.
+- **Async everywhere.** Tools are `async` and should run I/O concurrently with
+  `asyncio.gather` (see `iot_operator` tools). A design goal in `TODO.txt`: agent
+  factory methods should become async so all agents can be created concurrently.
+- **Logging, not prints.** `lib/logger.py` adds a custom `CONVERSATION` level
+  (25) via `logger.conversation(...)`. Legacy `print()` calls still linger in
+  `lib/tools.py` / `lib/smart_device.py` — prefer `logger` for new code and
+  migrate prints when you touch them.
+- **Data "DBs" are JSON files** under `data/` (gitignored except `.gitkeep`).
+  Real device keys / preferences live there and are not committed.
+- **`.venv/` and `venv/`** both exist in the working tree but are gitignored; the
+  canonical dependency source of truth is `pyproject.toml` + `poetry.lock`.
+- **Don't churn dependencies casually** — the lockfile was painful to stabilize
+  (see README).
+
+## Roadmap (from `TODO.txt` + vision)
+Rough priority order to reach a usable end state:
+1. **Messaging front-end** (Messenger / iMessage / Telegram) replacing the REPL —
+   likely a long-running service that receives messages over HTTP/webhook and
+   feeds them into the same coordinator run loop.
+2. **Memory agent** — decide storage layout (JSON under `data/` is fine to start),
+   implement tools to read/write preferences, and inject relevant memory into
+   agent context.
+3. **Scheduler** — a mechanism to deliver messages to the agent "out of band"
+   (cron-like jobs). Enables proactive briefs and reminders; the memory agent
+   should be able to create/edit scheduled entries.
+4. **Finance agent** — add market/stock data sources, including the Polish (GPW)
+   market, beyond FX rates.
+5. **Polish** — implement the empty `get_current_date_and_time` tool, finish
+   migrating `print()` → `logger`, and add tests.
+
+## Git / branch state
+All feature branches (`logger`, `smarts`, `financial-agent`, `weather-agent`,
+`news-agent`, `openai-agents-sdk-swith`) have been **merged into `main`**. `main`
+is the single source of truth going forward; create new feature branches off it.

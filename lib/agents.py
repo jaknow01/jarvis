@@ -42,10 +42,6 @@ def create_coordinator_agent() -> Agent:
                 tool_name="iot_operator",
                 tool_description="Controls smart devices (lighting) in a houshold."
             ),
-            create_news_agent().as_tool(
-                tool_name="news_agent",
-                tool_description="Summarizes current political news."
-            ),
             create_weather_agent().as_tool(
                 tool_name="weather_agent",
                 tool_description="Checks current weather and weather forecast at a given location"
