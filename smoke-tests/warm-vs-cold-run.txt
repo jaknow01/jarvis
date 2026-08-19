@@ -1,0 +1,44 @@
+Discovery scan (~12s)…
+Offline (skipped): Lampa stojąca
+Testing 5 device(s) in parallel. ~6.4 min (idle=60.0s x cycles=3 x 2 arms).
+
+========================================================================
+WARM vs COLD — read-only reliability after idle
+========================================================================
+
+Telewizor
+  local-connection slots: 2nd local connection ACCEPTED (multiple local clients allowed)
+  COLD  first-after-idle 3/3 ok (med 29ms)   rest 9/9 ok (med 29ms)
+  WARM  first-after-idle 3/3 ok (med 24ms)   rest 9/9 ok (med 14ms)
+
+Łóżko
+  local-connection slots: 2nd local connection ACCEPTED (multiple local clients allowed)
+  COLD  first-after-idle 3/3 ok (med 215ms)   rest 9/9 ok (med 207ms)
+  WARM  first-after-idle 3/3 ok (med 82ms)   rest 9/9 ok (med 108ms)
+
+Kinkiet prawy
+  local-connection slots: 2nd local connection ACCEPTED (multiple local clients allowed)
+  COLD  first-after-idle 3/3 ok (med 30ms)   rest 9/9 ok (med 29ms)
+  WARM  first-after-idle 3/3 ok (med 16ms)   rest 9/9 ok (med 18ms)
+
+Kinkiet lewy
+  local-connection slots: 2nd local connection ACCEPTED (multiple local clients allowed)
+  COLD  first-after-idle 3/3 ok (med 30ms)   rest 9/9 ok (med 23ms)
+  WARM  first-after-idle 3/3 ok (med 19ms)   rest 9/9 ok (med 16ms)
+
+Pianino
+  local-connection slots: 2nd local connection ACCEPTED (multiple local clients allowed)
+  COLD  first-after-idle 3/3 ok (med 208ms)   rest 9/9 ok (med 209ms)
+  WARM  first-after-idle 3/3 ok (med 80ms)   rest 9/9 ok (med 107ms)
+
+========================================================================
+READ THIS: interpretation
+========================================================================
+- If WARM 'first-after-idle' is markedly better than COLD, keeping devices
+  warm (persistent conn + heartbeat) fixes the cold-start flakiness.
+- If both arms are ~equal and healthy, the devices did not go cold during
+  this window — rerun with a longer --idle to provoke it.
+- 'single local slot' means a persistent agent connection would block a
+  SECOND local client. The Tuya app normally uses the cloud path (not 6668),
+  so it is unaffected — but a good-citizen design should still hold the local
+  socket lightly and release it when idle.

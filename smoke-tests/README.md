@@ -144,3 +144,47 @@ nothing changed in between:
 Net: the single highest-value change is **persistent, reused connections with one
 consistently-enforced timeout**, plus fast-failing and flagging devices that are
 cold/wedged. See the recommendations above.
+
+## Warm-vs-cold experiment (2026-08-19)
+
+`warm_vs_cold.py` tests the fix hypothesis directly, read-only. Per device, two arms
+repeated over 3 cycles: **COLD** = 60 s idle then a burst of fresh-connection reads
+(today's pattern); **WARM** = one persistent connection kept alive with a 12 s status
+heartbeat, then the same burst. It also probes how many local connections a device
+accepts at once.
+
+| Device | COLD first-after-idle | WARM first-after-idle | COLD rest (median) | WARM rest (median) |
+|--------|-----------------------|-----------------------|--------------------|--------------------|
+| Telewizor | 3/3, 29 ms | 3/3, 24 ms | 29 ms | 14 ms |
+| Łóżko | 3/3, **215 ms** | 3/3, **82 ms** | 207 ms | 108 ms |
+| Kinkiet prawy | 3/3, 30 ms | 3/3, 16 ms | 29 ms | 18 ms |
+| Kinkiet lewy | 3/3, 30 ms | 3/3, 19 ms | 23 ms | 16 ms |
+| Pianino | 3/3, **208 ms** | 3/3, **80 ms** | 209 ms | 107 ms |
+
+**Concurrency:** every device **accepted a second simultaneous local connection**
+("multiple local clients allowed") at the TCP layer.
+
+### What this run does and does not prove
+
+- **Warming is clearly beneficial and never worse.** On the two marginal, weak-signal
+  devices (Łóżko, Pianino) a warm persistent connection cut latency ~2.6× (≈210 ms →
+  ≈80 ms). That ≈130 ms is the TCP/handshake setup that a fresh-per-call design pays
+  every time — and it is exactly the headroom that, on a genuinely cold device, turns
+  into the timeouts/`EHOSTUNREACH` seen elsewhere. Lower latency ⇒ smaller window to
+  hit the app's timeout ⇒ fewer failures.
+- **This window did not reproduce hard failures.** At 60 s idle, *both* arms were
+  100 % — so this run shows warming removes the latency penalty, but did not itself
+  catch a cold-start *failure* (those needed true first-contact or a longer idle in
+  the earlier ad-hoc runs). To demonstrate failure-prevention head-on, rerun with a
+  much longer `--idle` (e.g. `--idle 300 --only Pianino --only Łóżko`).
+- **The Tuya app is safe.** The app controls the bulbs over the **cloud**, which is
+  independent of local port 6668; and these devices accept multiple local connections
+  anyway. So an agent holding a persistent local connection does not block the app.
+  (Caveat: this test confirms multiple *TCP* connections are accepted; it does not
+  prove two full Tuya protocol sessions never interfere. A good-citizen design should
+  still keep the local socket lightly held and release it when idle.)
+
+**Conclusion on the hypothesis:** keeping devices warm helps — but the right form is
+a **persistent, reused connection with a periodic lightweight status heartbeat**
+(warming the actual Tuya channel), not bare ICMP pings (which warm only ARP/radio and
+still leave every command paying a cold TCP handshake).
