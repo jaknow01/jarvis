@@ -188,3 +188,35 @@ accepts at once.
 a **persistent, reused connection with a periodic lightweight status heartbeat**
 (warming the actual Tuya channel), not bare ICMP pings (which warm only ARP/radio and
 still leave every command paying a cold TCP handshake).
+
+### Longer idle (5 min) on the two marginal devices
+
+`warm_vs_cold.py --idle 300 --cycles 2 --only Łóżko --only Pianino`:
+
+| Device | COLD first-after-idle | WARM first-after-idle | COLD rest (median) | WARM rest (median) |
+|--------|-----------------------|-----------------------|--------------------|--------------------|
+| Łóżko | 2/2, 95 ms | 2/2, 50 ms | 209 ms | 102 ms |
+| Pianino | 2/2, **312 ms** | 2/2, **45 ms** | 300 ms | 106 ms |
+
+The latency gap widens with idle length — Pianino's cold first-call rose to 312 ms
+while its warm call stayed ~45 ms (~7×). Still **no outright failures** even at 5 min
+idle: the catastrophic cold failures seen at session start (all devices
+`EHOSTUNREACH`, Pianino `0/5` + hung `status()`) needed genuinely-cold first contact
+and could not be provoked on demand here. Honest takeaway: warming reliably removes
+the cold-start *latency* penalty (confirmed twice, larger at longer idle); the rare
+*failures* are real but intermittent, which is exactly why the implementation pairs
+warming with bounded retries rather than relying on either alone.
+
+## The fix, and how it was verified
+
+The findings above are implemented in `lib/tuya_link.py` + `lib/smart_device.py`
+(design: [`../docs/TUYA_LOCAL.md`](../docs/TUYA_LOCAL.md)): persistent good-citizen
+connections, one enforced hard timeout per call, bounded reconnect-and-retry, IP
+self-heal, verified writes.
+
+Live checks of the new layer:
+- **Persistent reuse works:** second `status()` on a device is ~2× faster than the
+  first (warm connection reused; one "Opened persistent connection" per device).
+- **Never hangs, never drops:** `get_status()` against a deliberately unreachable
+  device returned a structured error `{"Error": …, "reachable": False}` in **15 s**
+  (3 bounded attempts + one IP self-heal scan) — bounded, honest, no hang.
