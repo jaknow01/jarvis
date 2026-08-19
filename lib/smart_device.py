@@ -2,6 +2,9 @@ from tinytuya import BulbDevice
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Literal
 from asyncio import wait_for, to_thread
+import logging
+
+logger = logging.getLogger(__name__)
 
 class RGB(BaseModel):
     R: int = Field(..., description="Red channel, 0-255")
@@ -37,7 +40,7 @@ class SmartDevice(BaseModel):
         )
 
     async def get_status(self) -> dict:
-        print(f"Checking status of {self.name}")
+        logger.info(f"Checking status of {self.name}")
 
         state = await self._check_status()
         state_translated = {}
@@ -64,7 +67,7 @@ class SmartDevice(BaseModel):
             )
         except Exception as e:
             status = {"Error":"Timeout: device is not responding"}
-            print(e)
+            logger.error(f"Device {self.name} not responding: {e}")
 
         return status
     

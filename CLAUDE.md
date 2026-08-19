@@ -82,8 +82,8 @@ It also holds the Redis `Cache`.
 | `coordinator` | Routes user requests, aggregates answers | sub-agents as tools | Working |
 | `iot_operator` | Smart lighting control | Tuya (tinytuya): state, on/off, mode, color, temp | Working (needs real device data in `data/smart_device_data/`) |
 | `maps_agent` | Routes & navigation | Google Maps Directions | Working |
-| `weather_agent` | Current weather + forecast | OpenWeather (current) + Open-Meteo (forecast) | Working — but `get_current_date_and_time` tool has an **empty body** (returns None); needs implementing |
-| `finance_agent` | Financial data | Frankfurter (FX rates) | **Partial** — only currency exchange. TODO: stock/market data, incl. Polish (GPW) market |
+| `weather_agent` | Current weather + forecast | OpenWeather (current) + Open-Meteo (forecast) + date/time | Working |
+| `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
 | `memory_operator` | Long-term memory & reminders | none yet | **Stub** — defined but has no tools and is not wired into the coordinator |
 
@@ -109,7 +109,15 @@ URL in `lib/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
 ### Environment variables (`.env`)
 `OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
 `OPENWEATHER_API_KEY`, `TAVILY_API_KEY`. (`memory_operator` and any Messenger/
-Telegram integration will add more.)
+Telegram integration will add more.) Note: the Yahoo Finance quote source and the
+Frankfurter FX source are keyless.
+
+### Testing
+`pytest` (dev dependency) with tests under `tests/`. Run `poetry run pytest`. Tests
+cover pure helpers and the decorator registries only — no network or API keys
+required. Anything that hits an external API (Yahoo, Tavily, Google Maps, OpenWeather)
+is intentionally left out of the suite for now; add mocked/integration tests as those
+grow.
 
 ## Conventions & gotchas
 - **User-facing replies are in Polish**; tool/agent *instructions* and code are in
@@ -141,10 +149,18 @@ Rough priority order to reach a usable end state:
 3. **Scheduler** — a mechanism to deliver messages to the agent "out of band"
    (cron-like jobs). Enables proactive briefs and reminders; the memory agent
    should be able to create/edit scheduled entries.
-4. **Finance agent** — add market/stock data sources, including the Polish (GPW)
-   market, beyond FX rates.
-5. **Polish** — implement the empty `get_current_date_and_time` tool, finish
-   migrating `print()` → `logger`, and add tests.
+4. **Deepen agents** — e.g. finance analysis beyond raw quotes, richer memory.
+
+Done in this pass (polish): implemented `get_current_date_and_time`, added Yahoo
+Finance stock/index quotes (incl. GPW) to `finance_agent`, migrated the remaining
+`print()` calls to `logger`, and added a `pytest` suite.
+
+**Chosen direction for the phone front-end:** *architecture first* — before
+committing to a channel (Messenger / iMessage / Telegram), decouple the core into a
+service with a clean input/output interface so any channel can plug in later. The
+current `Chatbot` REPL (`lib/chatbot.py`) is the seam to generalize: extract a
+transport-agnostic "handle one message → return one reply" entry point, then add
+channel adapters on top.
 
 ## Git / branch state
 All feature branches (`logger`, `smarts`, `financial-agent`, `weather-agent`,

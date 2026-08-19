@@ -51,7 +51,7 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     with open(DEVICES_PARAMS_PATH, "r", encoding="utf-8") as f:
         list_of_jsons = json.load(f)
 
-    print("Wczytuje preferencje użytkownika")
+    logger.info("Loading user preferences")
     with open(DEVICES_PREFERENCES_PATH, "r", encoding="utf-8") as f:
         preferences = json.load(f)
 
@@ -98,7 +98,7 @@ async def get_one_device_status(ctx: RunContextWrapper[Ctx], device: SmartDevice
         State of the given device
     """
 
-    print("Sprawdzam stan jednego urzadzenia")
+    logger.info("Checking status of a single device")
     state = await device.get_status()
 
     ctx.context.devices_states[device.get_name()] = state
@@ -155,7 +155,7 @@ async def turn_off_devices(ctx: RunContextWrapper[Ctx], devices: List[SmartDevic
     Output:
     This tool returns the new states of the affected devices
     """
-    print("Wyłączam urządzenia")
+    logger.info("Turning off devices")
 
     try:
         await asyncio.gather(*(dev.turn_off() for dev in devices))
@@ -186,7 +186,7 @@ async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device: SmartDevice,
         The mode that will be applied to the chosen device
     """
 
-    print(f"Zmieniam tryb na {new_mode.mode}")
+    logger.info(f"Changing lighting mode to {new_mode.mode}")
     await device.change_mode(new_mode)
 
 @tool_ownership("iot_operator")
@@ -213,7 +213,7 @@ async def change_color(ctx: RunContextWrapper[Ctx], device: SmartDevice, new_col
         This tool returns short information whether the attempt was successful
     """
 
-    print(f"Zmieniam kolor na {new_color.R} {new_color.G} {new_color.B}")
+    logger.info(f"Changing color to R={new_color.R} G={new_color.G} B={new_color.B}")
     task_status = await device.change_color(new_color)
     return task_status
 
@@ -239,7 +239,7 @@ async def change_light_temperature(ctx: RunContextWrapper, device: SmartDevice, 
     Output:
         This tool returns short information whether the attempt was successful
     """
-    print("Zmieniam temperature")
+    logger.info("Changing lighting temperature")
     task_status = await device.change_temperature(new_temp)
     return task_status
 
@@ -415,6 +415,74 @@ async def get_exchange_rate(ctx: RunContextWrapper[Ctx],
         "message" : f"{base_currency}/{foreign_currency} exchange rate is {exchange_rate}"
     }
 
+@tool_ownership("finance_agent")
+@function_tool
+async def get_stock_quote(ctx: RunContextWrapper[Ctx], symbol: str) -> dict:
+    """
+    Description:
+        This tool returns the latest market quote (current price, day OHLC, previous
+        close and volume) for a stock, ETF or index, using the free Yahoo Finance
+        data source. It covers the Polish stock market (GPW) as well as global markets.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    symbol: str
+        The Yahoo Finance ticker of the instrument.
+        - Polish (GPW) stocks: the ticker with a '.WA' suffix, e.g. 'PKO.WA',
+          'KGH.WA', 'CDR.WA', 'PKN.WA'.
+        - Non-Polish stocks: the plain ticker, e.g. 'AAPL', 'MSFT'.
+        - Indices: prefix with '^', e.g. '^GSPC' (S&P 500), '^WIG20' (WIG20).
+        The symbol is case-insensitive.
+
+    Output:
+        JSON object with the latest available price, day OHLC, previous close,
+        volume, currency and exchange, or an error message if the instrument
+        was not found.
+    """
+    symbol = symbol.strip().upper()
+    logging.info(f"Getting stock quote for {symbol}")
+
+    quote_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    headers = {"User-Agent": "Jarvis (personal assistant)"}
+    params = {"interval": "1d", "range": "1d"}
+
+    try:
+        response = requests.get(quote_url, headers=headers, params=params, timeout=10)
+        # Yahoo returns a JSON error body (with HTTP 404) for unknown symbols,
+        # so we parse the body before deciding it is a hard failure.
+        data = response.json()
+    except Exception as e:
+        logging.error(f"Couldnt get quote for {symbol}")
+        return {
+            "message": f"Couldnt get a quote for {symbol}",
+            "error": str(e),
+        }
+
+    chart = data.get("chart", {})
+    if chart.get("error") or not chart.get("result"):
+        return {
+            "error": f"Unknown or unsupported symbol '{symbol}'.",
+            "tip": "For GPW stocks add the '.WA' suffix (e.g. 'PKO.WA'). For indices prefix with '^' (e.g. '^WIG20').",
+        }
+
+    meta = chart["result"][0].get("meta", {})
+    quote_time = meta.get("regularMarketTime")
+
+    return {
+        "symbol": meta.get("symbol", symbol),
+        "price": meta.get("regularMarketPrice"),
+        "previous_close": meta.get("chartPreviousClose") or meta.get("previousClose"),
+        "day_high": meta.get("regularMarketDayHigh"),
+        "day_low": meta.get("regularMarketDayLow"),
+        "volume": meta.get("regularMarketVolume"),
+        "currency": meta.get("currency"),
+        "exchange": meta.get("exchangeName"),
+        "quote_time": datetime.fromtimestamp(quote_time).isoformat() if quote_time else None,
+        "source": "Yahoo Finance",
+    }
+
 # ------- weather agent -------
 
 @tool_ownership("weather_agent")
@@ -459,7 +527,18 @@ async def get_current_date_and_time(ctx: RunContextWrapper[Ctx]) -> dict:
         This tool is used to obtain today's date and current time. It is neccessary
         to use it before getting the weather forecasts otherwise agent will not be
         able to process user's request properly when it comes to dates and time.
+
+    Output:
+        JSON object with the current local date, time, weekday and ISO 8601 timestamp.
     """
+    now = datetime.now()
+    logger.info("Providing current date and time")
+    return {
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M:%S"),
+        "weekday": now.strftime("%A"),
+        "iso": now.isoformat(),
+    }
 
 @tool_ownership("weather_agent")
 @function_tool
