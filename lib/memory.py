@@ -28,6 +28,25 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def summarize(entries: list[dict], cap: int = SUMMARY_CAP) -> str:
+    """Compact, grouped, human/LLM-readable digest of memory entries for prompt injection.
+
+    Shared by both storage backends (JSON and Postgres)."""
+    entries = entries[:cap]
+    if not entries:
+        return ""
+    by_cat: dict[str, list[dict]] = {}
+    for e in entries:
+        by_cat.setdefault(e.get("category", "other"), []).append(e)
+    lines = []
+    for cat in sorted(by_cat):
+        lines.append(f"[{cat}]")
+        for e in by_cat[cat]:
+            tag = "" if e.get("source") == "user" else " (inferred)"
+            lines.append(f"  - {e.get('text', '')}{tag}")
+    return "\n".join(lines)
+
+
 class MemoryStore:
     def __init__(self, path: Path = MEMORY_PATH):
         self.path = Path(path)
@@ -63,20 +82,7 @@ class MemoryStore:
         return [e for e in self.all() if e.get("category") == category]
 
     def summary(self, cap: int = SUMMARY_CAP) -> str:
-        """Compact, grouped, human/LLM-readable digest for prompt injection."""
-        entries = self.all()[:cap]
-        if not entries:
-            return ""
-        by_cat: dict[str, list[dict]] = {}
-        for e in entries:
-            by_cat.setdefault(e.get("category", "other"), []).append(e)
-        lines = []
-        for cat in sorted(by_cat):
-            lines.append(f"[{cat}]")
-            for e in by_cat[cat]:
-                tag = "" if e.get("source") == "user" else " (inferred)"
-                lines.append(f"  - {e.get('text', '')}{tag}")
-        return "\n".join(lines)
+        return summarize(self.all(), cap)
 
     # -- writes ---------------------------------------------------------------
     def add(self, text: str, category: str = "preferences",
@@ -136,5 +142,53 @@ class MemoryStore:
         return False
 
 
-# module-wide singleton
-memory = MemoryStore()
+def _select_backend():
+    """Choose the memory backend at first use (after .env is loaded): Postgres when
+    DATABASE_URL is set, otherwise the on-disk JSON store."""
+    try:
+        from app.db import connection as dbconn
+        if dbconn.is_configured():
+            from app.db.schema import init_db
+            from app.db.memory_repo import PostgresMemoryStore
+            init_db()
+            logger.info("Memory store backend: Postgres")
+            return PostgresMemoryStore()
+    except Exception as e:  # noqa: BLE001 - never let storage selection crash the app
+        logger.error(f"Postgres memory backend unavailable ({e}); falling back to JSON file")
+    logger.info("Memory store backend: JSON file")
+    return MemoryStore()
+
+
+class _MemoryProxy:
+    """Delegates to the backend chosen lazily on first use, so DATABASE_URL from
+    .env (loaded after import) is respected. Keeps the ``memory`` singleton's API."""
+
+    def __init__(self):
+        self._impl = None
+
+    def _store(self):
+        if self._impl is None:
+            self._impl = _select_backend()
+        return self._impl
+
+    def all(self) -> list[dict]:
+        return self._store().all()
+
+    def by_category(self, category: str) -> list[dict]:
+        return self._store().by_category(category)
+
+    def summary(self, cap: int = SUMMARY_CAP) -> str:
+        return self._store().summary(cap)
+
+    def add(self, *args, **kwargs) -> dict:
+        return self._store().add(*args, **kwargs)
+
+    def update(self, *args, **kwargs):
+        return self._store().update(*args, **kwargs)
+
+    def delete(self, *args, **kwargs) -> bool:
+        return self._store().delete(*args, **kwargs)
+
+
+# module-wide singleton (backend chosen on first use)
+memory = _MemoryProxy()

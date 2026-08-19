@@ -73,6 +73,12 @@ def test_delete_removes_entry(tmp_path):
     assert s.delete(e["id"]) is False
 
 
+def test_backend_selection_defaults_to_json_without_database_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    from lib.memory import _select_backend, MemoryStore
+    assert isinstance(_select_backend(), MemoryStore)
+
+
 def test_summary_groups_by_category_and_tags_inferred(tmp_path):
     s = _store(tmp_path)
     s.add("Prefers transit", category="preferences", source="user")

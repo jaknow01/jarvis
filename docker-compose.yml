@@ -8,11 +8,37 @@ services:
       - ./lib:/app/lib
     ports:
       - "8002:8002"
+    environment:
+      # inside the compose network Postgres is reachable at host "postgres"
+      DATABASE_URL: postgresql://jarvis:jarvis@postgres:5432/jarvis
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7
     container_name: redis
     ports:
       - "6379:6379"
+
+  postgres:
+    image: postgres:16
+    container_name: jarvis_postgres
+    environment:
+      POSTGRES_USER: jarvis
+      POSTGRES_PASSWORD: jarvis
+      POSTGRES_DB: jarvis
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jarvis -d jarvis"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

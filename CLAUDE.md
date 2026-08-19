@@ -41,6 +41,8 @@ lib/smart_device.py    Tuya smart-bulb model & control (pydantic + tinytuya)
 lib/cache.py           Redis-backed cache + Ctx (shared run context object)
 lib/run_config.py      Builds the Agents SDK RunConfig (OpenAI Responses model)
 lib/logger.py          Root logger config + custom CONVERSATION log level
+lib/memory.py          Long-term memory store (JSON or Postgres backend; see app/db)
+app/db/                Postgres access layer: connection, schema, repos, migration
 data/                  JSON "databases" (devices, preferences, maps memory, memory)
 logs/                  Per-run log files
 ```
@@ -108,9 +110,10 @@ URL in `lib/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
 
 ### Environment variables (`.env`)
 `OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
-`OPENWEATHER_API_KEY`, `TAVILY_API_KEY`. (`memory_operator` and any Messenger/
-Telegram integration will add more.) Note: the Yahoo Finance quote source and the
-Frankfurter FX source are keyless.
+`OPENWEATHER_API_KEY`, `TAVILY_API_KEY`, `DATABASE_URL` (Postgres; when unset the
+memory store falls back to the on-disk JSON file). (Any Messenger/Telegram
+integration will add more.) Note: the Yahoo Finance quote source and the Frankfurter
+FX source are keyless.
 
 ### Testing
 `pytest` (dev dependency) with tests under `tests/`. Run `poetry run pytest`. Tests
@@ -131,7 +134,11 @@ grow.
   (25) via `logger.conversation(...)`. Legacy `print()` calls still linger in
   `lib/tools.py` / `lib/smart_device.py` — prefer `logger` for new code and
   migrate prints when you touch them.
-- **Data "DBs" are JSON files** under `data/` (gitignored except `.gitkeep`).
+- **Storage** — data lives in **Postgres** (docker-compose service) with the on-disk
+  JSON files under `data/` kept as the migration source / easy-to-eyeball copy. The
+  DB layer is isolated in `app/db/`; the `memory_operator` writes to Postgres when
+  `DATABASE_URL` is set (else the JSON file). Migrate with `python -m app.db.migrate`.
+  See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.
 - **`.venv/` and `venv/`** both exist in the working tree but are gitignored; the
   canonical dependency source of truth is `pyproject.toml` + `poetry.lock`.
