@@ -6,6 +6,7 @@ from lib.tools import (
     get_exchange_rate)
 from lib.llm import LLM_BY_AGENT
 from lib.tools import TOOLS_BY_AGENT
+from lib.memory import memory
 from agents import Agent
 import logging
 
@@ -25,18 +26,30 @@ def create_coordinator_agent() -> Agent:
 
     # create_subagents() - trzeba stworzyc pomocnikow
 
+    instructions = (
+        "You are a coordinator of a multiagent personal assistant network called Jarvis.\
+        Your main goal is to satisfy user's demands and give him appropriate answers.\
+        In your possesion there are numerous specialized subagents which you can call as your tool\
+        Each agent specializes in a narrow field that is of interest to the user.\
+        These agents are equipped with various API connectors that allow them to obtain relevant, real-time data or perform certain actions\
+        You should always call appropriate agent instead of relying on your built in knowledge.\
+        Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
+        You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
+        If you encounter any bugs or error messages in your tool calls you should inform the user immediately. Cleanly and plainly inform him what the issue is."
+        "\n\nWhen the user states a durable preference or fact about themselves, store it via the "
+        "memory_operator so future conversations stay personalized. Consult the memory_operator when "
+        "you need details about the user's saved preferences."
+    )
+    profile = memory.summary()
+    if profile:
+        instructions += (
+            "\n\nWhat you already know about the user (long-term memory — use it to personalize, "
+            "and prefer it over asking the user again):\n" + profile
+        )
+
     agent = Agent(
         name = name,
-        instructions = ("You are a coordinator of a multiagent personal assistant network called Jarvis.\
-                        Your main goal is to satisfy user's demands and give him appropriate answers.\
-                        In your possesion there are numerous specialized subagents which you can call as your tool\
-                        Each agent specializes in a narrow field that is of interest to the user.\
-                        These agents are equipped with various API connectors that allow them to obtain relevant, real-time data or perform certain actions\
-                        You should always call appropriate agent instead of relying on your built in knowledge.\
-                        Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
-                        You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
-                        If you encounter any bugs or error messages in your tool calls you should inform the user immediately. Cleanly and plainly inform him what the issue is."
-                        ),
+        instructions = instructions,
         tools = [
             create_iot_agent().as_tool(
                 tool_name="iot_operator",
@@ -57,6 +70,10 @@ def create_coordinator_agent() -> Agent:
             create_news_agent().as_tool(
                 tool_name="news_agent",
                 tool_description="Summarizes current world and financial-market news."
+            ),
+            create_memory_agent().as_tool(
+                tool_name="memory_operator",
+                tool_description="Stores, retrieves and updates the user's long-term preferences and facts."
             )
         ],
         model = model_settings["model_name"],
@@ -159,10 +176,15 @@ def create_memory_agent():
     agent = Agent(
         name=name,
         instructions = (
-            "You are responsible for managing the program's long term memory.\
-            You can modify existing data, set reminders etc."
+            "You manage the user's long-term memory: durable preferences, facts, habits, interests and routines.\
+            Use get_memory to look things up, save_memory to store a new durable preference or fact\
+            (set source='user' when the user stated it explicitly, 'inferred' when you concluded it),\
+            update_memory to correct an existing entry, and delete_memory to remove one.\
+            Store concise, self-contained statements in natural language. Suggested categories:\
+            preferences, facts, habits, interests, routines. Never store transient or one-off details,\
+            secrets, or credentials."
         ),
-        tools = [],
+        tools = TOOLS_BY_AGENT[name],
         model=model_settings["model_name"],
         model_settings=model_settings["settings"]
     )

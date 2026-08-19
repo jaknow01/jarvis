@@ -85,7 +85,7 @@ It also holds the Redis `Cache`.
 | `weather_agent` | Current weather + forecast | OpenWeather (current) + Open-Meteo (forecast) + date/time | Working |
 | `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
-| `memory_operator` | Long-term memory & reminders | none yet | **Stub** — defined but has no tools and is not wired into the coordinator |
+| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn. Reminders/scheduler deferred. See `docs/MEMORY.md` |
 
 ## Running it
 
@@ -143,12 +143,13 @@ Rough priority order to reach a usable end state:
 1. **Messaging front-end** (Messenger / iMessage / Telegram) replacing the REPL —
    likely a long-running service that receives messages over HTTP/webhook and
    feeds them into the same coordinator run loop.
-2. **Memory agent** — decide storage layout (JSON under `data/` is fine to start),
-   implement tools to read/write preferences, and inject relevant memory into
-   agent context.
+2. ~~**Memory agent**~~ — **done (v1):** structured JSON store (`lib/memory.py`),
+   save/get/update/delete tools, wired into the coordinator with a profile injected
+   into its prompt each turn. See `docs/MEMORY.md`. Next: implicit habit learning,
+   and migrating scattered assumptions (e.g. the maps "fast walker") into it.
 3. **Scheduler** — a mechanism to deliver messages to the agent "out of band"
-   (cron-like jobs). Enables proactive briefs and reminders; the memory agent
-   should be able to create/edit scheduled entries.
+   (cron-like jobs). Enables proactive briefs and reminders; the `memory_operator`
+   is the intended owner of creating/editing scheduled entries.
 4. **Deepen agents** — e.g. finance analysis beyond raw quotes, richer memory.
 
 Done in this pass (polish): implemented `get_current_date_and_time`, added Yahoo
