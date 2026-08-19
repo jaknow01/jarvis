@@ -166,3 +166,7 @@ channel adapters on top.
 All feature branches (`logger`, `smarts`, `financial-agent`, `weather-agent`,
 `news-agent`, `openai-agents-sdk-swith`) have been **merged into `main`**. `main`
 is the single source of truth going forward; create new feature branches off it.
+
+### Commit message convention
+**Do NOT append a `Co-Authored-By: Claude ...` trailer** (or any AI co-author
+trailer) to commit messages in this repo. Keep commit messages clean without it.
