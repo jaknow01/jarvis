@@ -24,7 +24,7 @@ def open_ai_llm() -> dict:
 @llm_usage(["news_agent"])
 def open_ai_reasoning_llm() -> dict:
     model_name = "gpt-5-mini"
-    reasoning = {"effort" : "medium"}
+    reasoning = {"effort" : "low"}
 
     settings = ModelSettings(
         parallel_tool_calls=True,

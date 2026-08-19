@@ -25,6 +25,7 @@ dependencies = [
     "requests-cache (>=1.2.1,<2.0.0)",
     "retry-requests (>=2.0.0,<3.0.0)",
     "pycountry (>=24.6.1,<25.0.0)",
+    "tavily (>=1.1.0,<2.0.0)",
 ]
 
 [tool.poetry]

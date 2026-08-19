@@ -16,6 +16,7 @@ class Chatbot():
 
         while(True):
             text = input()
+            logger.conversation(f"[USER] {text}")
             run_config = Config.create_config()
             coordinator = create_coordinator_agent()
 
