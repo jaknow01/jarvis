@@ -30,3 +30,4 @@ class Ctx():
         self.devices_states: dict[str, dict] = {}
         self.devices: dict[str, SmartDevice]
         self.known_adresses: dict = {}
+        self.time_date_now: dict = {}

@@ -533,12 +533,15 @@ async def get_current_date_and_time(ctx: RunContextWrapper[Ctx]) -> dict:
     """
     now = datetime.now()
     logger.info("Providing current date and time")
-    return {
+    now_params = {
         "date": now.strftime("%Y-%m-%d"),
         "time": now.strftime("%H:%M:%S"),
         "weekday": now.strftime("%A"),
         "iso": now.isoformat(),
     }
+    # Stored on the context so weather_forecast can enforce that this ran first.
+    ctx.context.time_date_now = now_params
+    return now_params
 
 @tool_ownership("weather_agent")
 @function_tool
@@ -575,6 +578,12 @@ async def weather_forecast(ctx: RunContextWrapper[Ctx],
     Output:
         JSON object with the weather forecast made according to specifications
     """
+    if not ctx.context.time_date_now:
+        return {
+            "Message": "You don't know the current date, weekday and time - the forecast could be inaccurate.",
+            "Tip": "Run the get_current_date_and_time tool first, then call this tool again.",
+        }
+
     multiple_results = False
     geolocation_url = f"https://nominatim.openstreetmap.org/search?q={city}&format=json"
 
