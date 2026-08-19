@@ -1,0 +1,28 @@
+Discovery scan (~12s)…
+Testing 2 device(s) in parallel. ~20.3 min (idle=300.0s x cycles=2 x 2 arms).
+
+========================================================================
+WARM vs COLD — read-only reliability after idle
+========================================================================
+
+Łóżko
+  local-connection slots: 2nd local connection ACCEPTED (multiple local clients allowed)
+  COLD  first-after-idle 2/2 ok (med 95ms)   rest 6/6 ok (med 209ms)
+  WARM  first-after-idle 2/2 ok (med 50ms)   rest 6/6 ok (med 102ms)
+
+Pianino
+  local-connection slots: 2nd local connection ACCEPTED (multiple local clients allowed)
+  COLD  first-after-idle 2/2 ok (med 312ms)   rest 6/6 ok (med 300ms)
+  WARM  first-after-idle 2/2 ok (med 45ms)   rest 6/6 ok (med 106ms)
+
+========================================================================
+READ THIS: interpretation
+========================================================================
+- If WARM 'first-after-idle' is markedly better than COLD, keeping devices
+  warm (persistent conn + heartbeat) fixes the cold-start flakiness.
+- If both arms are ~equal and healthy, the devices did not go cold during
+  this window — rerun with a longer --idle to provoke it.
+- 'single local slot' means a persistent agent connection would block a
+  SECOND local client. The Tuya app normally uses the cloud path (not 6668),
+  so it is unaffected — but a good-citizen design should still hold the local
+  socket lightly and release it when idle.

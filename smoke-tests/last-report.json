@@ -1,0 +1,146 @@
+[
+  {
+    "name": "Telewizor",
+    "ip": "192.168.0.131",
+    "present": true,
+    "ip_drift": null,
+    "tcp": {
+      "ok": 5,
+      "total": 5,
+      "errors": []
+    },
+    "status_fresh": {
+      "ok": 5,
+      "total": 5,
+      "p50_ms": 28.413057327270508,
+      "p95_ms": 37.82618045806885,
+      "errors": []
+    },
+    "status_persistent": {
+      "ok": 5,
+      "total": 5
+    },
+    "write_notes": [],
+    "healthy": true
+  },
+  {
+    "name": "Łóżko",
+    "ip": "192.168.0.136",
+    "present": true,
+    "ip_drift": null,
+    "tcp": {
+      "ok": 5,
+      "total": 5,
+      "errors": []
+    },
+    "status_fresh": {
+      "ok": 5,
+      "total": 5,
+      "p50_ms": 210.53171157836914,
+      "p95_ms": 224.96793270111084,
+      "errors": []
+    },
+    "status_persistent": {
+      "ok": 5,
+      "total": 5
+    },
+    "write_notes": [],
+    "healthy": true
+  },
+  {
+    "name": "Kinkiet prawy",
+    "ip": "192.168.0.135",
+    "present": true,
+    "ip_drift": null,
+    "tcp": {
+      "ok": 5,
+      "total": 5,
+      "errors": []
+    },
+    "status_fresh": {
+      "ok": 5,
+      "total": 5,
+      "p50_ms": 24.85799789428711,
+      "p95_ms": 31.625199317932132,
+      "errors": []
+    },
+    "status_persistent": {
+      "ok": 5,
+      "total": 5
+    },
+    "write_notes": [],
+    "healthy": true
+  },
+  {
+    "name": "Kinkiet lewy",
+    "ip": "192.168.0.134",
+    "present": true,
+    "ip_drift": null,
+    "tcp": {
+      "ok": 5,
+      "total": 5,
+      "errors": []
+    },
+    "status_fresh": {
+      "ok": 5,
+      "total": 5,
+      "p50_ms": 23.27895164489746,
+      "p95_ms": 30.870532989501953,
+      "errors": []
+    },
+    "status_persistent": {
+      "ok": 5,
+      "total": 5
+    },
+    "write_notes": [],
+    "healthy": true
+  },
+  {
+    "name": "Lampa stojąca",
+    "ip": "192.168.0.133",
+    "present": false,
+    "ip_drift": null,
+    "tcp": {
+      "ok": 0,
+      "total": 0,
+      "errors": []
+    },
+    "status_fresh": {
+      "ok": 0,
+      "total": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "errors": []
+    },
+    "status_persistent": {
+      "ok": 0,
+      "total": 0
+    },
+    "write_notes": [],
+    "healthy": false
+  },
+  {
+    "name": "Pianino",
+    "ip": "192.168.0.132",
+    "present": true,
+    "ip_drift": null,
+    "tcp": {
+      "ok": 5,
+      "total": 5,
+      "errors": []
+    },
+    "status_fresh": {
+      "ok": 5,
+      "total": 5,
+      "p50_ms": 217.32211112976074,
+      "p95_ms": 328.44579219818115,
+      "errors": []
+    },
+    "status_persistent": {
+      "ok": 5,
+      "total": 5
+    },
+    "write_notes": [],
+    "healthy": true
+  }
+]

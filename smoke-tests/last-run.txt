@@ -1,0 +1,50 @@
+Loaded 6 device(s) from /Users/kuba/jarvis/data/smart_device_data/smart_devices.json
+Running LAN discovery scan (~12s, read-only)…
+Discovered 5 Tuya device(s) online.
+
+========================================================================
+SMART-LIGHTING STABILITY PROBE
+========================================================================
+iterations/device=5  socket_timeout=2.0s  retries=1
+
+------------------------------------------------------------------------
+Telewizor  (192.168.0.131)
+  TCP :6668   5/5 open
+  status(fresh)     5/5 ok   p50=28ms p95=38ms max=35ms
+  status(persist)   5/5 ok   p50=21ms p95=54ms max=43ms
+
+------------------------------------------------------------------------
+Łóżko  (192.168.0.136)
+  TCP :6668   5/5 open
+  status(fresh)     5/5 ok   p50=211ms p95=225ms max=224ms
+  status(persist)   5/5 ok   p50=105ms p95=252ms max=195ms
+
+------------------------------------------------------------------------
+Kinkiet prawy  (192.168.0.135)
+  TCP :6668   5/5 open
+  status(fresh)     5/5 ok   p50=25ms p95=32ms max=30ms
+  status(persist)   5/5 ok   p50=18ms p95=22ms max=21ms
+
+------------------------------------------------------------------------
+Kinkiet lewy  (192.168.0.134)
+  TCP :6668   5/5 open
+  status(fresh)     5/5 ok   p50=23ms p95=31ms max=29ms
+  status(persist)   5/5 ok   p50=15ms p95=24ms max=21ms
+
+------------------------------------------------------------------------
+Lampa stojąca  (192.168.0.133)
+  OFFLINE — not seen in LAN discovery scan (powered off or off-network)
+
+------------------------------------------------------------------------
+Pianino  (192.168.0.132)
+  TCP :6668   5/5 open
+  status(fresh)     5/5 ok   p50=217ms p95=328ms max=321ms
+  status(persist)   5/5 ok   p50=108ms p95=259ms max=198ms
+
+========================================================================
+SUMMARY
+========================================================================
+  online: 5/6   healthy: 5   flaky: 0   offline: 1
+  OFFLINE : Lampa stojąca
+
+Wrote JSON report to smoke-tests/last-report.json
