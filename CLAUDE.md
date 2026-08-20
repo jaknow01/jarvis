@@ -115,6 +115,12 @@ memory store falls back to the on-disk JSON file). (Any Messenger/Telegram
 integration will add more.) Note: the Yahoo Finance quote source and the Frankfurter
 FX source are keyless.
 
+**Per-subagent toggles:** each subagent is enabled by default and can be hidden from
+the coordinator by setting `AGENT_<NAME>_ENABLED` to a falsy value (0/false/no/off) —
+e.g. `AGENT_NEWS_AGENT_ENABLED=false`. A disabled agent is simply not registered as a
+coordinator tool (`agent_enabled()` in `lib/agents.py`, read at coordinator-build
+time). Disabling `memory_operator` also drops the memory profile injection.
+
 ### Testing
 `pytest` (dev dependency) with tests under `tests/`. Run `poetry run pytest`. Tests
 cover pure helpers and the decorator registries only — no network or API keys

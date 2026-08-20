@@ -9,6 +9,7 @@ from lib.tools import TOOLS_BY_AGENT
 from lib.memory import memory
 from agents import Agent
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 AGENTS: dict = {}
@@ -18,6 +19,15 @@ def agents_decorator(name: str):
         AGENTS[name] = func
         return func
     return wrapper
+
+def agent_enabled(name: str) -> bool:
+    """Whether a subagent is exposed to the coordinator. Controlled by the env var
+    AGENT_<NAME>_ENABLED — enabled by default; set to a falsy value (0/false/no/off)
+    to hide it as a coordinator tool. Read at coordinator-build time."""
+    raw = os.getenv(f"AGENT_{name.upper()}_ENABLED")
+    if raw is None or raw.strip() == "":
+        return True
+    return raw.strip().lower() not in ("0", "false", "no", "off")
 
 @agents_decorator(name="coordinator")
 def create_coordinator_agent() -> Agent:
@@ -36,51 +46,48 @@ def create_coordinator_agent() -> Agent:
         Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
         You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
         If you encounter any bugs or error messages in your tool calls you should inform the user immediately. Cleanly and plainly inform him what the issue is."
-        "\n\nWhen the user states a durable preference or fact about themselves, store it via the "
-        "memory_operator so future conversations stay personalized. Consult the memory_operator when "
-        "you need details about the user's saved preferences."
     )
-    profile = memory.summary()
-    if profile:
+
+    # Each subagent can be switched off via AGENT_<NAME>_ENABLED; a disabled agent is
+    # simply not exposed to the coordinator as a tool.
+    subagents = [
+        ("iot_operator", create_iot_agent, "Controls smart devices (lighting) in a houshold."),
+        ("weather_agent", create_weather_agent, "Checks current weather and weather forecast at a given location"),
+        ("finance_agent", create_finance_agent, "Retrieves and analyzes financial data."),
+        ("maps_agent", create_maps_agent, "Controls access to maps and navigation. Can calculate routes."),
+        ("news_agent", create_news_agent, "Summarizes current world and financial-market news."),
+        ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
+    ]
+
+    if agent_enabled("memory_operator"):
         instructions += (
-            "\n\nWhat you already know about the user (long-term memory — use it to personalize, "
-            "and prefer it over asking the user again):\n" + profile
+            "\n\nWhen the user states a durable preference or fact about themselves, store it via the "
+            "memory_operator so future conversations stay personalized. Consult the memory_operator when "
+            "you need details about the user's saved preferences."
         )
+        profile = memory.summary()
+        if profile:
+            instructions += (
+                "\n\nWhat you already know about the user (long-term memory — use it to personalize, "
+                "and prefer it over asking the user again):\n" + profile
+            )
+
+    tools = []
+    for sub_name, factory, description in subagents:
+        if agent_enabled(sub_name):
+            tools.append(factory().as_tool(tool_name=sub_name, tool_description=description))
+        else:
+            logger.info(f"Subagent '{sub_name}' disabled via env; not exposed to coordinator")
 
     agent = Agent(
         name = name,
         instructions = instructions,
-        tools = [
-            create_iot_agent().as_tool(
-                tool_name="iot_operator",
-                tool_description="Controls smart devices (lighting) in a houshold."
-            ),
-            create_weather_agent().as_tool(
-                tool_name="weather_agent",
-                tool_description="Checks current weather and weather forecast at a given location"
-            ),
-            create_finance_agent().as_tool(
-                tool_name="finance_agent",
-                tool_description="Retrieves and analyzes financial data."
-            ),
-            create_maps_agent().as_tool(
-                tool_name="maps_agent",
-                tool_description="Controls access to maps and navigation. Can calculate routes."
-            ),
-            create_news_agent().as_tool(
-                tool_name="news_agent",
-                tool_description="Summarizes current world and financial-market news."
-            ),
-            create_memory_agent().as_tool(
-                tool_name="memory_operator",
-                tool_description="Stores, retrieves and updates the user's long-term preferences and facts."
-            )
-        ],
+        tools = tools,
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
     )
-    logger.info("Coordinator initiated")
-    
+    logger.info(f"Coordinator initiated with {len(tools)} subagent tool(s)")
+
     return agent
 
 @agents_decorator(name="iot_operator")
