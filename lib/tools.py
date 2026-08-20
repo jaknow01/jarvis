@@ -285,22 +285,66 @@ async def change_light_temperature(ctx: RunContextWrapper, device_name: str, new
 
 # ------- maps agent -------
 
+# The model works with place ALIASES only (Home, work, University, ...). The mapping
+# of an alias to its real street address is resolved on the server side inside
+# get_route_details, so the user's actual home/work addresses are never handed to the
+# LLM as a browsable address book.
+
+def _load_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
+    with open(MAPS_PARAMS_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    ctx.context.known_adresses = data
+    return data
+
+
+def _known_entries(ctx: RunContextWrapper[Ctx]) -> list:
+    data = getattr(ctx.context, "known_adresses", None) or {}
+    if not data:
+        try:
+            data = _load_maps_memory(ctx)
+        except Exception as e:
+            logging.error(f"Could not load maps memory: {e}")
+            return []
+    # tolerate the historical key spelling in the stored file
+    for key in ("known_adressess", "known_addresses", "known_adresses"):
+        if isinstance(data.get(key), list):
+            return data[key]
+    for value in data.values():
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _resolve_place(ctx: RunContextWrapper[Ctx], name: str):
+    """Map a place name to (real_address, matched_alias). A known alias resolves to
+    its stored address (server-side); an unknown name passes through unchanged."""
+    if not name:
+        return name, None
+    target = name.strip().lower()
+    for entry in _known_entries(ctx):
+        if target in [a.lower() for a in entry.get("aliases", [])]:
+            return entry.get("address", name), name
+    return name, None
+
+
 @tool_ownership("maps_agent")
 @function_tool
 async def get_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
     """
     Description:
-    This tool is used to download necessary maps data such as favourite places,
-    known routes and other information which will facilitate understanding user's
-    query in natural language.
+    This tool lists the user's known/favourite places by their ALIAS (e.g. 'Home',
+    'work', 'University'). Use these aliases as origin/destination in get_route_details
+    — the real street address behind an alias is resolved automatically and is not
+    needed (and not shown) here.
     """
-    logging.info("Checking known adresses")
-    with open(MAPS_PARAMS_PATH, "r", encoding="utf-8") as f:
-        list_of_jsons = json.load(f)
-    
-    ctx.context.known_adresses = list_of_jsons
-
-    return list_of_jsons
+    logging.info("Listing known place aliases")
+    aliases = []
+    for entry in _known_entries(ctx):
+        aliases.extend(entry.get("aliases", []))
+    return {
+        "known_place_aliases": aliases,
+        "note": "Refer to these places by alias; their actual addresses are resolved automatically.",
+    }
 
 @tool_ownership("maps_agent")
 @function_tool
@@ -324,12 +368,14 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
         Context in which the tool operates
     
     origin: str
-        The starting point of the journey. This can be a specific adress, specific bus/metro/train stop
-        ,a known landmark or a point from navigation memory.
+        The starting point of the journey. This can be an alias of a known place
+        (from get_maps_memory, e.g. 'Home'), a specific bus/metro/train stop, or a
+        landmark. Known aliases are resolved to their real address automatically.
 
     destination: str
-        The end of the journey. This can be a specific adress, specific bus/metro/train stop
-        ,a known landmark or a point from navigation memory.
+        The end of the journey. This can be an alias of a known place (from
+        get_maps_memory, e.g. 'work'), a specific bus/metro/train stop, or a landmark.
+        Known aliases are resolved to their real address automatically.
 
     transport_mode: Literal["driving", "walking", "bicycling", "transit"] = 'transit'
         User's preffered mode of communication such as 'car', 'transit' etc.
@@ -365,12 +411,17 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
     if transport_mode != "transit" and transit_mode is not None:
         transit_mode = None
 
+    # Resolve known-place aliases to real addresses server-side; keep the alias so we
+    # can relabel the endpoints in the response and avoid returning the address.
+    origin_address, origin_alias = _resolve_place(ctx, origin)
+    destination_address, destination_alias = _resolve_place(ctx, destination)
+
     logging.info("Starting route planning")
 
     try:
         directions_result = gmaps_client.directions(
-            origin=origin,
-            destination=destination,
+            origin=origin_address,
+            destination=destination_address,
             mode=transport_mode,
             transit_mode=transit_mode,
             departure_time=departure_time,
@@ -384,6 +435,13 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
             "Message" : "Error while getting routes from Google",
             "Error": e
         }
+
+    # Relabel endpoints back to the alias so the user's real addresses are not exposed.
+    for leg in result:
+        if origin_alias:
+            leg["start_address"] = origin_alias
+        if destination_alias:
+            leg["end_address"] = destination_alias
 
     return result
                      
