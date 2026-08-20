@@ -11,17 +11,40 @@ services:
     environment:
       # inside the compose network Postgres is reachable at host "postgres"
       DATABASE_URL: postgresql://jarvis:jarvis@postgres:5432/jarvis
+      # inside the compose network the MLflow server is reachable at host "mlflow"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT: jarvis
     depends_on:
       redis:
         condition: service_started
       postgres:
         condition: service_healthy
+      mlflow:
+        condition: service_started
 
   redis:
     image: redis:7
     container_name: redis
     ports:
       - "6379:6379"
+
+  mlflow:
+    # MLflow tracking server + UI. Captures OpenAI Agents SDK traces from the app.
+    # Open the UI at http://localhost:5001 -> "Traces" tab.
+    # Host port is 5001 (not 5000) to avoid the macOS AirPlay/ControlCenter
+    # conflict on :5000; inside the compose network the app still uses port 5000.
+    image: ghcr.io/mlflow/mlflow:v3.15.1
+    container_name: jarvis_mlflow
+    command: >-
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/store/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+    ports:
+      - "5001:5000"
+    volumes:
+      - mlflow_data:/mlflow
 
   postgres:
     image: postgres:16
@@ -42,3 +65,4 @@ services:
 
 volumes:
   pgdata:
+  mlflow_data:

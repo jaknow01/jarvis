@@ -42,6 +42,7 @@ lib/cache.py           Redis-backed cache + Ctx (shared run context object)
 lib/run_config.py      Builds the Agents SDK RunConfig (OpenAI Responses model)
 lib/logger.py          Root logger config + custom CONVERSATION log level
 lib/memory.py          Long-term memory store (JSON or Postgres backend; see app/db)
+lib/tracing.py         MLflow agent tracing setup (opt-in via MLFLOW_TRACKING_URI)
 app/db/                Postgres access layer: connection, schema, repos, migration
 data/                  JSON "databases" (devices, preferences, maps memory, memory)
 logs/                  Per-run log files
@@ -111,9 +112,22 @@ URL in `lib/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
 ### Environment variables (`.env`)
 `OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
 `OPENWEATHER_API_KEY`, `TAVILY_API_KEY`, `DATABASE_URL` (Postgres; when unset the
-memory store falls back to the on-disk JSON file). (Any Messenger/Telegram
-integration will add more.) Note: the Yahoo Finance quote source and the Frankfurter
-FX source are keyless.
+memory store falls back to the on-disk JSON file), `TRACING_ENABLED` +
+`MLFLOW_TRACKING_URI` + `MLFLOW_EXPERIMENT` (agent tracing; when the URI is unset or
+`TRACING_ENABLED` is falsy, tracing is a no-op). (Any
+Messenger/Telegram integration will add more.) Note: the Yahoo Finance quote source
+and the Frankfurter FX source are keyless.
+
+**Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
+auto-tracing for the OpenAI Agents SDK (`lib/tracing.py`, called once from
+`app/main.py`), capturing each coordinator→sub-agent→tool run as a hierarchical
+trace. The docker-compose `mlflow` service runs the tracking server + UI (open
+http://localhost:5001 → "Traces"; host port 5001 avoids the macOS :5000 AirPlay
+conflict). The app uses the lightweight `mlflow-tracing` client (HTTP → server, no
+local store) on purpose, to avoid churning the lockfile. `TRACING_ENABLED` (same
+falsy-parsing as `agent_enabled()`) is a master kill-switch that disables tracing
+even with a URI set. Tracing is out-of-band and failures are swallowed, so it never
+affects agent behavior. See `docs/TRACING.md`.
 
 **Per-subagent toggles:** each subagent is enabled by default and can be hidden from
 the coordinator by setting `AGENT_<NAME>_ENABLED` to a falsy value (0/false/no/off) —
