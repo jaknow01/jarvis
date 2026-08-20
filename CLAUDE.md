@@ -140,6 +140,11 @@ grow.
   (25) via `logger.conversation(...)`. Legacy `print()` calls still linger in
   `lib/tools.py` / `lib/smart_device.py` — prefer `logger` for new code and
   migrate prints when you touch them.
+- **Device secrets stay server-side.** The model refers to smart devices only by
+  **name**; ip / local_key / dev_id never reach the LLM (`describe_as_json()` returns
+  only name/room/zones, and the iot tools take device names and resolve them to real
+  devices via `_resolve_devices` in `lib/tools.py`). Don't reintroduce `SmartDevice`
+  objects as tool parameters.
 - **Storage** — data lives in **Postgres** (docker-compose service) with the on-disk
   JSON files under `data/` kept as the migration source / easy-to-eyeball copy. The
   DB layer is isolated in `app/db/`; the `memory_operator` writes to Postgres when

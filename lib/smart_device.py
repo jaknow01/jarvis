@@ -211,7 +211,9 @@ class SmartDevice(BaseModel):
     # helpers / (de)serialization
     # ------------------------------------------------------------------ #
     def describe_as_json(self) -> dict:
-        return self.model_dump(exclude={"state"})
+        # Only non-sensitive fields are exposed to the model. ip / local_key / dev_id
+        # stay server-side (used to open connections), never returned to the LLM.
+        return self.model_dump(include={"name", "room", "zones"})
 
     def get_name(self) -> str:
         return self.name
