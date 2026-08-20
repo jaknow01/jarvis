@@ -26,3 +26,9 @@ def test_every_agent_has_a_model_mapping():
     for agent in tools.TOOLS_BY_AGENT:
         assert agent in llm.LLM_BY_AGENT, f"{agent} has no model mapping in LLM_BY_AGENT"
     assert "coordinator" in llm.LLM_BY_AGENT
+
+
+def test_composer_has_a_model_mapping():
+    # The composer is a tool-less handoff target, so it won't appear in TOOLS_BY_AGENT;
+    # it still needs a model mapping to be constructible.
+    assert "composer" in llm.LLM_BY_AGENT

@@ -13,7 +13,7 @@ def llm_usage(agent_names: list[str]):
 
 
 
-@llm_usage(["coordinator", "iot_operator", "maps_agent", "memory_operator" , "finance_agent" , "weather_agent"])
+@llm_usage(["coordinator", "composer", "iot_operator", "maps_agent", "memory_operator" , "finance_agent" , "weather_agent"])
 def open_ai_llm() -> dict:
     settings = ModelSettings(parallel_tool_calls=True)
     return {

@@ -7,6 +7,7 @@ from lib.tools import (
 from lib.llm import LLM_BY_AGENT
 from lib.tools import TOOLS_BY_AGENT
 from lib.memory import memory
+from lib.context import environment_preamble
 from agents import Agent
 import logging
 import os
@@ -16,8 +17,17 @@ AGENTS: dict = {}
 
 def agents_decorator(name: str):
     def wrapper(func):
-        AGENTS[name] = func
-        return func
+        def build(*args, **kwargs):
+            agent = func(*args, **kwargs)
+            # Context provider: prepend the shared environment block (date/time, timezone,
+            # currency, locale) to every agent's instructions at build time, so temporal
+            # and locale awareness reaches all agents — not just the one owning the
+            # date/time tool. Callables-as-instructions are left untouched.
+            if isinstance(agent.instructions, str):
+                agent.instructions = environment_preamble() + agent.instructions
+            return agent
+        AGENTS[name] = build
+        return build
     return wrapper
 
 def agent_enabled(name: str) -> bool:
@@ -38,14 +48,18 @@ def create_coordinator_agent() -> Agent:
 
     instructions = (
         "You are a coordinator of a multiagent personal assistant network called Jarvis.\
-        Your main goal is to satisfy user's demands and give him appropriate answers.\
+        Your job is to gather the data needed to satisfy the user's request by delegating to specialized subagents.\
         In your possesion there are numerous specialized subagents which you can call as your tool\
         Each agent specializes in a narrow field that is of interest to the user.\
         These agents are equipped with various API connectors that allow them to obtain relevant, real-time data or perform certain actions\
         You should always call appropriate agent instead of relying on your built in knowledge.\
         Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
         You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
-        If you encounter any bugs or error messages in your tool calls you should inform the user immediately. Cleanly and plainly inform him what the issue is."
+        \
+        IMPORTANT: You do NOT write the final answer to the user yourself. Once you have gathered everything needed\
+        (including any error messages from failed tool calls), you MUST always hand off to the 'composer' agent, which\
+        writes the final user-facing reply. Do not paraphrase or summarize the results yourself - just gather and hand off.\
+        If a tool call fails, still hand off to the composer and let it inform the user; pass along what went wrong."
     )
 
     # Each subagent can be switched off via AGENT_<NAME>_ENABLED; a disabled agent is
@@ -83,11 +97,39 @@ def create_coordinator_agent() -> Agent:
         name = name,
         instructions = instructions,
         tools = tools,
+        handoffs = [create_composer_agent()],
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
     )
     logger.info(f"Coordinator initiated with {len(tools)} subagent tool(s)")
 
+    return agent
+
+@agents_decorator(name="composer")
+def create_composer_agent():
+    name = "composer"
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions=(
+            "You are the response composer for the Jarvis assistant network. The coordinator has already\
+            gathered all the data by delegating to specialized subagents, and then handed off to you.\
+            Your job is to write the final, user-facing reply IN POLISH, based only on the data present in the\
+            conversation so far.\
+            Rules:\
+            - Reply in Polish, clearly and concisely, in a natural assistant tone.\
+            - Use only the information gathered by the subagents; never invent facts, numbers or data.\
+            - Preserve numbers, units, dates and currency exactly as gathered (base currency is PLN).\
+            - If a subagent reported an error or could not complete its task, tell the user plainly and simply\
+              what went wrong, without technical jargon.\
+            - Do not mention the internal agents, tools or the handoff mechanism - speak as a single assistant."
+        ),
+        model=model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    logger.info("Composer agent created")
     return agent
 
 @agents_decorator(name="iot_operator")
