@@ -48,18 +48,20 @@ Bot ma tożsamość **Strony** (Page), nie prywatnego profilu — piszesz *do St
    zostać. W tym trybie bot działa **w pełni**, ale tylko dla osób z rolą w
    aplikacji (czyli dla Ciebie).
 
-### Krok 3. Dodaj produkt „Messenger"
+### Krok 3. Otwórz „Messenger API Setup"
 
-1. W panelu aplikacji → **Add Product** → **Messenger** → *Set up*.
-2. Wejdź w **Messenger → Settings**.
+> ⚠️ **Panel Meta się zmienił (2025/2026).** Nie ma już osobnego **Add Product →
+> Messenger** ani zakładki **Messenger → Settings**. Wszystko jest scalone na
+> jednej stronie **Messenger API Setup** (lewe menu → *Messenger from Meta* →
+> **Messenger API Settings**). Znajdziesz tam sekcje **1. Configure webhooks** i
+> **2. Generate access tokens** — to jest odpowiednik dawnych kroków 3–4/7.
 
 ### Krok 4. Wygeneruj Page Access Token
 
-1. W **Messenger → Settings → Access Tokens** kliknij **Add or remove Pages** i
+1. Na stronie **Messenger API Setup** → sekcja **2. Generate access tokens** →
    połącz Stronę z Kroku 1 (nadaj wymagane uprawnienia, w tym zarządzanie
-   wiadomościami).
-2. Przy podłączonej Stronie kliknij **Generate token**.
-3. **Skopiuj token od razu** — to jest `MESSENGER_PAGE_ACCESS_TOKEN`.
+   wiadomościami) i **wygeneruj token**.
+2. **Skopiuj token od razu** — to jest `MESSENGER_PAGE_ACCESS_TOKEN`.
    (Widoczny tylko raz; jak zgubisz, wygeneruj ponownie.)
 
 > Token wygenerowany w ten sposób jest długożyjący (page token). Trzymaj go jak
@@ -84,17 +86,19 @@ zgadza. To jest `MESSENGER_VERIFY_TOKEN`.
 > Ten krok wykonaj **dopiero gdy serwer Jarvisa działa i tunel HTTPS jest
 > podniesiony** (patrz Część C) — Meta od razu zweryfikuje URL.
 
-1. Odpal tunel, np. `ngrok http 8002` → dostajesz adres typu
-   `https://abcd-1234.ngrok-free.app`.
-2. **Messenger → Settings → Webhooks** → **Add Callback URL**:
-   - **Callback URL:** `https://abcd-1234.ngrok-free.app/webhook`
-   - **Verify Token:** ta sama wartość co `MESSENGER_VERIFY_TOKEN` z Kroku 6.
-3. Meta wyśle GET na Twój endpoint; jeśli tokeny się zgadzają — zobaczysz
-   *Verified* (zielony ptaszek).
-4. Kliknij **Add Subscriptions** i zaznacz co najmniej: **`messages`**,
-   **`messaging_postbacks`**. (Opcjonalnie `message_deliveries`, `message_reads`.)
-5. Upewnij się, że **Strona** z Kroku 1 jest subskrybowana do tego webhooka
-   (sekcja „Webhooks" → wybierz Page → *Subscribe*).
+1. Wystaw serwer publicznie pod HTTPS. Docelowo: serwer domowy (Raspberry) +
+   DuckDNS + Let's Encrypt — patrz [LOCAL_SERVER.md](LOCAL_SERVER.md). Na szybki
+   test: `ngrok http 8002` → adres typu `https://abcd-1234.ngrok-free.app`.
+2. **Messenger API Setup → sekcja 1. Configure webhooks**:
+   - **Callback URL:** `https://<twoja-domena>/webhook`
+   - **Verify token:** ta sama wartość co `MESSENGER_VERIFY_TOKEN` z Kroku 6.
+   - kliknij **Verify and save**.
+3. Meta wyśle GET na Twój endpoint; jeśli tokeny się zgadzają — zapis przejdzie
+   (zobaczysz *Verified*). Serwer Jarvisa **musi już działać** (patrz Część C).
+4. W polu subskrypcji (**Webhook fields / Add subscriptions**) zaznacz co
+   najmniej **`messages`** (opcjonalnie `messaging_postbacks`,
+   `message_deliveries`, `message_reads`).
+5. Upewnij się, że **Strona** z Kroku 1 jest subskrybowana do tego webhooka.
 
 ### Krok 8. (Zwykle nie trzeba) Role aplikacji
 
@@ -161,9 +165,24 @@ Punkty zaczepienia w istniejącym kodzie:
 - **Wyjście:** POST na `https://graph.facebook.com/v22.0/me/messages` z
   `access_token=MESSENGER_PAGE_ACCESS_TOKEN`.
 
-> Ten dokument opisuje **konfigurację po stronie Meta i `.env`**. Sam adapter
-> (kod webhooka + Send API + refactor rdzenia) to osobne zadanie — patrz roadmap
-> w `CLAUDE.md`.
+**Stan implementacji: zrobione.** Adapter istnieje:
+- `lib/engine.py` — transport-agnostyczny rdzeń `handle_message(conversation_id,
+  text, ctx)`; woła go i REPL (`lib/chatbot.py`, id `"repl"`), i webhook
+  (id `"messenger:{psid}"`). Ciągłość rozmowy per-użytkownik pod kluczem
+  `previous_response_id:{conversation_id}` w Redis.
+- `lib/messenger.py` — weryfikacja podpisu `X-Hub-Signature-256`, handshake GET,
+  parsowanie eventów, wysyłka przez Send API (chunkowanie do 2000 znaków).
+- `app/webhook.py` — aplikacja FastAPI (`/webhook` GET+POST, `/health`),
+  weryfikacja podpisu, natychmiastowy 200, przetwarzanie w tle, opcjonalny filtr
+  `MESSENGER_ALLOWED_SENDER_ID`.
+
+Uruchomienie serwera webhooka (wymaga działającego Redis):
+
+```bash
+poetry run uvicorn app.webhook:app --host 0.0.0.0 --port 8002
+```
+
+REPL (`app/main.py`) działa dalej niezależnie — oba wejścia dzielą ten sam rdzeń.
 
 ---
 
