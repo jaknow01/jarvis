@@ -2,12 +2,74 @@ import json
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
-from typing import Literal
+from typing import Literal, Optional, Union
 from datetime import timedelta, datetime
+from zoneinfo import ZoneInfo
 import logging
 import pycountry
 
 logger = logging.getLogger(__name__)
+
+# The owner is in Warsaw; naive/local times from the model are interpreted here.
+WARSAW_TZ = ZoneInfo("Europe/Warsaw")
+
+
+def _to_epoch(dt: datetime) -> int:
+    """Correct POSIX timestamp for ``dt``, treating a naive value as Warsaw local.
+
+    We compute the epoch ourselves rather than handing a datetime to the googlemaps
+    client, because its ``convert.time()`` does ``calendar.timegm(dt.timetuple())`` —
+    which drops tzinfo and reads the wall clock as UTC, shifting Warsaw times by the
+    local offset.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=WARSAW_TZ)
+    return int(dt.timestamp())
+
+
+def _parse_datetime_string(s: str) -> Optional[datetime]:
+    """Best-effort parse of a model-supplied time into a datetime.
+
+    Handles full ISO datetimes / dates (``fromisoformat``) and bare wall-clock
+    times like ``"8:00"`` / ``"08:00:00"`` (combined with today's Warsaw date).
+    Returns ``None`` when nothing matches.
+    """
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        pass
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            t = datetime.strptime(s, fmt).time()
+            today = datetime.now(WARSAW_TZ).date()
+            return datetime.combine(today, t)
+        except ValueError:
+            continue
+    return None
+
+
+def normalize_departure_time(value: Optional[Union[str, datetime, int, float]]) -> Union[str, int]:
+    """Normalize a ``departure_time`` for the Google Directions API.
+
+    Google accepts only the literal ``"now"`` or an integer Unix timestamp; any other
+    string (ISO datetime, ``"8:00"``, …) returns HTTP 400. This coerces the model's
+    input into one of those two forms, interpreting naive/local times as Warsaw, and
+    falls back to ``"now"`` on anything unparseable rather than letting the call 400.
+    """
+    if value is None:
+        return "now"
+    if isinstance(value, datetime):
+        return _to_epoch(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    s = str(value).strip()
+    if not s or s.lower() == "now":
+        return "now"
+    dt = _parse_datetime_string(s)
+    if dt is None:
+        logger.warning("Could not parse departure_time %r; falling back to 'now'", value)
+        return "now"
+    return _to_epoch(dt)
 
 async def simplify_directions_response(data):
     routes_summary = []

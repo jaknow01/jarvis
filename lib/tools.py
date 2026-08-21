@@ -2,7 +2,7 @@ from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
 from lib.memory import memory
 from lib.smart_device import SmartDevice, RGB, Mode
-from lib.tools_utils import simplify_directions_response, get_forecast, validate_currency_code
+from lib.tools_utils import simplify_directions_response, get_forecast, validate_currency_code, normalize_departure_time
 from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
@@ -416,6 +416,10 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
     origin_address, origin_alias = _resolve_place(ctx, origin)
     destination_address, destination_alias = _resolve_place(ctx, destination)
 
+    # Google accepts only "now" or an int Unix timestamp here; a raw model-supplied
+    # time string (ISO, "8:00", …) otherwise 400s. Normalize before the call.
+    departure_time = normalize_departure_time(departure_time)
+
     logging.info("Starting route planning")
 
     try:
@@ -430,10 +434,10 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
 
         result = await simplify_directions_response(directions_result)
     except Exception as e:
-        logging.error("Error while getting routes from Google")
+        logging.error("Error while getting routes from Google", exc_info=True)
         return {
             "Message" : "Error while getting routes from Google",
-            "Error": e
+            "Error": str(e)
         }
 
     # Relabel endpoints back to the alias so the user's real addresses are not exposed.
