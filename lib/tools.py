@@ -2,6 +2,7 @@ from agents import RunContextWrapper, function_tool
 from lib.cache import Cache, Ctx
 from lib.memory import memory
 from lib.smart_device import SmartDevice, RGB, Mode
+from lib.tuya_link import manager, SCAN_TIMEOUT
 from lib.tools_utils import simplify_directions_response, get_forecast, validate_currency_code, normalize_departure_time
 from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
@@ -56,6 +57,24 @@ async def _load_devices(ctx: RunContextWrapper[Ctx]) -> dict:
     return devices
 
 
+async def _wake_and_heal_ips(devices: dict) -> None:
+    """Run one broadcast scan up front to wake the fleet before we probe it, and
+    correct any drifted IPs from the scan result.
+
+    Cold Tuya bulbs often refuse direct TCP until a broadcast scan has seen them
+    (docs/TUYA_LOCAL.md, finding #1). Probing all devices concurrently without this
+    wake makes the marginal ones fail EHOSTUNREACH on first contact even though they
+    are perfectly healthy once woken (confirmed by smoke-tests/probe.py, which scans
+    first and then sees 100% health). The scan is serialized+coalesced in tuya_link,
+    so this is one cheap scan shared across the burst."""
+    id_to_ip = await asyncio.to_thread(manager.scan, SCAN_TIMEOUT, "wake before status sweep")
+    for dev in devices.values():
+        ip = id_to_ip.get(dev.dev_id)
+        if ip and ip != dev.ip:
+            logger.info(f"{dev.name}: IP drift {dev.ip} -> {ip} (from wake scan)")
+            dev.ip = ip
+
+
 async def _ensure_devices(ctx: RunContextWrapper[Ctx]) -> dict:
     if not getattr(ctx.context, "devices", None):
         await _load_devices(ctx)
@@ -97,6 +116,11 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     """
     logger.info("Checking all available devices")
     devices = await _load_devices(ctx)
+
+    # Wake the fleet with one broadcast scan before probing all devices concurrently;
+    # without it, cold/marginal bulbs refuse first-contact TCP and fail spuriously
+    # even though they are healthy (see _wake_and_heal_ips / docs/TUYA_LOCAL.md).
+    await _wake_and_heal_ips(devices)
 
     logger.info("Loading user preferences")
     with open(DEVICES_PREFERENCES_PATH, "r", encoding="utf-8") as f:

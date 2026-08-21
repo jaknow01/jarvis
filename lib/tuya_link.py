@@ -122,35 +122,36 @@ class TuyaConnectionManager:
             self._close(conn)
             logger.info(f"Invalidated Tuya connection to {dev_id}")
 
-    def rediscover_ip(self, dev_id: str, timeout: int = SCAN_TIMEOUT) -> Optional[str]:
-        """Broadcast-scan the LAN and return the device's current IP, or None.
+    def scan(self, timeout: int = SCAN_TIMEOUT, reason: str = "") -> dict[str, str]:
+        """Run (or reuse) one LAN discovery scan; return the full ``{dev_id: ip}`` map.
 
-        Used both as a last-resort IP self-heal when retries keep failing (DHCP
-        drift) and to broadcast-"wake" a cold device before the final retry.
+        A broadcast scan also **wakes cold devices**: on first contact a bulb often
+        refuses direct TCP (EHOSTUNREACH) until a scan has seen it (see
+        docs/TUYA_LOCAL.md). Use this to prime/wake the fleet before probing, and as
+        the IP self-heal source when a device's stored IP has drifted.
 
-        Scans are **serialized and coalesced**: when many devices fail at once they
-        would each launch a scan, but concurrent scans collide on the Tuya broadcast
-        UDP ports and defeat the wake. Instead the first caller runs one scan and
-        caches every id->ip it saw for ``SCAN_CACHE_TTL`` seconds; the others reuse
-        that result rather than scanning again.
+        Scans are **serialized and coalesced**: concurrent ``tinytuya.deviceScan``
+        calls collide on the Tuya broadcast UDP ports and defeat the wake, so the
+        first caller runs one scan and caches every id->ip it saw for
+        ``SCAN_CACHE_TTL`` seconds; other callers within that window reuse it.
         """
         now = time.monotonic()
         # Fresh shared result from a scan another caller just ran? Reuse it.
         if now - self._scan_cache_ts < SCAN_CACHE_TTL and self._scan_cache:
-            return self._scan_cache.get(dev_id)
+            return self._scan_cache
 
         with self._scan_lock:
             # Re-check under the lock: a scan may have completed while we waited.
             now = time.monotonic()
             if now - self._scan_cache_ts < SCAN_CACHE_TTL and self._scan_cache:
-                return self._scan_cache.get(dev_id)
+                return self._scan_cache
 
-            logger.info(f"Rediscovering IPs via LAN scan (triggered by {dev_id})")
+            logger.info(f"Running LAN discovery scan{f' ({reason})' if reason else ''}")
             try:
                 found = tinytuya.deviceScan(False, timeout)
             except Exception as e:  # noqa: BLE001
                 logger.error(f"deviceScan failed: {e}")
-                return None
+                return {}
 
             fresh: dict[str, str] = {}
             for ip, info in found.items():
@@ -160,7 +161,14 @@ class TuyaConnectionManager:
             self._scan_cache = fresh
             self._scan_cache_ts = time.monotonic()
 
-        return self._scan_cache.get(dev_id)
+        return self._scan_cache
+
+    def rediscover_ip(self, dev_id: str, timeout: int = SCAN_TIMEOUT) -> Optional[str]:
+        """Return a single device's current IP from a coalesced LAN scan, or None.
+
+        Thin wrapper over :meth:`scan` used as a last-resort IP self-heal when
+        retries keep failing (DHCP drift)."""
+        return self.scan(timeout, reason=f"self-heal {dev_id}").get(dev_id)
 
     # -- idle reaper (good citizen) ------------------------------------------
     def _ensure_reaper(self) -> None:
