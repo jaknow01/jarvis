@@ -1,0 +1,12 @@
+# Caddy reverse proxy for the Jarvis Messenger webhook.
+# Caddy auto-obtains + renews the Let's Encrypt cert (HTTP-01 on port 80) and
+# terminates TLS, proxying plaintext to the `agent` container on the compose
+# network. Certs/ACME account persist in the caddy_data volume (see
+# docker-compose.yml) — never drop that volume or you re-issue and hit rate limits.
+{
+	email kuba.nowa888@gmail.com
+}
+
+ogarniacz.duckdns.org {
+	reverse_proxy agent:8002
+}

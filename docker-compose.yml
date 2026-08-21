@@ -3,12 +3,26 @@ services:
   agent:
     build: .
     container_name: jarvis
+    restart: unless-stopped
+    # Run the Messenger webhook (long-running HTTP service), not the REPL.
+    # 0.0.0.0 so the caddy container can reach it over the compose network.
+    command: ["poetry", "run", "uvicorn", "app.webhook:app", "--host", "0.0.0.0", "--port", "8002"]
     volumes:
       - ./app:/app/app
       - ./lib:/app/lib
+      # Device DB, maps memory, and JSON stores live here — without this mount the
+      # container has no smart_devices.json ("baza świateł niedostępna").
+      - ./data:/app/data
+    # Secrets (OPENAI_API_KEY, MESSENGER_*, etc.) come from .env; the explicit
+    # `environment:` below overrides any compose-internal hosts baked into .env.
+    env_file: .env
     ports:
+      # Published for local debugging (curl localhost:8002/health). Caddy reaches
+      # the app internally as agent:8002 and does not need this mapping.
       - "8002:8002"
     environment:
+      # inside the compose network Redis is reachable at host "redis"
+      REDIS_URL: redis://redis:6379
       # inside the compose network Postgres is reachable at host "postgres"
       DATABASE_URL: postgresql://jarvis:jarvis@postgres:5432/jarvis
       # inside the compose network the MLflow server is reachable at host "mlflow"
@@ -21,6 +35,20 @@ services:
         condition: service_healthy
       mlflow:
         condition: service_started
+
+  caddy:
+    image: caddy:2
+    container_name: jarvis_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # Let's Encrypt certs + ACME account — must persist
+      - caddy_config:/config
+    depends_on:
+      - agent
 
   redis:
     image: redis:7
@@ -66,3 +94,5 @@ services:
 volumes:
   pgdata:
   mlflow_data:
+  caddy_data:
+  caddy_config:
