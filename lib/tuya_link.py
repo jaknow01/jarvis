@@ -31,6 +31,7 @@ HARD_TIMEOUT = 8.0       # absolute cap per call, enforced by callers via wait_f
 MAX_ATTEMPTS = 3         # bounded reconnect-and-retry per logical operation
 REAP_INTERVAL = 30.0     # upper bound on how often the idle reaper runs (s)
 SCAN_TIMEOUT = 8         # bounded discovery scan for IP self-heal (s)
+SCAN_CACHE_TTL = 10.0    # reuse one scan's id->ip result across a burst of failures (s)
 DEFAULT_VERSION = 3.3
 
 # How long a connection may sit unused before the reaper closes it (good-citizen
@@ -74,6 +75,14 @@ class TuyaConnectionManager:
         self._guard = threading.Lock()      # protects the _conns dict
         self._reaper: Optional[threading.Thread] = None
         self._reaper_stop = threading.Event()
+        # A LAN discovery scan (tinytuya.deviceScan) binds the Tuya broadcast UDP
+        # ports (6666/6667/7000); two scans at once collide on those ports and the
+        # broadcast that "wakes" a cold device is lost. So scans are serialized, and
+        # the result is coalesced: a burst of failures shares ONE scan via a short
+        # cache instead of each device launching its own.
+        self._scan_lock = threading.Lock()      # only one deviceScan at a time
+        self._scan_cache: dict[str, str] = {}   # dev_id -> ip, from the last scan
+        self._scan_cache_ts: float = 0.0        # monotonic time of that scan
 
     # -- connection lifecycle -------------------------------------------------
     def get(self, dev_id: str, ip: str, local_key: str, version: float = DEFAULT_VERSION) -> _Conn:
@@ -116,18 +125,42 @@ class TuyaConnectionManager:
     def rediscover_ip(self, dev_id: str, timeout: int = SCAN_TIMEOUT) -> Optional[str]:
         """Broadcast-scan the LAN and return the device's current IP, or None.
 
-        Used as a last-resort IP self-heal when retries keep failing (DHCP drift).
+        Used both as a last-resort IP self-heal when retries keep failing (DHCP
+        drift) and to broadcast-"wake" a cold device before the final retry.
+
+        Scans are **serialized and coalesced**: when many devices fail at once they
+        would each launch a scan, but concurrent scans collide on the Tuya broadcast
+        UDP ports and defeat the wake. Instead the first caller runs one scan and
+        caches every id->ip it saw for ``SCAN_CACHE_TTL`` seconds; the others reuse
+        that result rather than scanning again.
         """
-        logger.info(f"Rediscovering IP for {dev_id} via LAN scan")
-        try:
-            found = tinytuya.deviceScan(False, timeout)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"deviceScan failed: {e}")
-            return None
-        for ip, info in found.items():
-            if (info.get("gwId") or info.get("id")) == dev_id:
-                return ip
-        return None
+        now = time.monotonic()
+        # Fresh shared result from a scan another caller just ran? Reuse it.
+        if now - self._scan_cache_ts < SCAN_CACHE_TTL and self._scan_cache:
+            return self._scan_cache.get(dev_id)
+
+        with self._scan_lock:
+            # Re-check under the lock: a scan may have completed while we waited.
+            now = time.monotonic()
+            if now - self._scan_cache_ts < SCAN_CACHE_TTL and self._scan_cache:
+                return self._scan_cache.get(dev_id)
+
+            logger.info(f"Rediscovering IPs via LAN scan (triggered by {dev_id})")
+            try:
+                found = tinytuya.deviceScan(False, timeout)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"deviceScan failed: {e}")
+                return None
+
+            fresh: dict[str, str] = {}
+            for ip, info in found.items():
+                found_id = info.get("gwId") or info.get("id")
+                if found_id:
+                    fresh[found_id] = ip
+            self._scan_cache = fresh
+            self._scan_cache_ts = time.monotonic()
+
+        return self._scan_cache.get(dev_id)
 
     # -- idle reaper (good citizen) ------------------------------------------
     def _ensure_reaper(self) -> None:
