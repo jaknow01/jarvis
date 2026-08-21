@@ -2,6 +2,7 @@ from lib.agents import create_coordinator_agent
 from agents import Runner
 from lib.cache import Cache, Ctx
 from lib.run_config import Config
+from lib.hooks import LoggingRunHooks
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ class Chatbot():
         logger.conversation("[ASSISTANT] Wiadomość powitalna")
         ctx = Ctx()
         ctx.cache = Cache()
+        hooks = LoggingRunHooks()
 
         while(True):
             text = input()
@@ -26,7 +28,8 @@ class Chatbot():
                 input = text,
                 run_config=run_config,
                 previous_response_id= prev_id,
-                context=ctx
+                context=ctx,
+                hooks=hooks
             )
 
             await ctx.cache.save_to_cache("previous_response_id", result.last_response_id)

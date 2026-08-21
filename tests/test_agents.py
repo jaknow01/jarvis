@@ -38,3 +38,21 @@ def test_coordinator_has_all_subagents_by_default(monkeypatch):
     coord = agents.create_coordinator_agent()
     names = {getattr(t, "name", "") for t in coord.tools}
     assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator"}
+
+
+def test_coordinator_hands_off_to_composer(monkeypatch):
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
+    coord = agents.create_coordinator_agent()
+    handoff_names = {getattr(h, "name", "") for h in coord.handoffs}
+    assert "composer" in handoff_names
+    # The composer is a handoff target, not a coordinator tool.
+    assert "composer" not in {getattr(t, "name", "") for t in coord.tools}
+
+
+def test_every_agent_gets_environment_preamble(monkeypatch):
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
+    for factory in (agents.create_composer_agent, agents.create_weather_agent, agents.create_coordinator_agent):
+        agent = factory()
+        assert isinstance(agent.instructions, str)
+        assert "Environment context" in agent.instructions
+        assert "Base currency: PLN" in agent.instructions

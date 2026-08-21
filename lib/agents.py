@@ -7,6 +7,7 @@ from lib.tools import (
 from lib.llm import LLM_BY_AGENT
 from lib.tools import TOOLS_BY_AGENT
 from lib.memory import memory
+from lib.context import environment_preamble
 from agents import Agent
 import logging
 import os
@@ -16,8 +17,17 @@ AGENTS: dict = {}
 
 def agents_decorator(name: str):
     def wrapper(func):
-        AGENTS[name] = func
-        return func
+        def build(*args, **kwargs):
+            agent = func(*args, **kwargs)
+            # Context provider: prepend the shared environment block (date/time, timezone,
+            # currency, locale) to every agent's instructions at build time, so temporal
+            # and locale awareness reaches all agents — not just the one owning the
+            # date/time tool. Callables-as-instructions are left untouched.
+            if isinstance(agent.instructions, str):
+                agent.instructions = environment_preamble() + agent.instructions
+            return agent
+        AGENTS[name] = build
+        return build
     return wrapper
 
 def agent_enabled(name: str) -> bool:
@@ -38,14 +48,18 @@ def create_coordinator_agent() -> Agent:
 
     instructions = (
         "You are a coordinator of a multiagent personal assistant network called Jarvis.\
-        Your main goal is to satisfy user's demands and give him appropriate answers.\
+        Your job is to gather the data needed to satisfy the user's request by delegating to specialized subagents.\
         In your possesion there are numerous specialized subagents which you can call as your tool\
         Each agent specializes in a narrow field that is of interest to the user.\
         These agents are equipped with various API connectors that allow them to obtain relevant, real-time data or perform certain actions\
         You should always call appropriate agent instead of relying on your built in knowledge.\
         Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
         You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
-        If you encounter any bugs or error messages in your tool calls you should inform the user immediately. Cleanly and plainly inform him what the issue is."
+        \
+        IMPORTANT: You do NOT write the final answer to the user yourself. Once you have gathered everything needed\
+        (including any error messages from failed tool calls), you MUST always hand off to the 'composer' agent, which\
+        writes the final user-facing reply. Do not paraphrase or summarize the results yourself - just gather and hand off.\
+        If a tool call fails, still hand off to the composer and let it inform the user; pass along what went wrong."
     )
 
     # Each subagent can be switched off via AGENT_<NAME>_ENABLED; a disabled agent is
@@ -83,11 +97,39 @@ def create_coordinator_agent() -> Agent:
         name = name,
         instructions = instructions,
         tools = tools,
+        handoffs = [create_composer_agent()],
         model = model_settings["model_name"],
         model_settings = model_settings["settings"]
     )
     logger.info(f"Coordinator initiated with {len(tools)} subagent tool(s)")
 
+    return agent
+
+@agents_decorator(name="composer")
+def create_composer_agent():
+    name = "composer"
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions=(
+            "You are the response composer for the Jarvis assistant network. The coordinator has already\
+            gathered all the data by delegating to specialized subagents, and then handed off to you.\
+            Your job is to write the final, user-facing reply IN POLISH, based only on the data present in the\
+            conversation so far.\
+            Rules:\
+            - Reply in Polish, clearly and concisely, in a natural assistant tone.\
+            - Use only the information gathered by the subagents; never invent facts, numbers or data.\
+            - Preserve numbers, units, dates and currency exactly as gathered (base currency is PLN).\
+            - If a subagent reported an error or could not complete its task, tell the user plainly and simply\
+              what went wrong, without technical jargon.\
+            - Do not mention the internal agents, tools or the handoff mechanism - speak as a single assistant."
+        ),
+        model=model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    logger.info("Composer agent created")
     return agent
 
 @agents_decorator(name="iot_operator")
@@ -104,7 +146,32 @@ def create_iot_agent():
             You must start your tool run by utilizing get_devices_state in order to initially access\
             the device database and establish connection, as well as to understand user's preferences\
             that are stored in long term memory database." \
-            "Always try to run as many necessary tools as possible in paralel."
+            "Always try to run as many necessary tools as possible in paralel.\
+            \
+            ROOM- AND ZONE-SCOPED REQUESTS. Every device returned by get_devices_state carries a 'room'\
+            field (e.g. 'living_room', 'bedroom') and a 'zones' list (e.g. ['entertainment_zone',\
+            'work_zone']). Membership in a room or zone is defined ONLY by these fields - never infer it\
+            from the device's name (a 'Telewizor' or 'Pianino' is in the living room if its 'room' says\
+            so). Map the user's (Polish) words to the canonical values:\
+            rooms: 'salon'/'pokój dzienny' -> living_room, 'sypialnia' -> bedroom, 'kuchnia' -> kitchen,\
+            'łazienka' -> bathroom, 'gabinet'/'biuro' -> office, 'przedpokój'/'korytarz' -> hallway;\
+            zones by meaning, e.g. 'strefa rozrywki'/'kino' -> entertainment_zone, 'strefa pracy' ->\
+            work_zone, 'strefa spania' -> sleep_zone.\
+            \
+            COMPLETENESS IS MANDATORY. When the user targets a whole room, zone, or says 'wszystko'/'all',\
+            follow this discipline every time:\
+            (1) From the get_devices_state output, build the FULL list of devices whose 'room' (or 'zones')\
+                matches the target, and count them.\
+            (2) Issue the requested command to EVERY device on that list - do not stop after the first one\
+                or two, and do not act only on the devices whose names sound relevant. Run them in parallel.\
+            (3) Before finishing, verify that the number of devices you issued commands to equals the count\
+                from step (1). If any matching device was left out, act on it now. Only then finish.\
+            A room/zone request is complete only when every matching device has been handled.\
+            \
+            UNREACHABLE DEVICES. A device whose get_devices_state entry has an error/unreachable state\
+            cannot be controlled. Do NOT silently drop it: still attempt the other devices in the room,\
+            and clearly report which devices in the requested room could not be reached so the composer\
+            can tell the user exactly what was and was not changed."
         ),
         tools = TOOLS_BY_AGENT[name],
         model=model_settings["model_name"],
@@ -144,7 +211,13 @@ def create_weather_agent():
     agent = Agent(
         name=name,
         instructions=(
-            "You can check current weather conditions as well as a short-term forecast"
+            "You can check current weather conditions as well as a short-term forecast.\
+            Before answering ANY question that involves a date or a relative day\
+            ('today', 'tomorrow', 'jutro', 'weekend', a weekday name, etc.), you MUST first call\
+            get_current_date_and_time to establish today's date, weekday and time. Only then map the\
+            user's relative day to a concrete calendar date and call weather_forecast. Never assume\
+            what 'today' or 'tomorrow' is - always resolve it from get_current_date_and_time first,\
+            and make sure the date you report back to the user matches that resolution."
         ),
         tools = TOOLS_BY_AGENT[name],
         model=model_settings["model_name"],
