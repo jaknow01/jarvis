@@ -1,4 +1,5 @@
 # import aioredis
+import os
 from typing import Any
 import redis.asyncio as redis
 from lib.smart_device import SmartDevice
@@ -6,9 +7,10 @@ from lib.smart_device import SmartDevice
 
 class Cache():
     def __init__(self, ttl:int = 3600 * 24 * 5):
+        # Host runs default to localhost; inside docker-compose the app sets
+        # REDIS_URL=redis://redis:6379 (service name). See docker-compose.yml.
         self.redis_cache = redis.from_url(
-            # url = "redis://redis:6379" # only if running code in docker
-            url = "redis://localhost:6379",
+            url = os.getenv("REDIS_URL", "redis://localhost:6379"),
             decode_responses = True
         )
         self.ttl = ttl
