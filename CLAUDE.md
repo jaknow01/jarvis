@@ -110,7 +110,14 @@ that does not exist yet). When running the whole stack in Docker, switch the Red
 URL in `lib/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
 
 ### Environment variables (`.env`)
-`OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
+`OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `COORDINATOR_MODEL` +
+`COORDINATOR_REASONING_EFFORT` (the coordinator runs on a dedicated "smarter"
+reasoning model — `COORDINATOR_MODEL` picks it, falling back to
+`OPENAI_DEFAULT_MODEL`; `COORDINATOR_REASONING_EFFORT` is minimal/low/medium/high,
+default medium. The env is the source of truth for both. Because the coordinator
+uses a *different* model, `RunConfig` no longer pins one model for the whole run —
+each agent's own model in `lib/llm.py` is now honored per-agent via the provider,
+so e.g. `news_agent` really runs its configured model), `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
 `OPENWEATHER_API_KEY`, `TAVILY_API_KEY`, `DATABASE_URL` (Postgres; when unset the
 memory store falls back to the on-disk JSON file), `TRACING_ENABLED` +
 `MLFLOW_TRACKING_URI` + `MLFLOW_EXPERIMENT` (agent tracing; when the URI is unset or
