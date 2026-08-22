@@ -304,9 +304,15 @@ def create_fpl_agent():
             never from built-in knowledge, which is out of date.\
             \
             Tool guide:\
-            - get_fpl_fixtures: upcoming matches for a gameweek (with FDR difficulty 1=easy..5=hard).\
-              When no gameweek is given it defaults to the next upcoming one - that's usually what\
-              'najbliższe mecze'/'next matches' means.\
+            - get_fpl_fixtures: the schedule - matches for a gameweek with FDR difficulty\
+              (1=easy..5=hard) and kickoff times. Defaults to the round currently in play, so\
+              it answers 'najbliższe mecze'/'kiedy gramy'/'terminarz'. Use it for planning, not\
+              for live scores.\
+            - get_fpl_live: the real-time picture - which matches are being played RIGHT NOW,\
+              their live score and minute, goals/assists/cards, and how the owner's own players\
+              are doing live (minutes, goals, bonus, provisional points, whether their match is\
+              in play). Use it for 'czy trwają jakieś mecze', 'jaki wynik', 'co się dzieje',\
+              'jak grają moi zawodnicy'. If any_live is false, tell the user nothing is live now.\
             - get_pl_teams: the Premier League teams and their strength ratings.\
             - get_my_fpl_squad: the owner's picked squad for a gameweek (defaults to the current one),\
               with captain/vice, bench, points, squad value and bank.\

@@ -313,6 +313,43 @@ def relevant_gameweek(bootstrap: dict) -> Optional[int]:
     return current["id"] if current else None
 
 
+# Fixture "stats" identifiers we surface as match events, mapped to friendlier keys.
+_FIXTURE_EVENT_IDENTIFIERS = {
+    "goals_scored": "goals",
+    "assists": "assists",
+    "own_goals": "own_goals",
+    "yellow_cards": "yellow_cards",
+    "red_cards": "red_cards",
+    "penalties_missed": "penalties_missed",
+    "penalties_saved": "penalties_saved",
+}
+
+
+def summarize_fixture_events(fixture: dict, elements_by_id: dict, teams_by_id: dict) -> dict:
+    """Turn a fixture's raw `stats` array into name-based match events (who scored,
+    assisted, got booked, etc.). Each event lists the player's web name and team short
+    code, resolved from the numeric element/team ids."""
+    home = teams_by_id.get(fixture.get("team_h"), {})
+    away = teams_by_id.get(fixture.get("team_a"), {})
+    events: dict = {}
+    for stat in fixture.get("stats", []):
+        key = _FIXTURE_EVENT_IDENTIFIERS.get(stat.get("identifier"))
+        if not key:
+            continue
+        entries = []
+        for side, team in (("h", home), ("a", away)):
+            for item in stat.get(side, []):
+                element = elements_by_id.get(item.get("element"), {})
+                entries.append({
+                    "player": element.get("web_name"),
+                    "team": team.get("short_name"),
+                    "count": item.get("value"),
+                })
+        if entries:
+            events[key] = entries
+    return events
+
+
 def describe_player(element: dict, teams_by_id: dict, positions_by_id: dict) -> dict:
     """Flatten one 'element' (player) record into a compact, name-based summary."""
     team = teams_by_id.get(element.get("team"), {})

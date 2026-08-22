@@ -5,7 +5,8 @@ from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tuya_link import manager, SCAN_TIMEOUT
 from lib.tools_utils import (
     simplify_directions_response, get_forecast, validate_currency_code, normalize_departure_time,
-    fetch_fpl, fetch_fpl_bootstrap, index_bootstrap, resolve_gameweek, relevant_gameweek, describe_player)
+    fetch_fpl, fetch_fpl_bootstrap, index_bootstrap, resolve_gameweek, relevant_gameweek,
+    describe_player, summarize_fixture_events)
 from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
@@ -1260,6 +1261,167 @@ async def get_fpl_league_standings(ctx: RunContextWrapper[Ctx],
         "entries_shown": len(table),
         "standings": table,
     }
+
+
+def _player_match_status(team_state: dict, team_id) -> str:
+    """Human-readable state of a player's match this gameweek."""
+    st = team_state.get(team_id)
+    if not st:
+        return "not started"
+    if st.get("live"):
+        minutes = st.get("minutes")
+        return f"live {minutes}'" if minutes is not None else "live"
+    if st.get("finished"):
+        return "finished"
+    return "not started"
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_fpl_live(ctx: RunContextWrapper[Ctx],
+                       gameweek: Optional[int] = None,
+                       include_my_players: bool = True,
+                       entry_id: Optional[int] = None) -> dict:
+    """
+    Description:
+        Real-time state of the gameweek: which Premier League matches are being played
+        right now, what is happening in them (live score, minute, goals, assists, cards)
+        and — for the owner — how each of their FPL players is doing live (minutes,
+        goals, bonus, live points, and whether that player's match is in play). Use this
+        for "are there matches on now / what's the score / how are my players doing".
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    gameweek: Optional[int] = None
+        The gameweek to inspect. If omitted, the round currently in play is used
+        (the current gameweek while it is unfinished, else the next one).
+
+    include_my_players: bool = True
+        When true, also return the owner's squad with live per-player stats. Set false
+        to only get the match scores/events (e.g. when no manager id is configured).
+
+    entry_id: Optional[int] = None
+        The FPL manager ("entry") id for the squad section. If omitted, the owner's own
+        id from FPL_ENTRY_ID is used.
+
+    Output:
+        JSON object with `any_live` (is any match in play), `live_matches` (in-progress
+        matches with live score, minute and events), `finished_matches` (final scores
+        for matches already played this gameweek) and, when requested, `my_players`
+        (each squad player's live stats, match status and provisional points).
+    """
+    logger.info(f"Getting FPL live state for gameweek={gameweek or 'in-play'}")
+    try:
+        bootstrap = await fetch_fpl_bootstrap()
+        gw = gameweek if gameweek is not None else relevant_gameweek(bootstrap)
+        if gw is None:
+            return {"Error": "Could not determine a gameweek (no events in the FPL calendar)."}
+        teams_by_id, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
+        fixtures = await fetch_fpl(f"fixtures/?event={gw}")
+    except Exception as e:
+        logger.error("Error while getting FPL live state", exc_info=True)
+        return {"Message": "Error while getting the live FPL state", "Error": str(e)}
+
+    # A fixture is "live" once it has started but before it is provisionally finished
+    # (finished_provisional flips to true at full time, before bonus is finalized).
+    live_matches, finished_matches = [], []
+    for f in fixtures:
+        if not f.get("started"):
+            continue
+        home = teams_by_id.get(f.get("team_h"), {})
+        away = teams_by_id.get(f.get("team_a"), {})
+        base = {
+            "home": home.get("name"),
+            "away": away.get("name"),
+            "score": f"{f.get('team_h_score')}-{f.get('team_a_score')}",
+        }
+        if f.get("finished_provisional"):
+            finished_matches.append(base)
+        else:
+            live = dict(base)
+            live["minutes"] = f.get("minutes")
+            live["events"] = summarize_fixture_events(f, elements_by_id, teams_by_id)
+            live_matches.append(live)
+
+    result: dict = {
+        "gameweek": gw,
+        "any_live": bool(live_matches),
+        "live_matches": live_matches,
+        "finished_matches": finished_matches,
+    }
+    if not live_matches and not finished_matches:
+        result["note"] = "No matches in this gameweek have kicked off yet."
+
+    if include_my_players:
+        eid = _fpl_entry_id(entry_id)
+        if eid is None:
+            result["my_players"] = {
+                "Error": "No FPL manager id is configured.",
+                "Tip": "Set FPL_ENTRY_ID in the environment or pass entry_id explicitly.",
+            }
+            return result
+        try:
+            live_data = await fetch_fpl(f"event/{gw}/live/")
+            picks_data = await fetch_fpl(f"entry/{eid}/event/{gw}/picks/")
+        except Exception as e:
+            logger.error("Error while getting live squad performance", exc_info=True)
+            result["my_players"] = {"Error": str(e)}
+            return result
+
+        live_by_element = {e.get("id"): e.get("stats", {}) for e in live_data.get("elements", [])}
+        # Map each team to the state of its match this gameweek (prefer a live fixture
+        # if a team somehow has more than one, e.g. a double gameweek).
+        team_state: dict = {}
+        for f in fixtures:
+            info = {
+                "live": bool(f.get("started") and not f.get("finished_provisional")),
+                "finished": bool(f.get("finished_provisional")),
+                "minutes": f.get("minutes"),
+            }
+            for team_id in (f.get("team_h"), f.get("team_a")):
+                prev = team_state.get(team_id)
+                if prev is None or (info["live"] and not prev["live"]):
+                    team_state[team_id] = info
+
+        players = []
+        provisional_points = 0
+        for p in picks_data.get("picks", []):
+            element = elements_by_id.get(p.get("element"), {})
+            stats = live_by_element.get(p.get("element"), {})
+            multiplier = p.get("multiplier", 0)
+            points = stats.get("total_points", 0) or 0
+            counted = points * multiplier
+            provisional_points += counted
+            players.append({
+                "name": element.get("web_name"),
+                "team": teams_by_id.get(element.get("team"), {}).get("short_name"),
+                "position": positions_by_id.get(element.get("element_type"), {}).get("singular_name_short"),
+                "on_bench": p.get("position", 0) > 11,
+                "is_captain": p.get("is_captain", False),
+                "is_vice_captain": p.get("is_vice_captain", False),
+                "multiplier": multiplier,
+                "match_status": _player_match_status(team_state, element.get("team")),
+                "minutes": stats.get("minutes"),
+                "goals": stats.get("goals_scored"),
+                "assists": stats.get("assists"),
+                "yellow_cards": stats.get("yellow_cards"),
+                "red_cards": stats.get("red_cards"),
+                "bonus": stats.get("bonus"),
+                "points": points,               # raw FPL points for the player
+                "points_counted": counted,      # after captain/bench multiplier
+            })
+
+        result["my_players"] = {
+            "entry_id": eid,
+            "provisional_gameweek_points": provisional_points,
+            "note": "Provisional live points (starting XI x multiplier). FPL applies bench "
+                    "auto-substitutions only after all of a player's matches finish.",
+            "players": players,
+        }
+
+    return result
 
 
 

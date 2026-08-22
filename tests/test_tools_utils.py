@@ -10,6 +10,7 @@ from lib.tools_utils import (
     relevant_gameweek,
     resolve_gameweek,
     describe_player,
+    summarize_fixture_events,
     WARSAW_TZ,
 )
 
@@ -64,6 +65,24 @@ def test_describe_player_flattens_and_scales_price():
     assert out["position"] == "MID"
     assert out["price"] == 14.5  # now_cost is in tenths of £m
     assert out["news"] is None   # empty news normalized to None
+
+
+def test_summarize_fixture_events_resolves_names_and_sides():
+    fixture = {
+        "team_h": 1, "team_a": 7,
+        "stats": [
+            {"identifier": "goals_scored", "h": [{"value": 1, "element": 12}], "a": []},
+            {"identifier": "yellow_cards", "h": [{"value": 1, "element": 4}], "a": [{"value": 1, "element": 575}]},
+            {"identifier": "bps", "h": [{"value": 30, "element": 12}], "a": []},  # not surfaced
+        ],
+    }
+    teams = {1: {"short_name": "ARS"}, 7: {"short_name": "AVL"}}
+    elements = {12: {"web_name": "Gyokeres"}, 4: {"web_name": "Timber"}, 575: {"web_name": "Konsa"}}
+    events = summarize_fixture_events(fixture, elements, teams)
+    assert events["goals"] == [{"player": "Gyokeres", "team": "ARS", "count": 1}]
+    assert {"player": "Timber", "team": "ARS", "count": 1} in events["yellow_cards"]
+    assert {"player": "Konsa", "team": "AVL", "count": 1} in events["yellow_cards"]
+    assert "bps" not in events  # only whitelisted identifiers become events
 
 
 def test_validate_currency_code_accepts_known_codes():
