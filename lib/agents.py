@@ -72,7 +72,16 @@ def create_coordinator_agent() -> Agent:
         ("news_agent", create_news_agent, "Summarizes current world and financial-market news."),
         ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
         ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
+        ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders and recurring proactive briefs, plus listing/cancelling them."),
     ]
+
+    if agent_enabled("scheduler_agent"):
+        instructions += (
+            "\n\nWhen the user asks to be reminded later or wants something done on a recurring "
+            "schedule ('przypomnij mi za...', 'codziennie o...', 'co rano dawaj mi...'), delegate to "
+            "the scheduler_agent to create/list/cancel scheduled jobs. The scheduled task itself will "
+            "later be run by you again automatically, so phrase the job's prompt as a complete request."
+        )
 
     if agent_enabled("memory_operator"):
         instructions += (
@@ -342,4 +351,46 @@ def create_fpl_agent():
     )
 
     logger.info("FPL agent created")
+    return agent
+
+@agents_decorator(name="scheduler_agent")
+def create_scheduler_agent():
+    name = "scheduler_agent"
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions=(
+            "You manage the user's scheduled jobs: one-off reminders and recurring proactive\
+            tasks that Jarvis runs on its own and then messages the user about.\
+            \
+            Tool guide:\
+            - create_scheduled_job: schedule a task. Provide EXACTLY ONE of:\
+              * delay_minutes - for relative one-offs ('za dwie godziny' -> 120, 'za pół godziny' -> 30);\
+                prefer this for 'za X' so you never do date maths yourself.\
+              * run_at (ISO date-time) - for an absolute one-off ('jutro o 9:00'); resolve the\
+                concrete date from the environment date/time block first.\
+              * cron_expr (5-field cron, Europe/Warsaw) - for anything recurring\
+                ('codziennie o 8' -> '0 8 * * *', 'w dni robocze o 8' -> '0 8 * * 1-5',\
+                'co godzinę' -> '0 * * * *'). Add `until` for 'przez miesiąc/tydzień'\
+                (an ISO date a month/week ahead) and/or `max_runs` to cap repetitions.\
+              The `prompt` you store is executed LATER by the whole assistant, so write it as a\
+              complete, self-contained request in Polish (what to fetch and what to tell the user),\
+              e.g. 'Podaj prognozę pogody na dziś w Warszawie, krótki przegląd najważniejszych\
+              wiadomości, oraz sprawdź, czy dziś grają zawodnicy z mojego składu FPL.'\
+            - list_scheduled_jobs: show active jobs (with ids) for the current conversation.\
+            - delete_scheduled_job: cancel a job by id (find it via list first).\
+            - update_scheduled_job: change a job's prompt or its until/max_runs limits; to change\
+              the timing itself, delete and re-create.\
+            \
+            You do not deliver anything yourself - the runner delivers on the same channel the user\
+            is on. Report back the created/updated job's id, human-readable schedule and next run so\
+            the composer can confirm it to the user. If a tool returns an Error, pass it on plainly."
+        ),
+        tools = TOOLS_BY_AGENT[name],
+        model = model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    logger.info("Scheduler agent created")
     return agent

@@ -209,6 +209,10 @@ pisałeś od >24 h). Sposoby obejścia, od najprostszego:
 Do 90% codziennego użytku (Ty inicjujesz rozmowę) temat okna Cię nie dotyczy;
 dotyczy tylko schedulera z briefami.
 
+> ✅ **Zaimplementowane.** Scheduler proaktywnych jobów już działa i wysyła właśnie
+> z tagiem `HUMAN_AGENT`, z automatycznym fallbackiem do `RESPONSE`. Model, konfigurację
+> i to, co ewentualnie doklikać w panelu, opisuje [SCHEDULER.md](SCHEDULER.md).
+
 ---
 
 ## Dlaczego nie potrzebujesz App Review

@@ -87,26 +87,66 @@ def _chunks(text: str, size: int = _MAX_MESSAGE_CHARS):
         yield text[i : i + size]
 
 
-async def send_message(page_access_token: str, recipient_id: str, text: str) -> None:
+async def send_message(
+    page_access_token: str,
+    recipient_id: str,
+    text: str,
+    messaging_type: str = "RESPONSE",
+    tag: str | None = None,
+) -> None:
     """Send a text reply to `recipient_id` via the Messenger Send API.
 
     Long replies are split into <=2000-char chunks sent in order. Network/API
-    errors are logged and swallowed so a delivery failure never crashes the
-    webhook (the inbound event was already acknowledged with 200).
+    errors are logged and swallowed so a delivery failure never crashes the caller
+    (for the webhook the inbound event was already acknowledged with 200).
+
+    Args:
+        messaging_type: "RESPONSE" for a normal reply inside the 24h window, or
+            "MESSAGE_TAG" for a proactive push outside it (requires `tag`).
+        tag: message tag when `messaging_type="MESSAGE_TAG"`, e.g. "HUMAN_AGENT"
+            (7-day window — used by the scheduler for proactive briefs/reminders).
+
+    Proactive fallback: if a tagged send is rejected (e.g. the tag/window is not
+    permitted), we retry the same chunk once as a plain RESPONSE — which succeeds
+    only if the 24h window happens to be open — and otherwise log a hint. This keeps
+    a scheduler push best-effort without ever raising.
     """
     params = {"access_token": page_access_token}
     async with httpx.AsyncClient(timeout=15) as client:
         for chunk in _chunks(text):
             payload = {
                 "recipient": {"id": recipient_id},
-                "messaging_type": "RESPONSE",
+                "messaging_type": messaging_type,
                 "message": {"text": chunk},
             }
+            if messaging_type == "MESSAGE_TAG" and tag:
+                payload["tag"] = tag
             try:
                 resp = await client.post(SEND_API_URL, params=params, json=payload)
                 if resp.status_code >= 400:
                     logger.error(
                         "Send API error %s: %s", resp.status_code, resp.text[:500]
                     )
+                    if messaging_type == "MESSAGE_TAG":
+                        logger.warning(
+                            "Tagged send rejected; retrying as RESPONSE (works only if "
+                            "the 24h window is open). If proactive pushes keep failing, "
+                            "message the bot once to reopen the window, or enable the "
+                            "HUMAN_AGENT tag in the Meta panel."
+                        )
+                        retry = {
+                            "recipient": {"id": recipient_id},
+                            "messaging_type": "RESPONSE",
+                            "message": {"text": chunk},
+                        }
+                        try:
+                            r2 = await client.post(SEND_API_URL, params=params, json=retry)
+                            if r2.status_code >= 400:
+                                logger.error(
+                                    "Send API RESPONSE fallback also failed %s: %s",
+                                    r2.status_code, r2.text[:500],
+                                )
+                        except httpx.HTTPError as exc:
+                            logger.error("Send API fallback request failed: %s", exc)
             except httpx.HTTPError as exc:
                 logger.error("Send API request failed: %s", exc)
