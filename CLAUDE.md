@@ -88,6 +88,7 @@ It also holds the Redis `Cache`.
 | `weather_agent` | Current weather + forecast | OpenWeather (current) + Open-Meteo (forecast) + date/time | Working |
 | `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
+| `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools |
 | `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn. Reminders/scheduler deferred. See `docs/MEMORY.md` |
 
 ## Running it
@@ -122,8 +123,10 @@ so e.g. `news_agent` really runs its configured model), `GOOGLE_MAPS_API_KEY`, `
 memory store falls back to the on-disk JSON file), `TRACING_ENABLED` +
 `MLFLOW_TRACKING_URI` + `MLFLOW_EXPERIMENT` (agent tracing; when the URI is unset or
 `TRACING_ENABLED` is falsy, tracing is a no-op). (Any
-Messenger/Telegram integration will add more.) Note: the Yahoo Finance quote source
-and the Frankfurter FX source are keyless.
+Messenger/Telegram integration will add more.) `FPL_ENTRY_ID` + `FPL_LEAGUE_ID` (the
+owner's Fantasy Premier League manager id and default mini-league, used by
+`fpl_agent`'s "my squad"/"my league" tools; the FPL API itself is keyless). Note: the
+Yahoo Finance quote source, the Frankfurter FX source and the FPL API are keyless.
 
 **Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
 auto-tracing for the OpenAI Agents SDK (`lib/tracing.py`, called once from
@@ -174,7 +177,11 @@ grow.
 - **Storage** — data lives in **Postgres** (docker-compose service) with the on-disk
   JSON files under `data/` kept as the migration source / easy-to-eyeball copy. The
   DB layer is isolated in `app/db/`; the `memory_operator` writes to Postgres when
-  `DATABASE_URL` is set (else the JSON file). Migrate with `python -m app.db.migrate`.
+  `DATABASE_URL` is set (else the JSON file). The `fpl_agent` also caches its reference
+  data (players/teams) in Postgres via `app/db/fpl_repo.py` (table `fpl_reference`, a
+  JSONB snapshot of `bootstrap-static` with a `FPL_CACHE_TTL_SECONDS` freshness window),
+  falling back to an in-process memo + the live API when no DB is configured.
+  Migrate with `python -m app.db.migrate`.
   See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.
 - **`.venv/` and `venv/`** both exist in the working tree but are gitignored; the

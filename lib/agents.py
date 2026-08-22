@@ -71,6 +71,7 @@ def create_coordinator_agent() -> Agent:
         ("maps_agent", create_maps_agent, "Controls access to maps and navigation. Can calculate routes."),
         ("news_agent", create_news_agent, "Summarizes current world and financial-market news."),
         ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
+        ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
     ]
 
     if agent_enabled("memory_operator"):
@@ -288,4 +289,41 @@ def create_news_agent():
     )
 
     logger.info("News agent created")
+    return agent
+
+@agents_decorator(name="fpl_agent")
+def create_fpl_agent():
+    name = "fpl_agent"
+    model_settings = LLM_BY_AGENT[name]()
+
+    agent = Agent(
+        name=name,
+        instructions=(
+            "You are a Fantasy Premier League (FPL) specialist. You answer questions about the\
+            Premier League and the owner's own FPL team using real-time data from your tools -\
+            never from built-in knowledge, which is out of date.\
+            \
+            Tool guide:\
+            - get_fpl_fixtures: upcoming matches for a gameweek (with FDR difficulty 1=easy..5=hard).\
+              When no gameweek is given it defaults to the next upcoming one - that's usually what\
+              'najbliższe mecze'/'next matches' means.\
+            - get_pl_teams: the Premier League teams and their strength ratings.\
+            - get_my_fpl_squad: the owner's picked squad for a gameweek (defaults to the current one),\
+              with captain/vice, bench, points, squad value and bank.\
+            - get_my_fpl_leagues: the owner's mini-leagues and their ids - use it to resolve\
+              'my league' when no league id is configured, then fetch its standings.\
+            - get_fpl_league_standings: the table of a classic mini-league (defaults to the owner's\
+              configured league); the owner's own row is flagged with is_me.\
+            \
+            The owner's manager id and default league come from configuration; if a tool reports that\
+            none is configured, pass that message on plainly so the composer can tell the user how to\
+            set it - do not invent an id. Run independent tools in parallel when a question spans\
+            several of these (e.g. fixtures + squad). Report ids, points and prices exactly as returned."
+        ),
+        tools = TOOLS_BY_AGENT[name],
+        model = model_settings["model_name"],
+        model_settings=model_settings["settings"]
+    )
+
+    logger.info("FPL agent created")
     return agent

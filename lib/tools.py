@@ -3,7 +3,9 @@ from lib.cache import Cache, Ctx
 from lib.memory import memory
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tuya_link import manager, SCAN_TIMEOUT
-from lib.tools_utils import simplify_directions_response, get_forecast, validate_currency_code, normalize_departure_time
+from lib.tools_utils import (
+    simplify_directions_response, get_forecast, validate_currency_code, normalize_departure_time,
+    fetch_fpl, fetch_fpl_bootstrap, index_bootstrap, resolve_gameweek, relevant_gameweek, describe_player)
 from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
@@ -945,6 +947,319 @@ async def delete_memory(ctx: RunContextWrapper[Ctx], entry_id: str) -> dict:
     """
     logging.info(f"Deleting long-term memory {entry_id}")
     return {"deleted": entry_id} if memory.delete(entry_id) else {"Error": f"No memory entry with id '{entry_id}'"}
+
+# ------- fpl agent (Fantasy Premier League) -------
+#
+# All data comes from the keyless public FPL API. Numeric team/player/gameweek ids are
+# resolved to human-readable names server-side (via the bootstrap-static reference
+# data), so the model — and the user — only ever deal with names, not raw ids.
+#
+# The owner's own manager ("entry") id and default league id are read from the env
+# (FPL_ENTRY_ID / FPL_LEAGUE_ID), like the other API config. Each tool also accepts an
+# explicit id override for ad-hoc lookups.
+
+def _fpl_entry_id(override: Optional[int]) -> Optional[int]:
+    if override is not None:
+        return int(override)
+    raw = os.getenv("FPL_ENTRY_ID")
+    return int(raw) if raw and raw.strip().isdigit() else None
+
+
+def _fpl_league_id(override: Optional[int]) -> Optional[int]:
+    if override is not None:
+        return int(override)
+    raw = os.getenv("FPL_LEAGUE_ID")
+    return int(raw) if raw and raw.strip().isdigit() else None
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_fpl_fixtures(ctx: RunContextWrapper[Ctx], gameweek: Optional[int] = None) -> dict:
+    """
+    Description:
+        Lists the Premier League fixtures (matches) for a Fantasy Premier League
+        gameweek, with each team's official FDR difficulty rating (1 = easiest,
+        5 = hardest) and kickoff time. Use this to answer "what are today's / the
+        upcoming matches / this round" questions.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    gameweek: Optional[int] = None
+        The gameweek number to list fixtures for. If omitted, the round currently in
+        play is used: the current gameweek while it is still running (which is the one
+        that contains "today's" matches), or the next gameweek once the current one has
+        finished. To pinpoint a specific day, read each fixture's kickoff_time and
+        compare it to today's date from the environment context.
+
+    Output:
+        JSON object with the resolved gameweek and a list of fixtures. Each fixture
+        gives the home/away team names, their difficulty ratings, kickoff time, and —
+        if the match has been played — the final score.
+    """
+    logger.info(f"Getting FPL fixtures for gameweek={gameweek or 'in-play'}")
+    try:
+        bootstrap = await fetch_fpl_bootstrap()
+        gw = gameweek if gameweek is not None else relevant_gameweek(bootstrap)
+        if gw is None:
+            return {"Error": "Could not determine a gameweek (no events in the FPL calendar)."}
+        teams_by_id, _, _ = index_bootstrap(bootstrap)
+        fixtures = await fetch_fpl(f"fixtures/?event={gw}")
+    except Exception as e:
+        logger.error("Error while getting FPL fixtures", exc_info=True)
+        return {"Message": "Error while getting FPL fixtures", "Error": str(e)}
+
+    matches = []
+    for f in fixtures:
+        home = teams_by_id.get(f.get("team_h"), {})
+        away = teams_by_id.get(f.get("team_a"), {})
+        match = {
+            "home": home.get("name"),
+            "away": away.get("name"),
+            "home_difficulty": f.get("team_h_difficulty"),
+            "away_difficulty": f.get("team_a_difficulty"),
+            "kickoff_time": f.get("kickoff_time"),
+            "finished": f.get("finished"),
+        }
+        if f.get("finished") or f.get("started"):
+            match["score"] = f"{f.get('team_h_score')}-{f.get('team_a_score')}"
+        matches.append(match)
+
+    return {"gameweek": gw, "fixtures_count": len(matches), "fixtures": matches}
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_pl_teams(ctx: RunContextWrapper[Ctx]) -> dict:
+    """
+    Description:
+        Lists all Premier League teams in the current Fantasy Premier League season,
+        with their short codes and FPL strength ratings (overall/attack/defence,
+        split home/away, on a 1-5 scale). Use this for questions about the teams
+        themselves (who is in the league, relative strength).
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    Output:
+        JSON object with a list of teams (name, short_name, and strength ratings).
+    """
+    logger.info("Getting Premier League teams")
+    try:
+        bootstrap = await fetch_fpl_bootstrap()
+    except Exception as e:
+        logger.error("Error while getting PL teams", exc_info=True)
+        return {"Message": "Error while getting Premier League teams", "Error": str(e)}
+
+    teams = [
+        {
+            "name": t.get("name"),
+            "short_name": t.get("short_name"),
+            "strength_overall_home": t.get("strength_overall_home"),
+            "strength_overall_away": t.get("strength_overall_away"),
+            "strength_attack_home": t.get("strength_attack_home"),
+            "strength_attack_away": t.get("strength_attack_away"),
+            "strength_defence_home": t.get("strength_defence_home"),
+            "strength_defence_away": t.get("strength_defence_away"),
+        }
+        for t in bootstrap.get("teams", [])
+    ]
+    return {"teams_count": len(teams), "teams": teams}
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_my_fpl_squad(ctx: RunContextWrapper[Ctx],
+                           gameweek: Optional[int] = None,
+                           entry_id: Optional[int] = None) -> dict:
+    """
+    Description:
+        Returns the owner's Fantasy Premier League squad (the 15 players picked) for a
+        gameweek, with each player resolved to name/team/position, the captain and
+        vice-captain marked, and the starting XI vs. bench split. Also reports that
+        gameweek's points, squad value and money in the bank.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    gameweek: Optional[int] = None
+        The gameweek to fetch the squad for. If omitted, the current gameweek is used.
+        Note: a squad only becomes public after that gameweek's deadline has passed.
+
+    entry_id: Optional[int] = None
+        The FPL manager ("entry") id to look up. If omitted, the owner's own id from
+        the FPL_ENTRY_ID environment variable is used.
+
+    Output:
+        JSON object with the resolved gameweek, a per-gameweek summary (points, bank,
+        squad value) and the list of picked players (starting XI first, then bench),
+        each flagged with captaincy and whether they are on the bench.
+    """
+    eid = _fpl_entry_id(entry_id)
+    if eid is None:
+        return {
+            "Error": "No FPL manager id is configured.",
+            "Tip": "Set FPL_ENTRY_ID in the environment (your manager id, e.g. from the "
+                   "URL fantasy.premierleague.com/entry/<ID>/event/1) or pass entry_id explicitly.",
+        }
+    logger.info(f"Getting FPL squad for entry={eid}, gameweek={gameweek or 'current'}")
+    try:
+        bootstrap = await fetch_fpl_bootstrap()
+        gw = resolve_gameweek(bootstrap, gameweek, prefer="current")
+        if gw is None:
+            return {"Error": "Could not determine a gameweek (no events in the FPL calendar)."}
+        teams_by_id, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
+        picks_data = await fetch_fpl(f"entry/{eid}/event/{gw}/picks/")
+    except Exception as e:
+        logger.error("Error while getting FPL squad", exc_info=True)
+        return {
+            "Message": "Error while getting the FPL squad",
+            "Error": str(e),
+            "Tip": "The squad is only public after that gameweek's deadline. Check the "
+                   "manager id and that the gameweek has started.",
+        }
+
+    if isinstance(picks_data, dict) and picks_data.get("detail"):
+        return {"Error": f"FPL API: {picks_data['detail']}", "entry_id": eid, "gameweek": gw}
+
+    history = picks_data.get("entry_history", {}) or {}
+    players = []
+    for p in picks_data.get("picks", []):
+        element = elements_by_id.get(p.get("element"), {})
+        info = describe_player(element, teams_by_id, positions_by_id)
+        # positions 1-11 are the starting XI, 12-15 the bench (in bench order)
+        info["on_bench"] = p.get("position", 0) > 11
+        info["is_captain"] = p.get("is_captain", False)
+        info["is_vice_captain"] = p.get("is_vice_captain", False)
+        info["multiplier"] = p.get("multiplier")
+        players.append(info)
+
+    return {
+        "entry_id": eid,
+        "gameweek": gw,
+        "summary": {
+            "gameweek_points": history.get("points"),
+            "total_points": history.get("total_points"),
+            "overall_rank": history.get("overall_rank"),
+            "bank": round(history.get("bank", 0) / 10, 1),          # £m
+            "squad_value": round(history.get("value", 0) / 10, 1),  # £m
+            "transfers_made": history.get("event_transfers"),
+        },
+        "squad": players,
+    }
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_my_fpl_leagues(ctx: RunContextWrapper[Ctx], entry_id: Optional[int] = None) -> dict:
+    """
+    Description:
+        Lists the classic (points-based) mini-leagues the owner's Fantasy Premier League
+        manager is a member of, with the manager's current rank in each. Use this to
+        discover league ids (e.g. to then fetch a specific league's standings) or to
+        answer "which leagues am I in / what's my rank".
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    entry_id: Optional[int] = None
+        The FPL manager ("entry") id. If omitted, the owner's own id from the
+        FPL_ENTRY_ID environment variable is used.
+
+    Output:
+        JSON object with the manager's name and a list of their classic leagues
+        (league id, name, and the manager's rank in it).
+    """
+    eid = _fpl_entry_id(entry_id)
+    if eid is None:
+        return {
+            "Error": "No FPL manager id is configured.",
+            "Tip": "Set FPL_ENTRY_ID in the environment or pass entry_id explicitly.",
+        }
+    logger.info(f"Getting FPL leagues for entry={eid}")
+    try:
+        entry = await fetch_fpl(f"entry/{eid}/")
+    except Exception as e:
+        logger.error("Error while getting FPL leagues", exc_info=True)
+        return {"Message": "Error while getting the manager's leagues", "Error": str(e)}
+
+    leagues = [
+        {"id": l.get("id"), "name": l.get("name"), "my_rank": l.get("entry_rank")}
+        for l in (entry.get("leagues", {}) or {}).get("classic", [])
+    ]
+    return {
+        "manager_name": f"{entry.get('player_first_name', '')} {entry.get('player_last_name', '')}".strip(),
+        "team_name": entry.get("name"),
+        "leagues_count": len(leagues),
+        "leagues": leagues,
+    }
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_fpl_league_standings(ctx: RunContextWrapper[Ctx],
+                                   league_id: Optional[int] = None,
+                                   limit: int = 25) -> dict:
+    """
+    Description:
+        Returns the standings (table) of a Fantasy Premier League classic mini-league:
+        the ranked managers with their team name, total points and last-gameweek
+        points. The owner's own row is flagged. Use this for "how's my league doing /
+        what's the table in my league".
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    league_id: Optional[int] = None
+        The classic league id to fetch. If omitted, the owner's default league from the
+        FPL_LEAGUE_ID environment variable is used. Use get_my_fpl_leagues to discover
+        league ids.
+
+    limit: int = 25
+        Maximum number of ranked entries to return (from the top of the table).
+
+    Output:
+        JSON object with the league name and the ranked standings (rank, team name,
+        manager name, total points, last-gameweek points), with the owner's row marked.
+    """
+    lid = _fpl_league_id(league_id)
+    if lid is None:
+        return {
+            "Error": "No FPL league id is configured.",
+            "Tip": "Set FPL_LEAGUE_ID in the environment, pass league_id explicitly, or call "
+                   "get_my_fpl_leagues to find your league ids.",
+        }
+    logger.info(f"Getting FPL standings for league={lid}")
+    try:
+        data = await fetch_fpl(f"leagues-classic/{lid}/standings/")
+    except Exception as e:
+        logger.error("Error while getting FPL league standings", exc_info=True)
+        return {"Message": "Error while getting the league standings", "Error": str(e)}
+
+    my_entry = _fpl_entry_id(None)
+    results = (data.get("standings", {}) or {}).get("results", [])
+    table = [
+        {
+            "rank": r.get("rank"),
+            "team_name": r.get("entry_name"),
+            "manager": r.get("player_name"),
+            "total_points": r.get("total"),
+            "gameweek_points": r.get("event_total"),
+            "is_me": my_entry is not None and r.get("entry") == my_entry,
+        }
+        for r in results[: max(1, limit)]
+    ]
+    return {
+        "league_id": lid,
+        "league_name": (data.get("league", {}) or {}).get("name"),
+        "entries_shown": len(table),
+        "standings": table,
+    }
 
 
 

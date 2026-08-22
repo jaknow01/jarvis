@@ -56,6 +56,16 @@ SCHEMA_STATEMENTS = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    # Fantasy Premier League reference data (the bootstrap-static snapshot: teams,
+    # players, positions, gameweeks). Cached wholesale as JSONB with a fetch timestamp
+    # so the fpl_agent can resolve player/team ids without hitting the API every turn.
+    """
+    CREATE TABLE IF NOT EXISTS fpl_reference (
+        id         TEXT PRIMARY KEY,
+        data       JSONB NOT NULL,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 ]
 
 

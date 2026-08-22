@@ -7,8 +7,63 @@ from lib.tools_utils import (
     validate_currency_code,
     simplify_directions_response,
     normalize_departure_time,
+    relevant_gameweek,
+    resolve_gameweek,
+    describe_player,
     WARSAW_TZ,
 )
+
+
+def _events(current_id, current_finished, next_id):
+    """Minimal bootstrap 'events' fixture for gameweek-resolution tests."""
+    events = []
+    if current_id is not None:
+        events.append({"id": current_id, "is_current": True, "is_next": False, "finished": current_finished})
+    if next_id is not None:
+        events.append({"id": next_id, "is_current": False, "is_next": True, "finished": False})
+    return {"events": events}
+
+
+def test_relevant_gameweek_prefers_current_while_it_is_live():
+    # A current, unfinished GW is the round "today's" matches belong to (the bug: we
+    # used to return the NEXT gameweek here, contradicting the squad lookup).
+    bs = _events(current_id=1, current_finished=False, next_id=2)
+    assert relevant_gameweek(bs) == 1
+
+
+def test_relevant_gameweek_moves_to_next_once_current_finished():
+    bs = _events(current_id=1, current_finished=True, next_id=2)
+    assert relevant_gameweek(bs) == 2
+
+
+def test_relevant_gameweek_falls_back_to_current_at_end_of_season():
+    bs = _events(current_id=38, current_finished=True, next_id=None)
+    assert relevant_gameweek(bs) == 38
+
+
+def test_relevant_gameweek_none_when_no_events():
+    assert relevant_gameweek({"events": []}) is None
+
+
+def test_resolve_gameweek_returns_explicit_gameweek_as_is():
+    bs = _events(current_id=1, current_finished=False, next_id=2)
+    assert resolve_gameweek(bs, 7) == 7
+
+
+def test_describe_player_flattens_and_scales_price():
+    element = {
+        "web_name": "Salah", "first_name": "Mohamed", "second_name": "Salah",
+        "team": 12, "element_type": 3, "now_cost": 145, "total_points": 20,
+        "form": "5.0", "selected_by_percent": "40.0", "status": "a", "news": "",
+    }
+    teams = {12: {"name": "Liverpool", "short_name": "LIV"}}
+    positions = {3: {"singular_name_short": "MID"}}
+    out = describe_player(element, teams, positions)
+    assert out["name"] == "Salah"
+    assert out["team_short"] == "LIV"
+    assert out["position"] == "MID"
+    assert out["price"] == 14.5  # now_cost is in tenths of £m
+    assert out["news"] is None   # empty news normalized to None
 
 
 def test_validate_currency_code_accepts_known_codes():
