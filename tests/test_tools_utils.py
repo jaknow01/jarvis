@@ -98,6 +98,27 @@ def test_player_playing_status_distinguishes_bench_from_pitch():
     assert _player_playing_status(None, {"starts": 0, "minutes": 0}) == "match not started"
 
 
+def test_find_players_by_name_exact_web_name_wins():
+    from lib.tools_utils import find_players_by_name
+    bs = {"elements": [
+        {"id": 411, "web_name": "Haaland", "first_name": "Erling", "second_name": "Haaland"},
+        {"id": 999, "web_name": "Nkunku", "first_name": "Christopher", "second_name": "Haaland-like"},
+    ]}
+    out = find_players_by_name(bs, "Haaland")
+    assert [e["id"] for e in out] == [411]  # exact web_name match returned alone
+
+
+def test_find_players_by_name_partial_returns_candidates():
+    from lib.tools_utils import find_players_by_name
+    bs = {"elements": [
+        {"id": 1, "web_name": "B.Fernandes", "first_name": "Bruno", "second_name": "Fernandes"},
+        {"id": 2, "web_name": "Fernández", "first_name": "Enzo", "second_name": "Fernández"},
+    ]}
+    out = find_players_by_name(bs, "bruno")
+    assert [e["id"] for e in out] == [1]
+    assert find_players_by_name(bs, "") == []
+
+
 def test_validate_currency_code_accepts_known_codes():
     assert validate_currency_code("USD") is True
     assert validate_currency_code("PLN") is True

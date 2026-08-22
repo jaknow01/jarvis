@@ -350,6 +350,25 @@ def summarize_fixture_events(fixture: dict, elements_by_id: dict, teams_by_id: d
     return events
 
 
+def find_players_by_name(bootstrap: dict, query: str) -> list[dict]:
+    """Resolve a free-text player name (e.g. 'Haaland', 'Dalot', 'Bruno Fernandes')
+    to matching element records, best match first. An exact web-name match wins and is
+    returned alone; otherwise all substring matches (across web/first/second name) are
+    returned so the caller can disambiguate."""
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    exact, partial = [], []
+    for e in bootstrap.get("elements", []):
+        web = (e.get("web_name") or "").lower()
+        haystack = " ".join([web, (e.get("first_name") or ""), (e.get("second_name") or "")]).lower()
+        if web == q:
+            exact.append(e)
+        elif q in haystack:
+            partial.append(e)
+    return exact or partial
+
+
 def describe_player(element: dict, teams_by_id: dict, positions_by_id: dict) -> dict:
     """Flatten one 'element' (player) record into a compact, name-based summary."""
     team = teams_by_id.get(element.get("team"), {})

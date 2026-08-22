@@ -324,6 +324,12 @@ def create_fpl_agent():
               'my league' when no league id is configured, then fetch its standings.\
             - get_fpl_league_standings: the table of a classic mini-league (defaults to the owner's\
               configured league); the owner's own row is flagged with is_me.\
+            - who_owns_player_in_league: which managers in a mini-league own a given player, and how\
+              many - for 'czy ktoś jeszcze ma Dalota', 'ile osób ma Haalanda'. If it returns\
+              candidates (ambiguous name), ask the user which player they meant before retrying.\
+            - get_league_ownership: the most-owned/most-captained players across a mini-league - for\
+              'co popularne w mojej lidze', 'template'. Both scan real rivals' squads for the given\
+              gameweek and default to the owner's configured league.\
             \
             The owner's manager id and default league come from configuration; if a tool reports that\
             none is configured, pass that message on plainly so the composer can tell the user how to\

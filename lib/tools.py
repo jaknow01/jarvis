@@ -6,7 +6,7 @@ from lib.tuya_link import manager, SCAN_TIMEOUT
 from lib.tools_utils import (
     simplify_directions_response, get_forecast, validate_currency_code, normalize_departure_time,
     fetch_fpl, fetch_fpl_bootstrap, index_bootstrap, resolve_gameweek, relevant_gameweek,
-    describe_player, summarize_fixture_events)
+    describe_player, summarize_fixture_events, find_players_by_name)
 from typing import List, Literal, Optional, Union
 from lib.smart_device import SmartDevice, RGB, Mode
 from lib.tools_utils import simplify_directions_response
@@ -1473,6 +1473,248 @@ async def get_fpl_live(ctx: RunContextWrapper[Ctx],
         }
 
     return result
+
+
+# Cap on how many managers a league scan will fetch squads for, and how many of those
+# picks requests run at once (politeness to the unofficial API). A personal mini-league
+# fits well within the cap; huge public leagues are scanned from the top by rank.
+_LEAGUE_SCAN_DEFAULT = 50
+_LEAGUE_SCAN_CONCURRENCY = 8
+
+
+async def _fetch_league_squads(league_id: int, gw: int, max_managers: int):
+    """Fetch a league's managers (deduped by entry id, ordered by rank) and each one's
+    squad for gameweek `gw`. Returns (league_name, [(manager_row, picks|None)]). Picks
+    are None for a manager whose squad could not be fetched. Bounded concurrency."""
+    managers: dict = {}  # entry id -> row (dedupe: standings pages can overlap on ties)
+    league_name = None
+    page = 1
+    while len(managers) < max_managers:
+        data = await fetch_fpl(f"leagues-classic/{league_id}/standings/?page_standings={page}")
+        league_name = league_name or (data.get("league", {}) or {}).get("name")
+        standings = data.get("standings", {}) or {}
+        results = standings.get("results", []) or []
+        if not results:
+            break
+        for row in results:
+            managers.setdefault(row.get("entry"), row)
+        if not standings.get("has_next"):
+            break
+        page += 1
+
+    ordered = sorted(managers.values(), key=lambda r: r.get("rank") or 10**9)[:max_managers]
+
+    sem = asyncio.Semaphore(_LEAGUE_SCAN_CONCURRENCY)
+
+    async def _picks_for(row):
+        async with sem:
+            try:
+                pd = await fetch_fpl(f"entry/{row.get('entry')}/event/{gw}/picks/")
+                return row, pd.get("picks", [])
+            except Exception:
+                return row, None
+
+    pairs = await asyncio.gather(*(_picks_for(r) for r in ordered))
+    return league_name, pairs
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def who_owns_player_in_league(ctx: RunContextWrapper[Ctx],
+                                    player: str,
+                                    league_id: Optional[int] = None,
+                                    gameweek: Optional[int] = None,
+                                    max_managers: int = _LEAGUE_SCAN_DEFAULT) -> dict:
+    """
+    Description:
+        Finds which managers in a Fantasy Premier League mini-league own a given player,
+        and how many. Answers questions like "does anyone else in my league have Dalot"
+        or "how many people have Haaland". It scans each manager's squad for the
+        gameweek, so it also knows who has captained the player or has him on their bench.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    player: str
+        The player's name (e.g. 'Haaland', 'Dalot', 'Bruno Fernandes'). Resolved against
+        the FPL player list; if the name is ambiguous the tool returns the candidates so
+        you can ask the user which one they meant.
+
+    league_id: Optional[int] = None
+        The classic league to scan. If omitted, the owner's default league from
+        FPL_LEAGUE_ID is used. Use get_my_fpl_leagues to discover league ids.
+
+    gameweek: Optional[int] = None
+        The gameweek whose squads to check. If omitted, the current gameweek is used.
+
+    max_managers: int = 50
+        Safety cap on how many managers (from the top of the table by rank) to scan.
+
+    Output:
+        JSON object with the resolved player, the league, how many of the scanned
+        managers own the player (with in-league ownership %) and the list of owners
+        (manager, team name, rank, whether captained or benched by them).
+    """
+    lid = _fpl_league_id(league_id)
+    if lid is None:
+        return {
+            "Error": "No FPL league id is configured.",
+            "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
+        }
+    logger.info(f"Scanning league {lid} for owners of '{player}'")
+    try:
+        bootstrap = await fetch_fpl_bootstrap()
+        gw = resolve_gameweek(bootstrap, gameweek, prefer="current")
+        if gw is None:
+            return {"Error": "Could not determine a gameweek (no events in the FPL calendar)."}
+        teams_by_id, elements_by_id, _ = index_bootstrap(bootstrap)
+    except Exception as e:
+        logger.error("Error while preparing league ownership scan", exc_info=True)
+        return {"Message": "Error while scanning the league", "Error": str(e)}
+
+    matches = find_players_by_name(bootstrap, player)
+    if not matches:
+        return {"Error": f"No FPL player matched '{player}'."}
+    if len(matches) > 1:
+        return {
+            "ambiguous_player": player,
+            "candidates": [
+                {"name": m.get("web_name"),
+                 "full_name": f"{m.get('first_name','')} {m.get('second_name','')}".strip(),
+                 "team": teams_by_id.get(m.get("team"), {}).get("short_name")}
+                for m in matches[:10]
+            ],
+            "Tip": "Ask the user which player they meant, then call again with a more specific name.",
+        }
+
+    target = matches[0]
+    target_id = target["id"]
+    try:
+        league_name, pairs = await _fetch_league_squads(lid, gw, max(1, max_managers))
+    except Exception as e:
+        logger.error("Error while fetching league squads", exc_info=True)
+        return {"Message": "Error while fetching the league squads", "Error": str(e)}
+
+    owners, scanned, failed = [], 0, 0
+    for row, picks in pairs:
+        if picks is None:
+            failed += 1
+            continue
+        scanned += 1
+        pick = next((p for p in picks if p.get("element") == target_id), None)
+        if pick:
+            owners.append({
+                "manager": row.get("player_name"),
+                "team_name": row.get("entry_name"),
+                "rank": row.get("rank"),
+                "is_captain": pick.get("is_captain", False),
+                "on_their_bench": pick.get("position", 0) > 11,
+            })
+
+    owners.sort(key=lambda o: o.get("rank") or 10**9)
+    return {
+        "player": target.get("web_name"),
+        "team": teams_by_id.get(target.get("team"), {}).get("short_name"),
+        "league_id": lid,
+        "league_name": league_name,
+        "gameweek": gw,
+        "managers_scanned": scanned,
+        "owner_count": len(owners),
+        "ownership_pct_in_league": round(100 * len(owners) / scanned, 1) if scanned else None,
+        "owners": owners,
+        "unavailable_squads": failed or None,
+    }
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_league_ownership(ctx: RunContextWrapper[Ctx],
+                               league_id: Optional[int] = None,
+                               gameweek: Optional[int] = None,
+                               top_n: int = 20,
+                               max_managers: int = _LEAGUE_SCAN_DEFAULT) -> dict:
+    """
+    Description:
+        Aggregates squad ownership across a Fantasy Premier League mini-league: which
+        players are the most-owned within the league (effective in-league ownership) and
+        how often each is captained. Use it for "what's popular in my league / most
+        picked players / template" questions. To check one specific player instead, use
+        who_owns_player_in_league.
+
+    Parameters:
+    ctx : RunContextWrapper[Ctx]
+        Context in which the tool operates
+
+    league_id: Optional[int] = None
+        The classic league to scan. If omitted, the owner's default league from
+        FPL_LEAGUE_ID is used.
+
+    gameweek: Optional[int] = None
+        The gameweek whose squads to aggregate. If omitted, the current gameweek is used.
+
+    top_n: int = 20
+        How many of the most-owned players to return.
+
+    max_managers: int = 50
+        Safety cap on how many managers (from the top of the table by rank) to scan.
+
+    Output:
+        JSON object with the league, how many managers were scanned and the most-owned
+        players (name, team, position, how many managers own them, in-league ownership %
+        and how many captained them).
+    """
+    lid = _fpl_league_id(league_id)
+    if lid is None:
+        return {
+            "Error": "No FPL league id is configured.",
+            "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
+        }
+    logger.info(f"Aggregating ownership for league {lid}")
+    try:
+        bootstrap = await fetch_fpl_bootstrap()
+        gw = resolve_gameweek(bootstrap, gameweek, prefer="current")
+        if gw is None:
+            return {"Error": "Could not determine a gameweek (no events in the FPL calendar)."}
+        teams_by_id, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
+        league_name, pairs = await _fetch_league_squads(lid, gw, max(1, max_managers))
+    except Exception as e:
+        logger.error("Error while aggregating league ownership", exc_info=True)
+        return {"Message": "Error while aggregating league ownership", "Error": str(e)}
+
+    owned: dict = {}
+    captained: dict = {}
+    scanned = 0
+    for _, picks in pairs:
+        if picks is None:
+            continue
+        scanned += 1
+        for p in picks:
+            el = p.get("element")
+            owned[el] = owned.get(el, 0) + 1
+            if p.get("is_captain"):
+                captained[el] = captained.get(el, 0) + 1
+
+    ranked = sorted(owned.items(), key=lambda kv: kv[1], reverse=True)[: max(1, top_n)]
+    top_owned = []
+    for el, count in ranked:
+        element = elements_by_id.get(el, {})
+        top_owned.append({
+            "name": element.get("web_name"),
+            "team": teams_by_id.get(element.get("team"), {}).get("short_name"),
+            "position": positions_by_id.get(element.get("element_type"), {}).get("singular_name_short"),
+            "owned_by": count,
+            "ownership_pct_in_league": round(100 * count / scanned, 1) if scanned else None,
+            "captained_by": captained.get(el, 0),
+        })
+
+    return {
+        "league_id": lid,
+        "league_name": league_name,
+        "gameweek": gw,
+        "managers_scanned": scanned,
+        "top_owned": top_owned,
+    }
 
 
 

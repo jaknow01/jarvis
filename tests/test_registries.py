@@ -31,6 +31,8 @@ def test_fpl_agent_has_its_tools():
         "get_my_fpl_leagues",
         "get_fpl_league_standings",
         "get_fpl_live",
+        "who_owns_player_in_league",
+        "get_league_ownership",
     } <= names
 
 
