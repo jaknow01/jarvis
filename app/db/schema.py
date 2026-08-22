@@ -66,6 +66,33 @@ SCHEMA_STATEMENTS = [
         fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    # Scheduled jobs written by the scheduler_agent: a natural-language prompt for
+    # Jarvis, when to run it (one-shot run_at or a cron_expr), and where to deliver
+    # the reply (channel + target). The runner fires due jobs out of band. `until` is
+    # stored as TEXT (`until_spec`) to preserve a date-only inclusive boundary as given.
+    """
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+        id              TEXT PRIMARY KEY,
+        prompt          TEXT NOT NULL,
+        channel         TEXT NOT NULL,
+        target          TEXT,
+        conversation_id TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        cron_expr       TEXT,
+        run_at          TIMESTAMPTZ,
+        next_run_at     TIMESTAMPTZ,
+        until_spec      TEXT,
+        max_runs        INTEGER,
+        run_count       INTEGER NOT NULL DEFAULT 0,
+        last_run_at     TIMESTAMPTZ,
+        status          TEXT NOT NULL DEFAULT 'active',
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS scheduled_jobs_due
+        ON scheduled_jobs (status, next_run_at)
+    """,
 ]
 
 

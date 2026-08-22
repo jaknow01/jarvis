@@ -16,6 +16,7 @@ The endpoint is transport-only: it hands each inbound text to the same
 conversation keeps its own continuity.
 """
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -33,6 +34,7 @@ from lib.messenger import (
     verify_challenge,
     verify_signature,
 )
+from lib.scheduler_runner import run_scheduler_loop, scheduler_enabled
 from lib.tracing import setup_tracing
 
 load_dotenv()
@@ -58,8 +60,25 @@ async def lifespan(app: FastAPI):
             "Messenger env incomplete — set MESSENGER_VERIFY_TOKEN, "
             "MESSENGER_APP_SECRET, MESSENGER_PAGE_ACCESS_TOKEN."
         )
+
+    # Start the proactive scheduler loop (the alternate, system-driven entry path).
+    # In-process asyncio task, cancelled on shutdown; disabled via SCHEDULER_ENABLED.
+    scheduler_task = None
+    if scheduler_enabled():
+        scheduler_task = asyncio.create_task(run_scheduler_loop())
+        logger.info("Scheduler loop task started")
+    else:
+        logger.info("Scheduler disabled via SCHEDULER_ENABLED")
+
     logger.info("Messenger webhook ready")
     yield
+
+    if scheduler_task:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(lifespan=lifespan)

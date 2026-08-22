@@ -89,7 +89,8 @@ It also holds the Redis `Cache`.
 | `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
 | `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools |
-| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn. Reminders/scheduler deferred. See `docs/MEMORY.md` |
+| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn. See `docs/MEMORY.md` |
+| `scheduler_agent` | Proactive cron jobs / reminders | JSON or Postgres store (`lib/scheduler.py`): create/list/delete/update scheduled jobs | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. See `docs/SCHEDULER.md` |
 
 ## Running it
 
@@ -127,6 +128,10 @@ Messenger/Telegram integration will add more.) `FPL_ENTRY_ID` + `FPL_LEAGUE_ID` 
 owner's Fantasy Premier League manager id and default mini-league, used by
 `fpl_agent`'s "my squad"/"my league" tools; the FPL API itself is keyless). Note: the
 Yahoo Finance quote source, the Frankfurter FX source and the FPL API are keyless.
+`SCHEDULER_ENABLED` + `SCHEDULER_TICK_SECONDS` + `SCHEDULER_TIMEZONE` (the proactive
+scheduler loop: master switch — same falsy-parsing as `agent_enabled()`, default on;
+tick interval in seconds, default 30; timezone for cron/`run_at`, default Europe/Warsaw.
+Proactive delivery reuses `MESSENGER_PAGE_ACCESS_TOKEN`). See `docs/SCHEDULER.md`.
 
 **Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
 auto-tracing for the OpenAI Agents SDK (`lib/tracing.py`, called once from
@@ -181,6 +186,9 @@ grow.
   data (players/teams) in Postgres via `app/db/fpl_repo.py` (table `fpl_reference`, a
   JSONB snapshot of `bootstrap-static` with a `FPL_CACHE_TTL_SECONDS` freshness window),
   falling back to an in-process memo + the live API when no DB is configured.
+  The `scheduler_agent` likewise persists jobs to Postgres (table `scheduled_jobs`, via
+  `app/db/scheduler_repo.py`) when `DATABASE_URL` is set, else to
+  `data/scheduler_data/jobs.json` — same JSON/Postgres backend-selection pattern as memory.
   Migrate with `python -m app.db.migrate`.
   See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.
@@ -198,9 +206,12 @@ Rough priority order to reach a usable end state:
    save/get/update/delete tools, wired into the coordinator with a profile injected
    into its prompt each turn. See `docs/MEMORY.md`. Next: implicit habit learning,
    and migrating scattered assumptions (e.g. the maps "fast walker") into it.
-3. **Scheduler** — a mechanism to deliver messages to the agent "out of band"
-   (cron-like jobs). Enables proactive briefs and reminders; the `memory_operator`
-   is the intended owner of creating/editing scheduled entries.
+3. ~~**Scheduler**~~ — **done (v1):** a `scheduler_agent` creates cron-like jobs
+   (`lib/scheduler.py`, JSON/Postgres store), and `lib/scheduler_runner.py` — an
+   in-process asyncio loop started in the webhook `lifespan` — fires due jobs "out of
+   band" by re-entering `engine.handle_message(..., origin="system")` and delivering
+   the reply (Messenger `HUMAN_AGENT` tag, or the log). See `docs/SCHEDULER.md`. Next:
+   richer NL→schedule parsing, editing jobs from other channels, One-Time Notification.
 4. **Deepen agents** — e.g. finance analysis beyond raw quotes, richer memory.
 
 Done in this pass (polish): implemented `get_current_date_and_time`, added Yahoo

@@ -33,3 +33,7 @@ class Ctx():
         self.devices: dict[str, SmartDevice] = {}
         self.known_adresses: dict = {}
         self.time_date_now: dict = {}
+        # The id scoping the current turn's conversation (e.g. "repl" or
+        # "messenger:{psid}"). Set by lib.engine.handle_message so tools — notably
+        # the scheduler — know which channel/target to deliver a proactive reply to.
+        self.conversation_id: str | None = None
