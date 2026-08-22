@@ -1276,6 +1276,33 @@ def _player_match_status(team_state: dict, team_id) -> str:
     return "not started"
 
 
+def _player_playing_status(match_state: dict, stats: dict) -> str:
+    """Whether the player is actually on the pitch, from the live feed's `starts` /
+    `minutes` (which only populate once the real lineup is confirmed at kickoff).
+
+    A player can be in the owner's FPL XI yet start the real match on the bench: that
+    shows here as 'benched (not on)' while the match is live, or 'did not play (unused
+    sub)' once it has finished with zero minutes."""
+    starts = stats.get("starts") or 0
+    minutes = stats.get("minutes") or 0
+    live = bool(match_state and match_state.get("live"))
+    finished = bool(match_state and match_state.get("finished"))
+    if not live and not finished:
+        return "match not started"
+    if finished:
+        if minutes and starts:
+            return "played (started)"
+        if minutes:
+            return "played (subbed on)"
+        return "did not play (unused sub)"
+    # match is live
+    if starts:
+        return "playing (started)"
+    if minutes:
+        return "playing (subbed on)"
+    return "benched (not on)"
+
+
 @tool_ownership("fpl_agent")
 @function_tool
 async def get_fpl_live(ctx: RunContextWrapper[Ctx],
@@ -1289,6 +1316,13 @@ async def get_fpl_live(ctx: RunContextWrapper[Ctx],
         and — for the owner — how each of their FPL players is doing live (minutes,
         goals, bonus, live points, and whether that player's match is in play). Use this
         for "are there matches on now / what's the score / how are my players doing".
+
+        Each of the owner's players also carries `started` and `playing_status`, which
+        reflect the REAL match — 'playing (started)', 'playing (subbed on)', 'benched
+        (not on)', 'played/did not play' — so you can tell a player who is actually on
+        the pitch from one the owner has in their FPL XI but who is sitting on the real
+        bench. `my_players.starters_not_playing` lists exactly those benched/unused XI
+        players. This becomes known only once lineups are confirmed at kickoff.
 
     Parameters:
     ctx : RunContextWrapper[Ctx]
@@ -1390,19 +1424,24 @@ async def get_fpl_live(ctx: RunContextWrapper[Ctx],
         for p in picks_data.get("picks", []):
             element = elements_by_id.get(p.get("element"), {})
             stats = live_by_element.get(p.get("element"), {})
+            team_id = element.get("team")
             multiplier = p.get("multiplier", 0)
             points = stats.get("total_points", 0) or 0
             counted = points * multiplier
             provisional_points += counted
             players.append({
                 "name": element.get("web_name"),
-                "team": teams_by_id.get(element.get("team"), {}).get("short_name"),
+                "team": teams_by_id.get(team_id, {}).get("short_name"),
                 "position": positions_by_id.get(element.get("element_type"), {}).get("singular_name_short"),
-                "on_bench": p.get("position", 0) > 11,
+                "on_bench": p.get("position", 0) > 11,  # on the owner's FPL bench
                 "is_captain": p.get("is_captain", False),
                 "is_vice_captain": p.get("is_vice_captain", False),
                 "multiplier": multiplier,
-                "match_status": _player_match_status(team_state, element.get("team")),
+                "match_status": _player_match_status(team_state, team_id),
+                # whether the player actually featured in the real match (started / came
+                # off the bench / benched) — distinct from the owner's FPL bench above.
+                "started": bool(stats.get("starts")),
+                "playing_status": _player_playing_status(team_state.get(team_id), stats),
                 "minutes": stats.get("minutes"),
                 "goals": stats.get("goals_scored"),
                 "assists": stats.get("assists"),
@@ -1413,11 +1452,23 @@ async def get_fpl_live(ctx: RunContextWrapper[Ctx],
                 "points_counted": counted,      # after captain/bench multiplier
             })
 
+        # Players the owner fielded (in their FPL XI, not their own bench) who are NOT on
+        # the pitch in the real match — benched now, or an unused sub once it is over.
+        # These are the ones silently costing points, so surface them explicitly.
+        starters_not_playing = [
+            p["name"] for p in players
+            if not p["on_bench"] and p["playing_status"] in ("benched (not on)", "did not play (unused sub)")
+        ]
+
         result["my_players"] = {
             "entry_id": eid,
             "provisional_gameweek_points": provisional_points,
-            "note": "Provisional live points (starting XI x multiplier). FPL applies bench "
-                    "auto-substitutions only after all of a player's matches finish.",
+            "starters_not_playing": starters_not_playing,
+            "note": "Provisional live points (starting XI x multiplier). 'playing_status' "
+                    "reflects the REAL match (started/subbed on/benched), which FPL only "
+                    "exposes once lineups are confirmed at kickoff; before that a benched "
+                    "player is indistinguishable from one whose match has not started. FPL "
+                    "applies bench auto-substitutions only after a player's match finishes.",
             "players": players,
         }
 

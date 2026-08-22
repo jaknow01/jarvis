@@ -313,6 +313,10 @@ def create_fpl_agent():
               are doing live (minutes, goals, bonus, provisional points, whether their match is\
               in play). Use it for 'czy trwają jakieś mecze', 'jaki wynik', 'co się dzieje',\
               'jak grają moi zawodnicy'. If any_live is false, tell the user nothing is live now.\
+              For each of the owner's players it also reports whether they actually took the pitch:\
+              'started'/'playing_status' reflect the REAL match, and my_players.starters_not_playing\
+              lists players the owner has in their FPL XI who are on the real bench / did not come on.\
+              Proactively warn the user about those - they are fielding someone who is not playing.\
             - get_pl_teams: the Premier League teams and their strength ratings.\
             - get_my_fpl_squad: the owner's picked squad for a gameweek (defaults to the current one),\
               with captain/vice, bench, points, squad value and bank.\

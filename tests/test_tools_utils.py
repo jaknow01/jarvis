@@ -85,6 +85,19 @@ def test_summarize_fixture_events_resolves_names_and_sides():
     assert "bps" not in events  # only whitelisted identifiers become events
 
 
+def test_player_playing_status_distinguishes_bench_from_pitch():
+    from lib.tools import _player_playing_status
+    live = {"live": True, "finished": False}
+    finished = {"live": False, "finished": True}
+    # in the owner's XI but benched in the real, live match (the Dalot case)
+    assert _player_playing_status(live, {"starts": 0, "minutes": 0}) == "benched (not on)"
+    assert _player_playing_status(live, {"starts": 1, "minutes": 2}) == "playing (started)"
+    assert _player_playing_status(live, {"starts": 0, "minutes": 9}) == "playing (subbed on)"
+    assert _player_playing_status(finished, {"starts": 1, "minutes": 90}) == "played (started)"
+    assert _player_playing_status(finished, {"starts": 0, "minutes": 0}) == "did not play (unused sub)"
+    assert _player_playing_status(None, {"starts": 0, "minutes": 0}) == "match not started"
+
+
 def test_validate_currency_code_accepts_known_codes():
     assert validate_currency_code("USD") is True
     assert validate_currency_code("PLN") is True
