@@ -1,4 +1,5 @@
 from agents import RunContextWrapper, function_tool
+from lib.core.registry import tool_ownership, TOOLS_BY_AGENT
 from lib.cache import Cache, Ctx
 from lib.memory import memory
 from lib.scheduler import (
@@ -27,22 +28,11 @@ import requests
 from requests import HTTPError
 from tavily import TavilyClient
 
-TOOLS_BY_AGENT: dict[str: list[str]] = {}
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
 DEVICES_PREFERENCES_PATH = "data/smart_device_data/preferences.json"
 MAPS_PARAMS_PATH = "data/maps_data/maps_memory.json"
 
 logger = logging.getLogger(__name__)
-
-
-def tool_ownership(agent_name: str):
-    def wrapper(function_tool):
-        if agent_name in TOOLS_BY_AGENT:
-            TOOLS_BY_AGENT[agent_name].append(function_tool)
-        else:
-            TOOLS_BY_AGENT[agent_name] = [function_tool]
-        return function_tool
-    return wrapper
 
 # ------- iot operator -------
 

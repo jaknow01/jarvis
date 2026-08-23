@@ -1,39 +1,4 @@
-# import aioredis
-import os
-from typing import Any
-import redis.asyncio as redis
-from lib.smart_device import SmartDevice
-
-
-class Cache():
-    def __init__(self, ttl:int = 3600 * 24 * 5):
-        # Host runs default to localhost; inside docker-compose the app sets
-        # REDIS_URL=redis://redis:6379 (service name). See docker-compose.yml.
-        self.redis_cache = redis.from_url(
-            url = os.getenv("REDIS_URL", "redis://localhost:6379"),
-            decode_responses = True
-        )
-        self.ttl = ttl
-
-    async def save_to_cache(self, key: str, val: Any):
-        """Save to redis with a given key"""
-        await self.redis_cache.set(key, val)
-
-    async def get_from_cache(self, key: str) -> Any:
-        """Retrieves information from cache"""
-        data = await self.redis_cache.get(key)
-        return data
-
-class Ctx():
-    def __init__(self, cache: Cache = Cache()):
-        self.cache = cache
-        self.devices_preferences = {}
-
-        self.devices_states: dict[str, dict] = {}
-        self.devices: dict[str, SmartDevice] = {}
-        self.known_adresses: dict = {}
-        self.time_date_now: dict = {}
-        # The id scoping the current turn's conversation (e.g. "repl" or
-        # "messenger:{psid}"). Set by lib.engine.handle_message so tools — notably
-        # the scheduler — know which channel/target to deliver a proactive reply to.
-        self.conversation_id: str | None = None
+"""Compatibility shim — moved to lib.core.cache. Kept during the lib/ refactor so
+existing imports (`from lib.cache import Cache, Ctx`) keep working; remove once all
+callers import from lib.core."""
+from lib.core.cache import Cache, Ctx  # noqa: F401

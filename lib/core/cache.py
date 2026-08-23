@@ -1,0 +1,41 @@
+# import aioredis
+import os
+from typing import Any
+import redis.asyncio as redis
+
+
+class Cache():
+    def __init__(self, ttl:int = 3600 * 24 * 5):
+        # Host runs default to localhost; inside docker-compose the app sets
+        # REDIS_URL=redis://redis:6379 (service name). See docker-compose.yml.
+        self.redis_cache = redis.from_url(
+            url = os.getenv("REDIS_URL", "redis://localhost:6379"),
+            decode_responses = True
+        )
+        self.ttl = ttl
+
+    async def save_to_cache(self, key: str, val: Any):
+        """Save to redis with a given key"""
+        await self.redis_cache.set(key, val)
+
+    async def get_from_cache(self, key: str) -> Any:
+        """Retrieves information from cache"""
+        data = await self.redis_cache.get(key)
+        return data
+
+class Ctx():
+    def __init__(self, cache: Cache = Cache()):
+        self.cache = cache
+        self.devices_preferences = {}
+
+        self.devices_states: dict[str, dict] = {}
+        # Values are lib.agents.iot_operator.device.SmartDevice at runtime, typed as
+        # Any so `core` stays a leaf and never imports the iot domain (DAG: up-only).
+        self.devices: dict[str, Any] = {}
+        self.known_adresses: dict = {}
+        self.time_date_now: dict = {}
+        # The id scoping the current turn's conversation (e.g. "repl" or
+        # "messenger:{psid}"). Set by lib.runtime.engine.handle_message so tools —
+        # notably the scheduler — know which channel/target to deliver a proactive
+        # reply to.
+        self.conversation_id: str | None = None

@@ -1,43 +1,11 @@
-from lib.tools import (
-    get_devices_state,
-    turn_on_devices,
-    get_route_details,
-    get_maps_memory,
-    get_exchange_rate)
+from lib.core.registry import agents_decorator, agent_enabled, AGENTS
 from lib.llm import LLM_BY_AGENT
 from lib.tools import TOOLS_BY_AGENT
 from lib.memory import memory
-from lib.context import environment_preamble
 from agents import Agent
 import logging
-import os
 
 logger = logging.getLogger(__name__)
-AGENTS: dict = {}
-
-def agents_decorator(name: str):
-    def wrapper(func):
-        def build(*args, **kwargs):
-            agent = func(*args, **kwargs)
-            # Context provider: prepend the shared environment block (date/time, timezone,
-            # currency, locale) to every agent's instructions at build time, so temporal
-            # and locale awareness reaches all agents — not just the one owning the
-            # date/time tool. Callables-as-instructions are left untouched.
-            if isinstance(agent.instructions, str):
-                agent.instructions = environment_preamble() + agent.instructions
-            return agent
-        AGENTS[name] = build
-        return build
-    return wrapper
-
-def agent_enabled(name: str) -> bool:
-    """Whether a subagent is exposed to the coordinator. Controlled by the env var
-    AGENT_<NAME>_ENABLED — enabled by default; set to a falsy value (0/false/no/off)
-    to hide it as a coordinator tool. Read at coordinator-build time."""
-    raw = os.getenv(f"AGENT_{name.upper()}_ENABLED")
-    if raw is None or raw.strip() == "":
-        return True
-    return raw.strip().lower() not in ("0", "false", "no", "off")
 
 @agents_decorator(name="coordinator")
 def create_coordinator_agent() -> Agent:
