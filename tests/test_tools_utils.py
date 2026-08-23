@@ -1,9 +1,9 @@
-"""Unit tests for pure helpers in lib.tools_utils (no network / API keys needed)."""
+"""Unit tests for pure helpers of the agent packages (no network / API keys needed)."""
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from lib.tools_utils import (
+from lib.agents.fpl_agent.fpl_api import (
     relevant_gameweek,
     resolve_gameweek,
     describe_player,
@@ -88,7 +88,7 @@ def test_summarize_fixture_events_resolves_names_and_sides():
 
 
 def test_player_playing_status_distinguishes_bench_from_pitch():
-    from lib.tools import _player_playing_status
+    from lib.agents.fpl_agent.tools import _player_playing_status
     live = {"live": True, "finished": False}
     finished = {"live": False, "finished": True}
     # in the owner's XI but benched in the real, live match (the Dalot case)
@@ -101,7 +101,7 @@ def test_player_playing_status_distinguishes_bench_from_pitch():
 
 
 def test_find_players_by_name_exact_web_name_wins():
-    from lib.tools_utils import find_players_by_name
+    from lib.agents.fpl_agent.fpl_api import find_players_by_name
     bs = {"elements": [
         {"id": 411, "web_name": "Haaland", "first_name": "Erling", "second_name": "Haaland"},
         {"id": 999, "web_name": "Nkunku", "first_name": "Christopher", "second_name": "Haaland-like"},
@@ -111,7 +111,7 @@ def test_find_players_by_name_exact_web_name_wins():
 
 
 def test_find_players_by_name_partial_returns_candidates():
-    from lib.tools_utils import find_players_by_name
+    from lib.agents.fpl_agent.fpl_api import find_players_by_name
     bs = {"elements": [
         {"id": 1, "web_name": "B.Fernandes", "first_name": "Bruno", "second_name": "Fernandes"},
         {"id": 2, "web_name": "Fernández", "first_name": "Enzo", "second_name": "Fernández"},

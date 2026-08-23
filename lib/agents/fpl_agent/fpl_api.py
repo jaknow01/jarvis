@@ -1,16 +1,12 @@
-import json
+"""fpl_agent private helpers: keyless FPL API fetch + bootstrap reference-data caching
+and id->name indexing. Moved here from the former shared lib/tools_utils — all remaining
+helpers had fpl_agent as their single consumer."""
+
 import asyncio
 import os
-import time
-import openmeteo_requests
 import requests
-import requests_cache
-from retry_requests import retry
 from typing import Literal, Optional, Union
-from datetime import timedelta, datetime
-from zoneinfo import ZoneInfo
 import logging
-import pycountry
 
 logger = logging.getLogger(__name__)
 
