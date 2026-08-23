@@ -33,7 +33,7 @@ tylko *kiedy* i *co* uruchomić oraz *gdzie* dostarczyć odpowiedź.
 
 ## Model joba
 
-Pola (zob. `lib/scheduler.py`): `id`, `prompt`, `channel` (`messenger`/`log`), `target`
+Pola (zob. `lib/domain/scheduler.py`): `id`, `prompt`, `channel` (`messenger`/`log`), `target`
 (PSID — trzymany server-side, model go nie widzi), `conversation_id`, `kind`
 (`once`/`cron`), `cron_expr`, `run_at`, `next_run_at`, `until`, `max_runs`, `run_count`,
 `last_run_at`, `status` (`active`/`done`).
@@ -75,7 +75,7 @@ dla właściciela z rolą w aplikacji to działa — upewnij się tylko w **Mess
 że Strona jest zasubskrybowana i token ma prawo do wiadomości (zob.
 [MESSENGER.md](MESSENGER.md#kwestia-okna-24h-proaktywny-brief-poranny)).
 
-Zabezpieczenie w kodzie: jeśli wysyłka z tagiem zostanie odrzucona, `lib/messenger.py`
+Zabezpieczenie w kodzie: jeśli wysyłka z tagiem zostanie odrzucona, `lib/runtime/messenger.py`
 ponawia raz jako zwykłe `RESPONSE` (zadziała, gdy okno 24h akurat otwarte), a przy
 dalszym niepowodzeniu loguje wskazówkę. Najprostsza furtka awaryjna: napisz cokolwiek do
 bota, by odświeżyć okno.

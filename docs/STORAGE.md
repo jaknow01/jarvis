@@ -28,7 +28,7 @@ All Postgres code is isolated under `app/db/` (kept out of the `lib/` agents/too
 
 ## How the memory store picks a backend
 
-`lib/memory.py` exposes a `memory` singleton that chooses its backend **lazily on
+`lib/domain/memory.py` exposes a `memory` singleton that chooses its backend **lazily on
 first use** (after `.env` is loaded):
 
 - `DATABASE_URL` set → `PostgresMemoryStore` (and `init_db()` runs).
