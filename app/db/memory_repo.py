@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.db.connection import connection
-from lib.memory import (
+from lib.domain.memory import (
     VALID_SOURCES,
     VALID_CONFIDENCE,
     SUMMARY_CAP,
