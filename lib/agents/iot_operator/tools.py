@@ -1,12 +1,18 @@
+"""iot_operator tools: smart-lighting control (Tuya) — state, on/off, mode, colour and
+temperature. Registered into TOOLS_BY_AGENT["iot_operator"] via @tool_ownership.
+
+The model refers to devices only by their human-readable NAME; ip / local_key / dev_id
+never reach the LLM (resolved back to a real SmartDevice server-side here)."""
+
 from agents import RunContextWrapper, function_tool
-from lib.core.registry import tool_ownership, TOOLS_BY_AGENT
-from lib.cache import Ctx
-from lib.smart_device import SmartDevice, RGB, Mode
-from lib.tuya_link import manager, SCAN_TIMEOUT
 from typing import List, Annotated
 import json
 import asyncio
 import logging
+
+from lib.core import Ctx, tool_ownership
+from lib.agents.iot_operator.device import SmartDevice, RGB, Mode
+from lib.agents.iot_operator.tuya_link import manager, SCAN_TIMEOUT
 
 DEVICES_PARAMS_PATH = "data/smart_device_data/smart_devices.json"
 DEVICES_PREFERENCES_PATH = "data/smart_device_data/preferences.json"

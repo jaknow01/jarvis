@@ -17,7 +17,8 @@ from lib.scheduler import (
     parse_dt,
 )
 from lib import scheduler_runner
-from lib.tools import TOOLS_BY_AGENT
+import lib.agents  # noqa: F401  -- ensure every agent's tools are registered
+from lib.core import TOOLS_BY_AGENT
 
 
 # -- build_job / validation ---------------------------------------------------

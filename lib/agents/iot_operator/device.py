@@ -18,7 +18,7 @@ from typing import Any, Callable, List, Literal
 from pydantic import BaseModel, Field, ConfigDict
 from tinytuya import BulbDevice
 
-from lib.tuya_link import manager, HARD_TIMEOUT, MAX_ATTEMPTS, DEFAULT_VERSION
+from lib.agents.iot_operator.tuya_link import manager, HARD_TIMEOUT, MAX_ATTEMPTS, DEFAULT_VERSION
 
 logger = logging.getLogger(__name__)
 

@@ -2,8 +2,8 @@
 and that name-based device resolution works."""
 import types
 
-from lib.smart_device import SmartDevice
-from lib import tools
+from lib.agents.iot_operator.device import SmartDevice
+from lib.agents.iot_operator import tools
 
 
 def _device(name="Telewizor"):
