@@ -5,6 +5,11 @@ from lib.memory import memory
 from agents import Agent
 import logging
 
+# Per-agent feature packages. Importing each one runs its @tool_ownership /
+# @agents_decorator side effects (populating TOOLS_BY_AGENT / AGENTS) and exposes the
+# factory used by the coordinator below.
+from lib.agents.weather_agent import create_weather_agent
+
 logger = logging.getLogger(__name__)
 
 @agents_decorator(name="coordinator")
@@ -181,30 +186,6 @@ def create_maps_agent():
     logger.info("Maps agent created")
     return agent
           
-@agents_decorator(name="weather_agent")
-def create_weather_agent():
-    name="weather_agent"
-    model_settings = LLM_BY_AGENT[name]()
-
-    agent = Agent(
-        name=name,
-        instructions=(
-            "You can check current weather conditions as well as a short-term forecast.\
-            Before answering ANY question that involves a date or a relative day\
-            ('today', 'tomorrow', 'jutro', 'weekend', a weekday name, etc.), you MUST first call\
-            get_current_date_and_time to establish today's date, weekday and time. Only then map the\
-            user's relative day to a concrete calendar date and call weather_forecast. Never assume\
-            what 'today' or 'tomorrow' is - always resolve it from get_current_date_and_time first,\
-            and make sure the date you report back to the user matches that resolution."
-        ),
-        tools = TOOLS_BY_AGENT[name],
-        model=model_settings["model_name"],
-        model_settings=model_settings["settings"]
-    )
-
-    logger.info("Weather agent created")
-    return agent
-
 @agents_decorator(name="finance_agent")
 def create_finance_agent():
     name = "finance_agent"
