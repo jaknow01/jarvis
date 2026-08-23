@@ -1,8 +1,8 @@
-from lib.chatbot import Chatbot
+from lib.runtime import Chatbot
 from dotenv import load_dotenv
 import asyncio
-from lib.logger import Logger
-from lib.tracing import setup_tracing
+from lib.core import Logger
+from lib.runtime import setup_tracing
 import logging
 
 logger = logging.getLogger(__name__)

@@ -7,8 +7,8 @@ from datetime import timedelta
 
 import pytest
 
-from lib import scheduler
-from lib.scheduler import (
+from lib.domain import scheduler
+from lib.domain.scheduler import (
     JobStore,
     build_job,
     is_expired,
@@ -16,7 +16,7 @@ from lib.scheduler import (
     now_tz,
     parse_dt,
 )
-from lib import scheduler_runner
+from lib.runtime import scheduler_runner
 import lib.agents  # noqa: F401  -- ensure every agent's tools are registered
 from lib.core import TOOLS_BY_AGENT
 

@@ -5,7 +5,7 @@ check that traces actually reach a running MLflow server is a smoke test
 (smoke-tests/mlflow_trace.py), kept out of the pytest suite because it needs a
 server and pulls a Docker image.
 """
-from lib import tracing
+from lib.runtime import tracing
 
 
 def test_disabled_when_tracking_uri_unset(monkeypatch):

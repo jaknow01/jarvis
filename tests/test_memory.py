@@ -1,5 +1,5 @@
 """Unit tests for the long-term memory store (lib/memory.py)."""
-from lib.memory import MemoryStore
+from lib.domain.memory import MemoryStore
 
 
 def _store(tmp_path):
@@ -75,7 +75,7 @@ def test_delete_removes_entry(tmp_path):
 
 def test_backend_selection_defaults_to_json_without_database_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    from lib.memory import _select_backend, MemoryStore
+    from lib.domain.memory import _select_backend, MemoryStore
     assert isinstance(_select_backend(), MemoryStore)
 
 
