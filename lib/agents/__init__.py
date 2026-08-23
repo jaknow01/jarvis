@@ -12,6 +12,8 @@ from lib.agents.weather_agent import create_weather_agent
 from lib.agents.finance_agent import create_finance_agent
 from lib.agents.news_agent import create_news_agent
 from lib.agents.maps_agent import create_maps_agent
+from lib.agents.memory_operator import create_memory_agent
+from lib.agents.scheduler_agent import create_scheduler_agent
 
 logger = logging.getLogger(__name__)
 
@@ -167,31 +169,6 @@ def create_iot_agent():
 
     return agent
 
-@agents_decorator(name="memory_operator")
-def create_memory_agent():
-    name = "memory_operator"
-
-    model_settings = LLM_BY_AGENT[name]()
-
-    agent = Agent(
-        name=name,
-        instructions = (
-            "You manage the user's long-term memory: durable preferences, facts, habits, interests and routines.\
-            Use get_memory to look things up, save_memory to store a new durable preference or fact\
-            (set source='user' when the user stated it explicitly, 'inferred' when you concluded it),\
-            update_memory to correct an existing entry, and delete_memory to remove one.\
-            Store concise, self-contained statements in natural language. Suggested categories:\
-            preferences, facts, habits, interests, routines. Never store transient or one-off details,\
-            secrets, or credentials."
-        ),
-        tools = TOOLS_BY_AGENT[name],
-        model=model_settings["model_name"],
-        model_settings=model_settings["settings"]
-    )
-
-    logger.info("Memory agent created")
-    return agent
-
 @agents_decorator(name="fpl_agent")
 def create_fpl_agent():
     name = "fpl_agent"
@@ -245,44 +222,3 @@ def create_fpl_agent():
     logger.info("FPL agent created")
     return agent
 
-@agents_decorator(name="scheduler_agent")
-def create_scheduler_agent():
-    name = "scheduler_agent"
-    model_settings = LLM_BY_AGENT[name]()
-
-    agent = Agent(
-        name=name,
-        instructions=(
-            "You manage the user's scheduled jobs: one-off reminders and recurring proactive\
-            tasks that Jarvis runs on its own and then messages the user about.\
-            \
-            Tool guide:\
-            - create_scheduled_job: schedule a task. Provide EXACTLY ONE of:\
-              * delay_minutes - for relative one-offs ('za dwie godziny' -> 120, 'za pół godziny' -> 30);\
-                prefer this for 'za X' so you never do date maths yourself.\
-              * run_at (ISO date-time) - for an absolute one-off ('jutro o 9:00'); resolve the\
-                concrete date from the environment date/time block first.\
-              * cron_expr (5-field cron, Europe/Warsaw) - for anything recurring\
-                ('codziennie o 8' -> '0 8 * * *', 'w dni robocze o 8' -> '0 8 * * 1-5',\
-                'co godzinę' -> '0 * * * *'). Add `until` for 'przez miesiąc/tydzień'\
-                (an ISO date a month/week ahead) and/or `max_runs` to cap repetitions.\
-              The `prompt` you store is executed LATER by the whole assistant, so write it as a\
-              complete, self-contained request in Polish (what to fetch and what to tell the user),\
-              e.g. 'Podaj prognozę pogody na dziś w Warszawie, krótki przegląd najważniejszych\
-              wiadomości, oraz sprawdź, czy dziś grają zawodnicy z mojego składu FPL.'\
-            - list_scheduled_jobs: show active jobs (with ids) for the current conversation.\
-            - delete_scheduled_job: cancel a job by id (find it via list first).\
-            - update_scheduled_job: change a job's prompt or its until/max_runs limits; to change\
-              the timing itself, delete and re-create.\
-            \
-            You do not deliver anything yourself - the runner delivers on the same channel the user\
-            is on. Report back the created/updated job's id, human-readable schedule and next run so\
-            the composer can confirm it to the user. If a tool returns an Error, pass it on plainly."
-        ),
-        tools = TOOLS_BY_AGENT[name],
-        model = model_settings["model_name"],
-        model_settings=model_settings["settings"]
-    )
-
-    logger.info("Scheduler agent created")
-    return agent
