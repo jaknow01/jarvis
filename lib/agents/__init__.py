@@ -9,6 +9,9 @@ import logging
 # @agents_decorator side effects (populating TOOLS_BY_AGENT / AGENTS) and exposes the
 # factory used by the coordinator below.
 from lib.agents.weather_agent import create_weather_agent
+from lib.agents.finance_agent import create_finance_agent
+from lib.agents.news_agent import create_news_agent
+from lib.agents.maps_agent import create_maps_agent
 
 logger = logging.getLogger(__name__)
 
@@ -164,48 +167,6 @@ def create_iot_agent():
 
     return agent
 
-@agents_decorator(name="maps_agent")
-def create_maps_agent():
-    name = "maps_agent"
-    model_settings = LLM_BY_AGENT[name]()
-
-    agent = Agent(
-        name=name,
-        instructions = (
-            "You are a Google Maps operator. Your task is to plan trips based on the traffic and the preferences\
-            of the user.\
-            You must always call get_maps_memory tool first before using any tools in order to understand user's preferences and be able \
-            to understand user's requests in natural language. Without the output of this tool you may not be able to understand \
-            user's requests."
-        ),
-        tools = TOOLS_BY_AGENT[name],
-        model=model_settings["model_name"],
-        model_settings=model_settings["settings"]
-    )
-
-    logger.info("Maps agent created")
-    return agent
-          
-@agents_decorator(name="finance_agent")
-def create_finance_agent():
-    name = "finance_agent"
-
-    model_settings = LLM_BY_AGENT[name]()
-
-    agent = Agent(
-        name=name,
-        instructions = (
-            "You are responsible for retrieving and analyzing financial data based on user's requests.\
-            Make sure to use all necessary tools."
-        ),
-        tools = TOOLS_BY_AGENT[name],
-        model=model_settings["model_name"],
-        model_settings=model_settings["settings"]
-    )
-
-    logger.info("Finance agent created")
-    return agent
-
 @agents_decorator(name="memory_operator")
 def create_memory_agent():
     name = "memory_operator"
@@ -229,24 +190,6 @@ def create_memory_agent():
     )
 
     logger.info("Memory agent created")
-    return agent
-
-@agents_decorator(name="news_agent")
-def create_news_agent():
-    name = "news_agent"
-    model_settings = LLM_BY_AGENT[name]()
-
-    agent = Agent(
-        name=name,
-        instructions = (
-            "You are a news reporter. Your task is to search the internet and use reputable sources to create \
-            summaries of the events mentioned by the user."),
-        tools = TOOLS_BY_AGENT[name],
-        model = model_settings["model_name"],
-        model_settings=model_settings["settings"]
-    )
-
-    logger.info("News agent created")
     return agent
 
 @agents_decorator(name="fpl_agent")
