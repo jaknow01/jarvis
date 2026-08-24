@@ -16,9 +16,9 @@ import logging
 from agents import Runner
 
 from lib.agents import create_coordinator_agent
-from lib.cache import Ctx
-from lib.hooks import LoggingRunHooks
-from lib.run_config import Config
+from lib.core import Ctx
+from lib.runtime.hooks import LoggingRunHooks
+from lib.runtime.run_config import Config
 
 logger = logging.getLogger(__name__)
 

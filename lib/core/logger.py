@@ -18,7 +18,7 @@ class Logger():
         file_handler = RotatingFileHandler(root_filename, maxBytes=10_000_000, backupCount=5, encoding="utf-8")
         format = logging.Formatter(fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                                    datefmt="%Y-%m-%d %H:%M:%S")
-        
+
         def conversation(self, message, *args, **kwargs):
             CONVERSATION_LEVEL = 25
             logging.addLevelName(CONVERSATION_LEVEL, "CONVERSATION")
@@ -27,7 +27,7 @@ class Logger():
                 self._log(CONVERSATION_LEVEL, message, args, **kwargs)
 
         logging.Logger.conversation = conversation
-        
+
         file_handler.setFormatter(format)
 
         cli_handler = logging.StreamHandler()
@@ -40,7 +40,3 @@ class Logger():
         root_logger.addHandler(file_handler)
 
         root_logger.info("Initialized logger")
-
-
-
-

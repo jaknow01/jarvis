@@ -158,19 +158,19 @@ Ty ──piszesz──► Strona FB ──POST──► /webhook (FastAPI, port 
 Punkty zaczepienia w istniejącym kodzie:
 - **Wejście:** nowy moduł webhooka (FastAPI) słuchający na porcie **8002** — już
   zarezerwowany w `docker-compose.yml`.
-- **Rdzeń:** wyodrębnić z `lib/chatbot.py` funkcję `handle_message(user_id, text)
+- **Rdzeń:** wyodrębnić z `lib/runtime/chatbot.py` funkcję `handle_message(user_id, text)
   -> reply` i wołać ją zarówno z REPL, jak i z webhooka.
 - **Ciągłość rozmowy:** `previous_response_id` już trzymacie w Redis
-  (`lib/cache.py`) — zmienia się tylko klucz na `messenger:{sender_id}`.
+  (`lib/core/cache.py`) — zmienia się tylko klucz na `messenger:{sender_id}`.
 - **Wyjście:** POST na `https://graph.facebook.com/v22.0/me/messages` z
   `access_token=MESSENGER_PAGE_ACCESS_TOKEN`.
 
 **Stan implementacji: zrobione.** Adapter istnieje:
-- `lib/engine.py` — transport-agnostyczny rdzeń `handle_message(conversation_id,
-  text, ctx)`; woła go i REPL (`lib/chatbot.py`, id `"repl"`), i webhook
+- `lib/runtime/engine.py` — transport-agnostyczny rdzeń `handle_message(conversation_id,
+  text, ctx)`; woła go i REPL (`lib/runtime/chatbot.py`, id `"repl"`), i webhook
   (id `"messenger:{psid}"`). Ciągłość rozmowy per-użytkownik pod kluczem
   `previous_response_id:{conversation_id}` w Redis.
-- `lib/messenger.py` — weryfikacja podpisu `X-Hub-Signature-256`, handshake GET,
+- `lib/runtime/messenger.py` — weryfikacja podpisu `X-Hub-Signature-256`, handshake GET,
   parsowanie eventów, wysyłka przez Send API (chunkowanie do 2000 znaków).
 - `app/webhook.py` — aplikacja FastAPI (`/webhook` GET+POST, `/health`),
   weryfikacja podpisu, natychmiastowy 200, przetwarzanie w tle, opcjonalny filtr

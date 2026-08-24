@@ -1,16 +1,7 @@
 from agents import ModelSettings
-from agents.extensions.models.litellm_model import LitellmModel
 import os
 
-LLM_BY_AGENT: dict = {}
-
-def llm_usage(agent_names: list[str]):
-    def wrapper(func):
-        for agent in agent_names:
-            LLM_BY_AGENT[agent] = func
-        return func
-    return wrapper
-
+from lib.core.registry import llm_usage, LLM_BY_AGENT
 
 
 @llm_usage(["composer", "iot_operator", "maps_agent", "memory_operator" , "finance_agent" , "weather_agent", "fpl_agent", "scheduler_agent"])
@@ -34,14 +25,26 @@ def open_ai_coordinator_llm() -> dict:
     # COORDINATOR_REASONING_EFFORT sets the reasoning effort (minimal/low/medium/
     # high; defaults to medium). Note: for a distinct coordinator model to take
     # effect, RunConfig must not pin a single model for the whole run — see
-    # lib/run_config.py. The chosen model must be reasoning-capable.
+    # lib/runtime/run_config.py.
+    #
+    # Reasoning can be turned OFF entirely (it is costly) by setting
+    # COORDINATOR_REASONING_EFFORT to a disable sentinel (none/off/no/false/disabled,
+    # or empty) — the API's effort literal only accepts minimal/low/medium/high, so
+    # "off" is expressed by omitting the reasoning block rather than passing a value.
+    # With reasoning omitted the coordinator must run on a NON-reasoning model
+    # (e.g. gpt-4.1/gpt-4o via COORDINATOR_MODEL or OPENAI_DEFAULT_MODEL); a
+    # reasoning-only model (gpt-5*) would just fall back to its own default effort.
     model_name = os.getenv("COORDINATOR_MODEL") or os.getenv("OPENAI_DEFAULT_MODEL")
     effort = (os.getenv("COORDINATOR_REASONING_EFFORT") or "medium").strip().lower()
 
-    settings = ModelSettings(
-        parallel_tool_calls=True,
-        reasoning={"effort": effort},
-    )
+    _DISABLE = {"none", "off", "no", "false", "disabled", ""}
+    if effort in _DISABLE:
+        settings = ModelSettings(parallel_tool_calls=True)
+    else:
+        settings = ModelSettings(
+            parallel_tool_calls=True,
+            reasoning={"effort": effort},
+        )
     return {
         "model_name" : model_name,
         "settings" : settings

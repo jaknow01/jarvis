@@ -1,6 +1,6 @@
-"""Tests for env-configurable connection tunables in lib.tuya_link."""
-import lib.tuya_link as tl
-from lib.tuya_link import get_idle_release, DEFAULT_IDLE_RELEASE, IDLE_RELEASE_ENV
+"""Tests for env-configurable connection tunables in lib.agents.iot_operator.tuya_link."""
+import lib.agents.iot_operator.tuya_link as tl
+from lib.agents.iot_operator.tuya_link import get_idle_release, DEFAULT_IDLE_RELEASE, IDLE_RELEASE_ENV
 
 
 def test_idle_release_defaults_when_unset(monkeypatch):

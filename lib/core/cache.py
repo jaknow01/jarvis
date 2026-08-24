@@ -2,7 +2,6 @@
 import os
 from typing import Any
 import redis.asyncio as redis
-from lib.smart_device import SmartDevice
 
 
 class Cache():
@@ -30,10 +29,13 @@ class Ctx():
         self.devices_preferences = {}
 
         self.devices_states: dict[str, dict] = {}
-        self.devices: dict[str, SmartDevice] = {}
+        # Values are lib.agents.iot_operator.device.SmartDevice at runtime, typed as
+        # Any so `core` stays a leaf and never imports the iot domain (DAG: up-only).
+        self.devices: dict[str, Any] = {}
         self.known_adresses: dict = {}
         self.time_date_now: dict = {}
         # The id scoping the current turn's conversation (e.g. "repl" or
-        # "messenger:{psid}"). Set by lib.engine.handle_message so tools — notably
-        # the scheduler — know which channel/target to deliver a proactive reply to.
+        # "messenger:{psid}"). Set by lib.runtime.engine.handle_message so tools —
+        # notably the scheduler — know which channel/target to deliver a proactive
+        # reply to.
         self.conversation_id: str | None = None

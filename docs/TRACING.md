@@ -17,7 +17,7 @@ and swallowed so it can never block the assistant.
 
 ```
 app/main.py         load_dotenv() -> setup_tracing()   (once, at startup)
-lib/tracing.py      setup_tracing(): set_tracking_uri + set_experiment
+lib/runtime/tracing.py      setup_tracing(): set_tracking_uri + set_experiment
                     + mlflow.openai.autolog()  (registers the Agents SDK
                     trace processor; captures agent/tool spans)
 docker-compose.yml  "mlflow" service: MLflow tracking server + UI

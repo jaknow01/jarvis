@@ -5,7 +5,7 @@ memory** of the owner: durable preferences, facts, habits, interests and routine
 that are not tied to a single domain agent. It is the backbone of the project's
 "remembers preferences and adapts over time" goal. This document records the design
 decided in the memory design session; it is the companion to the code in
-`lib/memory.py` + the `memory_operator` tools in `lib/tools.py`.
+`lib/domain/memory.py` + the `memory_operator` tools in `lib/agents/memory_operator/tools.py`.
 
 ## Relationship to existing per-agent memory
 

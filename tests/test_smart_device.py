@@ -9,8 +9,8 @@ import threading
 
 import pytest
 
-import lib.smart_device as sd
-from lib.smart_device import SmartDevice, RGB
+import lib.agents.iot_operator.device as sd
+from lib.agents.iot_operator.device import SmartDevice, RGB
 
 
 class FakeBulb:
@@ -48,7 +48,7 @@ class FakeConn:
 
 
 class FakeManager:
-    """Stand-in for lib.tuya_link.manager: always returns the same fake conn."""
+    """Stand-in for lib.agents.iot_operator.tuya_link.manager: always returns the same fake conn."""
 
     def __init__(self, bulb):
         self.conn = FakeConn(bulb)

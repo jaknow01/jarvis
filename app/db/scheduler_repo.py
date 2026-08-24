@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.db.connection import connection
-from lib.scheduler import parse_dt
+from lib.domain.scheduler import parse_dt
 
 logger = logging.getLogger(__name__)
 

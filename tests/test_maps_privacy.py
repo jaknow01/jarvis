@@ -2,7 +2,7 @@
 user's real street addresses, and resolves aliases server-side."""
 import types
 
-from lib import tools
+from lib.agents.maps_agent import tools
 
 FIXTURE = {
     "known_adressess": [
