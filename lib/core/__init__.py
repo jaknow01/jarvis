@@ -13,6 +13,7 @@ from lib.core.registry import (
     agents_decorator,
     agent_enabled,
     llm_usage,
+    bind_default_llm_resolver,
 )
 from lib.core.cache import Cache, Ctx, app_context, bind_app_context, reset_app_context
 from lib.core.agent_tool import agent_as_tool
@@ -32,6 +33,7 @@ __all__ = [
     "agents_decorator",
     "agent_enabled",
     "llm_usage",
+    "bind_default_llm_resolver",
     "Cache",
     "Ctx",
     "app_context",

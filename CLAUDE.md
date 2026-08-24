@@ -30,11 +30,15 @@ language for user-facing replies; PLN as base currency).
 Built on **LlamaIndex** (`llama-index-core`): every agent is a `FunctionAgent` run
 via `agent.run()`, and each sub-agent is exposed to the coordinator as a
 `FunctionTool` by the `agent_as_tool()` helper (replacing the old `Agent.as_tool()`).
-Per-agent models come from the `LLM_BY_AGENT` registry (OpenAI **Responses**-API LLMs
-— the endpoint that supports tools + reasoning). Conversation continuity is owned by
-us in Postgres (`lib/domain/conversation.py`), not by the OpenAI Responses API's
-`previous_response_id`. (The project migrated off the OpenAI Agents SDK; LiteLLM
-multi-provider — xAI/Grok, Groq — is deferred.)
+Per-agent models come from the `LLM_BY_AGENT` registry and are **provider-agnostic**:
+each agent's model is a `provider/model` string (bare → `openai`), resolved through a
+provider registry in `lib/core/llm.py` (`openai` → `OpenAIResponses`, `anthropic` →
+native `Anthropic`, `openrouter`/`groq`/`xai`/`openai-compat` → `OpenAILike`). See
+"Models / providers" below. Conversation continuity is owned by us in Postgres
+(`lib/domain/conversation.py`), not by the OpenAI Responses API's `previous_response_id`.
+(The project migrated off the OpenAI Agents SDK. The `litellm` dependency is present but
+unused — a universal adapter was rejected in favor of native per-provider LLM classes for
+tool-calling fidelity; left in place to avoid extra lockfile churn.)
 
 `lib/` is layered as a strict import DAG — imports go **up only**:
 `runtime → agents → {domain, core}`, `domain → core`, `core → (nothing in lib)`.
@@ -51,7 +55,10 @@ lib/core/              LEAF layer — no imports from elsewhere in lib
   agent_tool.py        agent_as_tool() — wrap a sub-agent as a coordinator FunctionTool
   tooling.py           function_tool — LlamaIndex analogue of the old @function_tool
   env.py               environment_preamble() — date/time/locale block for every agent
-  llm.py               Per-agent LlamaIndex LLM factories (registered via decorator)
+  llm.py               Provider-agnostic LLM resolution: model-prefix parser +
+                         PROVIDER_BUILDERS + build_llm(agent_name) config resolution
+  reasoning.py         Provider-normalized reasoning effort (effort enum → OpenAI
+                         effort literal / Anthropic thinking budget / compat field)
   logger.py            Root logger config + custom CONVERSATION log level
 
 lib/domain/            Shared stateful stores (used by agents AND runtime)
@@ -126,9 +133,12 @@ imports every feature subpackage precisely to trigger this. Follow them when add
   Decorator order matters: `@tool_ownership` outermost, `@function_tool` innermost. Tool
   functions take `ctx: Context` (the LlamaIndex workflow Context, auto-injected and hidden
   from the model's schema) and reach shared run state via `app_context(ctx)`.
-- **Models** — `@llm_usage([agent_names])` in `lib/core/llm.py` maps agents to a factory
-  returning a ready LlamaIndex LLM (OpenAI Responses). Agents read it via
-  `LLM_BY_AGENT[name]()` and pass it as `llm=`.
+- **Models** — every agent reads its LLM via `LLM_BY_AGENT[name]()` and passes it as
+  `llm=`. There is **no per-agent factory to write**: `LLM_BY_AGENT` falls back to a
+  config-driven resolver (`build_llm(agent_name)`, bound via `bind_default_llm_resolver`)
+  that reads `AGENT_<NAME>_MODEL`/`AGENT_<NAME>_REASONING_EFFORT` and dispatches through
+  `PROVIDER_BUILDERS`. `@llm_usage([agent_names])` in `lib/core/llm.py` remains available
+  as an explicit, code-level override (it wins over the resolver).
 
 ### Shared context
 `Ctx` (`lib/core/cache.py`, imported as `from lib.core import Ctx`) is the per-turn
@@ -182,18 +192,49 @@ scaffolded; note the compose file exposes port 8002 for a future HTTP entry poin
 that does not exist yet). When running the whole stack in Docker, switch the Redis
 URL in `lib/core/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
 
+### Models / providers
+Each agent's model is a `provider/model` string; the provider is the part before the
+**first** `/` (so OpenRouter ids like `openrouter/deepseek/deepseek-r1` keep their inner
+slash), and a **bare** model (no `/`) means provider `openai` — backward-compatible with
+old bare model names. `lib/core/llm.py` parses the prefix and dispatches through a
+provider registry:
+
+| provider | builder | notes |
+|----------|---------|-------|
+| `openai` | `OpenAIResponses` | `/responses` — tools + reasoning together |
+| `anthropic` | native `Anthropic` | extended thinking (`thinking_dict`) |
+| `openrouter` / `groq` / `xai` | `OpenAILike(api_base=…)` | OpenAI-compatible |
+| `openai-compat` | `OpenAILike(api_base=env)` | local/vLLM/Ollama escape hatch |
+
+Config is per agent, same `AGENT_<NAME>_…` convention as `AGENT_<NAME>_ENABLED`:
+`AGENT_<NAME>_MODEL`, `AGENT_<NAME>_REASONING_EFFORT`, and (Anthropic only)
+`AGENT_<NAME>_THINKING_BUDGET`. Global fallbacks: `DEFAULT_MODEL` and
+`DEFAULT_REASONING_EFFORT`. Resolution per agent: `AGENT_<NAME>_MODEL` → `DEFAULT_MODEL`
+→ legacy. **Legacy fallbacks** keep old configs working: `COORDINATOR_MODEL` /
+`COORDINATOR_REASONING_EFFORT` back the coordinator's new keys, and `OPENAI_DEFAULT_MODEL`
+backs `DEFAULT_MODEL` (a bare value → `openai/…`). The coordinator keeps its historical
+`medium` reasoning default when nothing is set.
+
+Reasoning effort is one vocabulary — `off`/`minimal`/`low`/`medium`/`high` (plus the
+disable sentinels `none`/`off`/`no`/`false`/`disabled`/empty) — normalized per provider in
+`lib/core/reasoning.py`:
+
+| effort | OpenAI (Responses) | Anthropic (native) | OpenAI-compatible |
+|--------|--------------------|--------------------|-------------------|
+| off | omit `reasoning_options` | thinking off | omit |
+| minimal/low/medium/high | `reasoning_options={"effort": …}` | `thinking_dict` budget from `EFFORT_BUDGET` (1k/4k/12k/32k) | `reasoning_effort=…` |
+
+For Anthropic thinking the builder enforces the API's constraints: `temperature=1` and
+`max_tokens` > budget; `AGENT_<NAME>_THINKING_BUDGET` overrides the table.
+
 ### Environment variables (`.env`)
-`OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `COORDINATOR_MODEL` +
-`COORDINATOR_REASONING_EFFORT` (the coordinator runs on a dedicated "smarter"
-reasoning model — `COORDINATOR_MODEL` picks it, falling back to
-`OPENAI_DEFAULT_MODEL`; `COORDINATOR_REASONING_EFFORT` is minimal/low/medium/high,
-default medium. Reasoning can be turned OFF entirely (it is costly) with a disable
-sentinel — `none`/`off`/`no`/`false`/`disabled`/empty — which omits the reasoning-effort
-option (the model then uses its own default reasoning); with it off the coordinator
-should run on a non-reasoning `COORDINATOR_MODEL` (e.g. gpt-4.1/gpt-4o). The env is the
-source of truth. Each agent builds its own LlamaIndex LLM from `lib/core/llm.py`, so
-every agent honors its configured model independently — e.g. `news_agent` really runs
-its own model), `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY` (provider keys — only the
+ones you use are required; `openai-compat` also reads `OPENAI_COMPAT_BASE_URL` +
+`OPENAI_COMPAT_API_KEY`), `DEFAULT_MODEL` + `DEFAULT_REASONING_EFFORT` and the per-agent
+`AGENT_<NAME>_MODEL` / `AGENT_<NAME>_REASONING_EFFORT` / `AGENT_<NAME>_THINKING_BUDGET`
+(see "Models / providers" above; legacy `OPENAI_DEFAULT_MODEL` / `COORDINATOR_MODEL` /
+`COORDINATOR_REASONING_EFFORT` still honored as fallbacks), `GOOGLE_MAPS_API_KEY`,
+`XAI_API_KEY`,
 `OPENWEATHER_API_KEY`, `TAVILY_API_KEY`, `DATABASE_URL` (Postgres; when unset the
 memory store falls back to the on-disk JSON file), `TRACING_ENABLED` +
 `MLFLOW_TRACKING_URI` + `MLFLOW_EXPERIMENT` (agent tracing; when the URI is unset or

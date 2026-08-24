@@ -64,12 +64,46 @@ def agent_enabled(name: str) -> bool:
 
 
 # ---- llm ----
-LLM_BY_AGENT: dict = {}
+class _LLMRegistry(dict):
+    """Maps an agent name to a zero-arg LLM factory (`LLM_BY_AGENT[name]()`).
+
+    Explicit `@llm_usage` entries are stored directly and win. For any agent WITHOUT
+    an explicit entry, a config-driven default resolver — bound once by
+    `lib.core.llm` via `bind_default_llm_resolver` — is used, so every agent resolves
+    a model from its `AGENT_<NAME>_MODEL` config without needing a hand-written
+    factory. This is the "least surprising hook" chosen in the design's Open Questions:
+    the registry stays the single public surface and no agent lookup ever misses.
+    """
+
+    _default_resolver = None
+
+    def __missing__(self, name):
+        resolver = _LLMRegistry._default_resolver
+        if resolver is None:
+            raise KeyError(name)
+        return lambda: resolver(name)
+
+    def __contains__(self, key):
+        # Membership is True for any agent once a default resolver is bound — callers
+        # (and the registry symmetry tests) treat every agent as having a model.
+        return super().__contains__(key) or _LLMRegistry._default_resolver is not None
+
+
+LLM_BY_AGENT: _LLMRegistry = _LLMRegistry()
+
+
+def bind_default_llm_resolver(resolver) -> None:
+    """Bind the config-driven fallback used for agents without an explicit `@llm_usage`.
+    `resolver` takes an agent name and returns a ready LlamaIndex LLM. Called once, at
+    import time, from `lib.core.llm`."""
+    _LLMRegistry._default_resolver = resolver
 
 
 def llm_usage(agent_names: list[str]):
-    """Map each agent name to a model-factory returning {"model_name", "settings"}.
-    Agents read it via `LLM_BY_AGENT[name]()`."""
+    """Map each agent name to a model-factory returning a ready LlamaIndex LLM. This is
+    an explicit, code-level override; agents without one fall back to the config-driven
+    resolver bound via `bind_default_llm_resolver`. Agents read it via
+    `LLM_BY_AGENT[name]()`."""
     def wrapper(func):
         for agent in agent_names:
             LLM_BY_AGENT[agent] = func
