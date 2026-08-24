@@ -4,7 +4,7 @@ from lib.core import TOOLS_BY_AGENT, LLM_BY_AGENT
 
 
 def _tool_names(agent_name):
-    return {getattr(t, "name", "") for t in TOOLS_BY_AGENT[agent_name]}
+    return {t.metadata.name for t in TOOLS_BY_AGENT[agent_name]}
 
 
 def test_expected_agents_have_tools_registered():
@@ -44,6 +44,6 @@ def test_every_agent_has_a_model_mapping():
 
 
 def test_composer_has_a_model_mapping():
-    # The composer is a tool-less handoff target, so it won't appear in TOOLS_BY_AGENT;
-    # it still needs a model mapping to be constructible.
+    # The composer is a tool-less deterministic final step, so it won't appear in
+    # TOOLS_BY_AGENT; it still needs a model mapping to be constructible.
     assert "composer" in LLM_BY_AGENT

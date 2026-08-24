@@ -10,9 +10,9 @@ from typing import Literal
 import requests
 from requests import HTTPError
 from pyowm import OWM
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 from lib.agents.weather_agent.forecast import get_forecast
 
 logger = logging.getLogger(__name__)
@@ -20,15 +20,12 @@ logger = logging.getLogger(__name__)
 
 @tool_ownership("weather_agent")
 @function_tool
-async def current_weather(ctx: RunContextWrapper[Ctx], city: str = "Warsaw") -> dict:
+async def current_weather(ctx: Context, city: str = "Warsaw") -> dict:
     """
     Description:
         This tool is used to get the current weather conditions in a specified city.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
-        Context in which the tool operates
-
     city: str = "Warsaw"
         Name of the city where the weather conditions are to be checked.
         Unless specified otherwise by the user the default city is Warsaw.
@@ -54,7 +51,7 @@ async def current_weather(ctx: RunContextWrapper[Ctx], city: str = "Warsaw") -> 
 
 @tool_ownership("weather_agent")
 @function_tool
-async def get_current_date_and_time(ctx: RunContextWrapper[Ctx]) -> dict:
+async def get_current_date_and_time(ctx: Context) -> dict:
     """
     Description:
         This tool is used to obtain today's date and current time. It is neccessary
@@ -72,13 +69,14 @@ async def get_current_date_and_time(ctx: RunContextWrapper[Ctx]) -> dict:
         "weekday": now.strftime("%A"),
         "iso": now.isoformat(),
     }
-    # Stored on the context so weather_forecast can enforce that this ran first.
-    ctx.context.time_date_now = now_params
+    # Stored on the shared run context so weather_forecast can enforce that this ran first.
+    app = app_context(ctx)
+    app.time_date_now = now_params
     return now_params
 
 @tool_ownership("weather_agent")
 @function_tool
-async def weather_forecast(ctx: RunContextWrapper[Ctx],
+async def weather_forecast(ctx: Context,
                            forecast_days: Literal["1", "3", "7"],
                            forecast_type: Literal["hourly", "daily"],
                            city: str = "Warsaw"
@@ -92,9 +90,6 @@ async def weather_forecast(ctx: RunContextWrapper[Ctx],
         with different granularity (3h or daily intervals).
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
-        Context in which the tool operates
-
     forecast_days: Literal["1", "3", "7"]
         How long into the future should the forecast reach measured in days.
 
@@ -111,7 +106,8 @@ async def weather_forecast(ctx: RunContextWrapper[Ctx],
     Output:
         JSON object with the weather forecast made according to specifications
     """
-    if not ctx.context.time_date_now:
+    app = app_context(ctx)
+    if not app.time_date_now:
         return {
             "Message": "You don't know the current date, weekday and time - the forecast could be inaccurate.",
             "Tip": "Run the get_current_date_and_time tool first, then call this tool again.",

@@ -1,9 +1,9 @@
 """Agent observability via MLflow Tracing.
 
-Enables MLflow auto-tracing for the OpenAI Agents SDK so every coordinator run,
-sub-agent call and function-tool invocation is captured as a hierarchical trace
-(what ran, in what order, with inputs/outputs and latency). This is a developer
-aid for debugging where a run stalls or goes wrong.
+Enables MLflow auto-tracing for the LlamaIndex agent runtime so every coordinator
+run, sub-agent call and function-tool invocation is captured as a hierarchical
+trace (what ran, in what order, with inputs/outputs and latency). This is a
+developer aid for debugging where a run stalls or goes wrong.
 
 Wiring is intentionally out-of-band: enabling tracing does not change how agents
 behave. It is controlled entirely by environment variables and any failure
@@ -66,8 +66,8 @@ def setup_tracing() -> bool:
 
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment(experiment)
-        # Registers the Agents SDK trace processor; captures agent/tool spans.
-        mlflow.openai.autolog()
+        # Registers the LlamaIndex trace processor; captures agent/tool/LLM spans.
+        mlflow.llama_index.autolog()
         logger.info(
             f"MLflow tracing enabled (experiment='{experiment}') -> {tracking_uri}"
         )
@@ -76,3 +76,21 @@ def setup_tracing() -> bool:
         # Never let observability plumbing take down the assistant.
         logger.exception("Failed to enable MLflow tracing; continuing without it")
         return False
+
+
+def last_trace_id() -> str:
+    """Return the MLflow trace id of the most recently completed trace, or "".
+
+    Called by the engine right after a turn's run to stamp the assistant message.
+    Best-effort and never raises: when tracing is disabled or the id can't be read,
+    an empty string is returned and the turn behaves identically.
+    """
+    if not tracing_enabled() or not os.getenv("MLFLOW_TRACKING_URI", "").strip():
+        return ""
+    try:
+        import mlflow
+
+        return mlflow.get_last_active_trace_id() or ""
+    except Exception:
+        logger.debug("Could not read last MLflow trace id", exc_info=True)
+        return ""

@@ -1,6 +1,6 @@
 import logging
 
-from agents import Agent
+from llama_index.core.agent.workflow import FunctionAgent
 
 from lib.core import LLM_BY_AGENT, TOOLS_BY_AGENT, agents_decorator
 
@@ -8,14 +8,14 @@ logger = logging.getLogger(__name__)
 
 
 @agents_decorator(name="iot_operator")
-def create_iot_agent():
+def create_iot_agent() -> FunctionAgent:
     name = "iot_operator"
+    llm = LLM_BY_AGENT[name]()
 
-    model_settings = LLM_BY_AGENT[name]()
-
-    agent = Agent(
-        name = name,
-        instructions=(
+    agent = FunctionAgent(
+        name=name,
+        description="Controls smart devices (lighting) in a houshold.",
+        system_prompt=(
             "You are an operator of all smart devices (lighting) in the household.\
             Your task is to manipulate devices' states based on the user's preferences. \
             You must start your tool run by utilizing get_devices_state in order to initially access\
@@ -48,9 +48,8 @@ def create_iot_agent():
             and clearly report which devices in the requested room could not be reached so the composer\
             can tell the user exactly what was and was not changed."
         ),
-        tools = TOOLS_BY_AGENT[name],
-        model=model_settings["model_name"],
-        model_settings=model_settings["settings"]
+        tools=TOOLS_BY_AGENT[name],
+        llm=llm,
     )
     logger.info("IoT agent initiated")
 

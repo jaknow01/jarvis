@@ -7,9 +7,7 @@ surface consumed by `app/`.
 
 from lib.runtime.engine import handle_message
 from lib.runtime.chatbot import Chatbot
-from lib.runtime.hooks import LoggingRunHooks
-from lib.runtime.run_config import Config
-from lib.runtime.tracing import setup_tracing
+from lib.runtime.tracing import setup_tracing, last_trace_id
 from lib.runtime.scheduler_runner import run_scheduler_loop, scheduler_enabled
 from lib.runtime.messenger import (
     iter_message_events,
@@ -21,9 +19,8 @@ from lib.runtime.messenger import (
 __all__ = [
     "handle_message",
     "Chatbot",
-    "LoggingRunHooks",
-    "Config",
     "setup_tracing",
+    "last_trace_id",
     "run_scheduler_loop",
     "scheduler_enabled",
     "iter_message_events",

@@ -4,9 +4,9 @@ Registered into TOOLS_BY_AGENT["memory_operator"] via @tool_ownership."""
 import logging
 from typing import Literal, Optional
 
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 from lib.domain import memory
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @tool_ownership("memory_operator")
 @function_tool
-async def get_memory(ctx: RunContextWrapper[Ctx], category: Optional[str] = None) -> dict:
+async def get_memory(ctx: Context, category: Optional[str] = None) -> dict:
     """
     Description:
         Retrieve the user's stored long-term memory (durable preferences, facts,
@@ -22,7 +22,7 @@ async def get_memory(ctx: RunContextWrapper[Ctx], category: Optional[str] = None
         re-asking things the user already told you.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     category: Optional[str]
@@ -38,7 +38,7 @@ async def get_memory(ctx: RunContextWrapper[Ctx], category: Optional[str] = None
 
 @tool_ownership("memory_operator")
 @function_tool
-async def save_memory(ctx: RunContextWrapper[Ctx],
+async def save_memory(ctx: Context,
                       text: str,
                       category: str = "preferences",
                       source: Literal["user", "inferred"] = "user",
@@ -51,7 +51,7 @@ async def save_memory(ctx: RunContextWrapper[Ctx],
         one-off details.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     text: str
@@ -79,7 +79,7 @@ async def save_memory(ctx: RunContextWrapper[Ctx],
 
 @tool_ownership("memory_operator")
 @function_tool
-async def update_memory(ctx: RunContextWrapper[Ctx],
+async def update_memory(ctx: Context,
                         entry_id: str,
                         text: Optional[str] = None,
                         category: Optional[str] = None,
@@ -90,7 +90,7 @@ async def update_memory(ctx: RunContextWrapper[Ctx],
         get_memory). Only the provided fields are changed.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     entry_id: str
@@ -114,14 +114,14 @@ async def update_memory(ctx: RunContextWrapper[Ctx],
 
 @tool_ownership("memory_operator")
 @function_tool
-async def delete_memory(ctx: RunContextWrapper[Ctx], entry_id: str) -> dict:
+async def delete_memory(ctx: Context, entry_id: str) -> dict:
     """
     Description:
         Permanently remove a memory entry by its id (from get_memory). Use when a
         memory is wrong or no longer relevant.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     entry_id: str

@@ -1,6 +1,6 @@
 import logging
 
-from agents import Agent
+from llama_index.core.agent.workflow import FunctionAgent
 
 from lib.core import LLM_BY_AGENT, TOOLS_BY_AGENT, agents_decorator
 
@@ -8,13 +8,14 @@ logger = logging.getLogger(__name__)
 
 
 @agents_decorator(name="fpl_agent")
-def create_fpl_agent():
+def create_fpl_agent() -> FunctionAgent:
     name = "fpl_agent"
-    model_settings = LLM_BY_AGENT[name]()
+    llm = LLM_BY_AGENT[name]()
 
-    agent = Agent(
+    agent = FunctionAgent(
         name=name,
-        instructions=(
+        description="Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings.",
+        system_prompt=(
             "You are a Fantasy Premier League (FPL) specialist. You answer questions about the\
             Premier League and the owner's own FPL team using real-time data from your tools -\
             never from built-in knowledge, which is out of date.\
@@ -52,9 +53,8 @@ def create_fpl_agent():
             set it - do not invent an id. Run independent tools in parallel when a question spans\
             several of these (e.g. fixtures + squad). Report ids, points and prices exactly as returned."
         ),
-        tools = TOOLS_BY_AGENT[name],
-        model = model_settings["model_name"],
-        model_settings=model_settings["settings"]
+        tools=TOOLS_BY_AGENT[name],
+        llm=llm,
     )
 
     logger.info("FPL agent created")

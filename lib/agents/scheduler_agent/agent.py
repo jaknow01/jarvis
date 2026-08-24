@@ -1,6 +1,6 @@
 import logging
 
-from agents import Agent
+from llama_index.core.agent.workflow import FunctionAgent
 
 from lib.core import LLM_BY_AGENT, TOOLS_BY_AGENT, agents_decorator
 
@@ -8,13 +8,14 @@ logger = logging.getLogger(__name__)
 
 
 @agents_decorator(name="scheduler_agent")
-def create_scheduler_agent():
+def create_scheduler_agent() -> FunctionAgent:
     name = "scheduler_agent"
-    model_settings = LLM_BY_AGENT[name]()
+    llm = LLM_BY_AGENT[name]()
 
-    agent = Agent(
+    agent = FunctionAgent(
         name=name,
-        instructions=(
+        description="Schedules Jarvis to act on its own later: one-off reminders and recurring proactive briefs, plus listing/cancelling them.",
+        system_prompt=(
             "You manage the user's scheduled jobs: one-off reminders and recurring proactive\
             tasks that Jarvis runs on its own and then messages the user about.\
             \
@@ -41,9 +42,8 @@ def create_scheduler_agent():
             is on. Report back the created/updated job's id, human-readable schedule and next run so\
             the composer can confirm it to the user. If a tool returns an Error, pass it on plainly."
         ),
-        tools = TOOLS_BY_AGENT[name],
-        model = model_settings["model_name"],
-        model_settings=model_settings["settings"]
+        tools=TOOLS_BY_AGENT[name],
+        llm=llm,
     )
 
     logger.info("Scheduler agent created")

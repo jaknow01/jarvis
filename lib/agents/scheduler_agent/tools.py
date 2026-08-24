@@ -11,9 +11,9 @@ delivery channel/target are derived server-side from the current conversation
 import logging
 from typing import Optional
 
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 from lib.domain import (
     store as scheduler_store,
     build_job,
@@ -23,12 +23,12 @@ from lib.domain import (
 logger = logging.getLogger(__name__)
 
 
-def _channel_from_ctx(ctx: RunContextWrapper[Ctx]) -> tuple[str, Optional[str], str]:
+def _channel_from_ctx(ctx: Context) -> tuple[str, Optional[str], str]:
     """Resolve (channel, target, conversation_id) for the current turn.
 
     'messenger:{psid}' -> deliver via Messenger to that PSID; anything else (e.g.
     'repl') -> the 'log' channel (no live socket to push to)."""
-    conv = getattr(ctx.context, "conversation_id", None) or "repl"
+    conv = getattr(app_context(ctx), "conversation_id", None) or "repl"
     if conv.startswith("messenger:"):
         return "messenger", conv.split(":", 1)[1], conv
     return "log", None, conv
@@ -37,7 +37,7 @@ def _channel_from_ctx(ctx: RunContextWrapper[Ctx]) -> tuple[str, Optional[str], 
 @tool_ownership("scheduler_agent")
 @function_tool
 async def create_scheduled_job(
-    ctx: RunContextWrapper[Ctx],
+    ctx: Context,
     prompt: str,
     cron_expr: Optional[str] = None,
     run_at: Optional[str] = None,
@@ -55,7 +55,7 @@ async def create_scheduled_job(
         "co godzinę...", etc.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates (also carries the delivery channel).
 
     prompt: str
@@ -108,7 +108,7 @@ async def create_scheduled_job(
 
 @tool_ownership("scheduler_agent")
 @function_tool
-async def list_scheduled_jobs(ctx: RunContextWrapper[Ctx]) -> dict:
+async def list_scheduled_jobs(ctx: Context) -> dict:
     """
     Description:
         List the user's active scheduled jobs (reminders and recurring tasks) for the
@@ -116,7 +116,7 @@ async def list_scheduled_jobs(ctx: RunContextWrapper[Ctx]) -> dict:
         answer "co mam zaplanowane", or before deleting/updating a job to find its id.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates.
 
     Output:
@@ -129,14 +129,14 @@ async def list_scheduled_jobs(ctx: RunContextWrapper[Ctx]) -> dict:
 
 @tool_ownership("scheduler_agent")
 @function_tool
-async def delete_scheduled_job(ctx: RunContextWrapper[Ctx], job_id: str) -> dict:
+async def delete_scheduled_job(ctx: Context, job_id: str) -> dict:
     """
     Description:
         Cancel a scheduled job by its id (from list_scheduled_jobs). Use it for
         "odwołaj przypomnienie", "przestań mi wysyłać...", etc.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates.
 
     job_id: str
@@ -152,7 +152,7 @@ async def delete_scheduled_job(ctx: RunContextWrapper[Ctx], job_id: str) -> dict
 @tool_ownership("scheduler_agent")
 @function_tool
 async def update_scheduled_job(
-    ctx: RunContextWrapper[Ctx],
+    ctx: Context,
     job_id: str,
     prompt: Optional[str] = None,
     until: Optional[str] = None,
@@ -165,7 +165,7 @@ async def update_scheduled_job(
         delete the job and create a new one instead.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates.
 
     job_id: str

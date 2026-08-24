@@ -38,12 +38,15 @@ AGENTS: dict = {}
 def agents_decorator(name: str):
     """Register an agent factory under `name`. The wrapped factory, when called,
     prepends the shared environment block (date/time, timezone, currency, locale)
-    to string instructions so temporal/locale awareness reaches every agent."""
+    to the agent's system prompt so temporal/locale awareness reaches every agent.
+
+    Under LlamaIndex an agent's string instructions live on `system_prompt`
+    (the old OpenAI Agents SDK used `instructions`)."""
     def wrapper(func):
         def build(*args, **kwargs):
             agent = func(*args, **kwargs)
-            if isinstance(agent.instructions, str):
-                agent.instructions = environment_preamble() + agent.instructions
+            if isinstance(getattr(agent, "system_prompt", None), str):
+                agent.system_prompt = environment_preamble() + agent.system_prompt
             return agent
         AGENTS[name] = build
         return build

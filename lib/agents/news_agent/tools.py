@@ -6,16 +6,16 @@ import os
 from typing import Literal
 
 from tavily import TavilyClient
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 
 logger = logging.getLogger(__name__)
 
 
 @tool_ownership("news_agent")
 @function_tool
-async def search_news(ctx: RunContextWrapper[Ctx],
+async def search_news(ctx: Context,
                                query: str,
                                topic: Literal["news", "finance"],
                                search_depth: Literal["basic", "advanced"] = "advanced"
@@ -26,7 +26,7 @@ async def search_news(ctx: RunContextWrapper[Ctx],
         find an answer to the user's query.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     query: str

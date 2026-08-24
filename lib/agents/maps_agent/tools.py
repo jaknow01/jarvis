@@ -13,9 +13,9 @@ from datetime import datetime
 from typing import Literal, Optional, Union
 
 import googlemaps
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 from lib.agents.maps_agent.directions import (
     normalize_departure_time,
     simplify_directions_response,
@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 MAPS_PARAMS_PATH = "data/maps_data/maps_memory.json"
 
 
-def _load_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
+def _load_maps_memory(ctx: Context) -> dict:
     with open(MAPS_PARAMS_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    ctx.context.known_adresses = data
+    app_context(ctx).known_adresses = data
     return data
 
 
-def _known_entries(ctx: RunContextWrapper[Ctx]) -> list:
-    data = getattr(ctx.context, "known_adresses", None) or {}
+def _known_entries(ctx: Context) -> list:
+    data = getattr(app_context(ctx), "known_adresses", None) or {}
     if not data:
         try:
             data = _load_maps_memory(ctx)
@@ -51,7 +51,7 @@ def _known_entries(ctx: RunContextWrapper[Ctx]) -> list:
     return []
 
 
-def _resolve_place(ctx: RunContextWrapper[Ctx], name: str):
+def _resolve_place(ctx: Context, name: str):
     """Map a place name to (real_address, matched_alias). A known alias resolves to
     its stored address (server-side); an unknown name passes through unchanged."""
     if not name:
@@ -65,7 +65,7 @@ def _resolve_place(ctx: RunContextWrapper[Ctx], name: str):
 
 @tool_ownership("maps_agent")
 @function_tool
-async def get_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
+async def get_maps_memory(ctx: Context) -> dict:
     """
     Description:
     This tool lists the user's known/favourite places by their ALIAS (e.g. 'Home',
@@ -84,7 +84,7 @@ async def get_maps_memory(ctx: RunContextWrapper[Ctx]) -> dict:
 
 @tool_ownership("maps_agent")
 @function_tool
-async def get_route_details(ctx: RunContextWrapper[Ctx],
+async def get_route_details(ctx: Context,
                             origin: str,
                             destination: str,
                             transport_mode: Literal["driving", "walking", "bicycling", "transit"] = "transit",
@@ -100,7 +100,7 @@ async def get_route_details(ctx: RunContextWrapper[Ctx],
     Unless specified otherwise one should always assume that both origin and destination are in Warsaw, Poland.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     origin: str
