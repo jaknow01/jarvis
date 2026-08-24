@@ -1,30 +1,32 @@
 """Transport-agnostic core: handle one message, return one reply.
 
 This is the seam described in CLAUDE.md — the single entry point both the REPL
-(`lib/chatbot.py`) and the Messenger webhook (`app/webhook.py`) call. Given a
-conversation id and the user's text, it builds a fresh coordinator + run config,
-runs the OpenAI Agents SDK, and persists the `previous_response_id` so the
-conversation stays continuous across turns.
+(`lib/runtime/chatbot.py`) and the Messenger webhook (`app/webhook.py`) call. Given
+a conversation id and the user's text, it:
 
-Conversation continuity is keyed **per user**: each channel/user gets its own
-`previous_response_id` under `previous_response_id:{conversation_id}` in Redis,
-so the REPL, Messenger, and any future channel never cross-contaminate context.
+1. binds the shared per-run `Ctx` for the turn (contextvar; reachable from every tool),
+2. loads the full prior history for the conversation and replays it as `chat_history`,
+3. runs the coordinator (LlamaIndex `FunctionAgent`) to gather results,
+4. runs the composer deterministically to write the final Polish reply,
+5. persists the user message + the assistant reply (stamped with the MLflow trace id).
+
+Conversation continuity is owned by us now (Postgres/JSON via
+`lib.domain.conversations`), keyed **per channel** by `conversation_id` — the REPL,
+Messenger, and any future channel never cross-contaminate context. The OpenAI
+Responses API `previous_response_id` mechanism is gone.
 """
 
 import logging
 
-from agents import Runner
+from llama_index.core.llms import ChatMessage
+from llama_index.core.workflow import Context
 
-from lib.agents import create_coordinator_agent
-from lib.core import Ctx
-from lib.runtime.hooks import LoggingRunHooks
-from lib.runtime.run_config import Config
+from lib.agents import create_coordinator_agent, create_composer_agent
+from lib.core import Ctx, bind_app_context, reset_app_context
+from lib.domain import conversations
+from lib.runtime.tracing import last_trace_id
 
 logger = logging.getLogger(__name__)
-
-
-def _response_id_key(conversation_id: str) -> str:
-    return f"previous_response_id:{conversation_id}"
 
 
 # Prefix wrapping a system-originated (scheduled) turn, so the coordinator knows this
@@ -37,48 +39,63 @@ _SYSTEM_PROMPT_MARKER = (
 )
 
 
+def _to_chat_history(history: list[dict]) -> list[ChatMessage]:
+    """Map stored ``{role, content}`` dicts to LlamaIndex ``ChatMessage``s (in order)."""
+    return [ChatMessage(role=m["role"], content=m["content"]) for m in history]
+
+
 async def handle_message(
     conversation_id: str,
     text: str,
     ctx: Ctx,
-    hooks: LoggingRunHooks | None = None,
     origin: str = "user",
 ) -> str:
-    """Run one turn of the coordinator for `conversation_id` and return the reply.
+    """Run one turn for `conversation_id` and return the composer's Polish reply.
 
     Args:
         conversation_id: stable id scoping conversation continuity (e.g. "repl"
             for the terminal, or "messenger:{psid}" for a Messenger sender).
         text: the user's message, or — when `origin="system"` — the scheduled task.
-        ctx: shared run context (carries the Redis cache and per-run state).
-        hooks: optional run hooks; a fresh `LoggingRunHooks` is used if omitted.
+        ctx: shared run context (carries the Redis cache and per-run state); bound
+            as the turn's shared context so every tool can reach it.
         origin: "user" for a normal turn, or "system" for a scheduler-triggered
             proactive turn (the text is wrapped so the coordinator treats it as a job
             to execute and deliver, and continuity stays in the same conversation).
 
     Returns:
-        The coordinator's final natural-language reply.
+        The composer's final natural-language reply (Polish).
     """
-    hooks = hooks or LoggingRunHooks()
-    run_config = Config.create_config()
-    coordinator = create_coordinator_agent()
-
-    # Let tools (e.g. the scheduler) know which channel/target this turn belongs to.
+    # Let tools (e.g. the scheduler) know which channel/target this turn belongs to,
+    # and make the shared Ctx reachable from every tool for the duration of the turn.
     ctx.conversation_id = conversation_id
+    token = bind_app_context(ctx)
+    try:
+        history = _to_chat_history(conversations.load_history(conversation_id))
+        input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
 
-    input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
+        # 1) Coordinator gathers results from the subagent tools (never writes the reply).
+        coordinator = create_coordinator_agent()
+        gathered = str(
+            await coordinator.run(
+                user_msg=input_text, chat_history=history, ctx=Context(coordinator)
+            )
+        )
 
-    key = _response_id_key(conversation_id)
-    prev_id = await ctx.cache.get_from_cache(key)
+        # 2) Composer writes the final user-facing reply, deterministically (always runs).
+        composer = create_composer_agent()
+        composer_input = (
+            "Wiadomość użytkownika:\n" + text + "\n\n"
+            "Zebrane dane od podagentów (użyj TYLKO ich, nie wymyślaj):\n" + gathered + "\n\n"
+            "Napisz teraz ostateczną odpowiedź dla użytkownika po polsku."
+        )
+        reply = str(
+            await composer.run(
+                user_msg=composer_input, chat_history=history, ctx=Context(composer)
+            )
+        )
 
-    result = await Runner.run(
-        coordinator,
-        input=input_text,
-        run_config=run_config,
-        previous_response_id=prev_id,
-        context=ctx,
-        hooks=hooks,
-    )
-
-    await ctx.cache.save_to_cache(key, result.last_response_id)
-    return result.final_output
+        # 3) Persist the turn (user msg + assistant reply), stamping the MLflow trace id.
+        conversations.record_turn(conversation_id, text, reply, trace_id=last_trace_id())
+        return reply
+    finally:
+        reset_app_context(token)

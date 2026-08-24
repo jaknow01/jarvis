@@ -27,7 +27,6 @@ from fastapi import BackgroundTasks, FastAPI, Request, Response
 from lib.core import Cache, Ctx, Logger
 from lib.runtime import (
     handle_message,
-    LoggingRunHooks,
     iter_message_events,
     send_message,
     verify_challenge,
@@ -54,7 +53,6 @@ async def lifespan(app: FastAPI):
     Logger.config_root_logger()
     setup_tracing()
     app.state.ctx = Ctx(cache=Cache())
-    app.state.hooks = LoggingRunHooks()
     if not (VERIFY_TOKEN and APP_SECRET and PAGE_ACCESS_TOKEN):
         logger.warning(
             "Messenger env incomplete — set MESSENGER_VERIFY_TOKEN, "
@@ -105,11 +103,11 @@ async def verify(request: Request) -> Response:
     return Response(content=challenge, media_type="text/plain")
 
 
-async def _process(ctx: Ctx, hooks: LoggingRunHooks, sender_id: str, text: str) -> None:
+async def _process(ctx: Ctx, sender_id: str, text: str) -> None:
     """Run the coordinator for one inbound message and send the reply back."""
     logger.conversation(f"[MESSENGER {sender_id}] {text}")
     try:
-        reply = await handle_message(f"messenger:{sender_id}", text, ctx, hooks)
+        reply = await handle_message(f"messenger:{sender_id}", text, ctx)
     except Exception:
         logger.exception("handle_message failed for %s", sender_id)
         reply = "Przepraszam, coś poszło nie tak po mojej stronie."
@@ -127,13 +125,12 @@ async def receive(request: Request, background: BackgroundTasks) -> Response:
 
     body = await request.json()
     ctx: Ctx = request.app.state.ctx
-    hooks: LoggingRunHooks = request.app.state.hooks
 
     for sender_id, text in iter_message_events(body):
         if ALLOWED_SENDER_ID and sender_id != ALLOWED_SENDER_ID:
             logger.info("Ignoring message from non-allowed sender %s", sender_id)
             continue
-        background.add_task(_process, ctx, hooks, sender_id, text)
+        background.add_task(_process, ctx, sender_id, text)
 
     # Always 200 within the 5 s window; work happens after the response is sent.
     return Response(status_code=200)

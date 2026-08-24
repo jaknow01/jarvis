@@ -27,8 +27,18 @@ language for user-facing replies; PLN as base currency).
 
 ## Architecture
 
-Built on the **OpenAI Agents SDK** (`agents` package), with LiteLLM as a model
-adapter layer so non-OpenAI models (xAI/Grok, Groq) can be plugged in per agent.
+Built on **LlamaIndex** (`llama-index-core`): every agent is a `FunctionAgent` run
+via `agent.run()`, and each sub-agent is exposed to the coordinator as a
+`FunctionTool` by the `agent_as_tool()` helper (replacing the old `Agent.as_tool()`).
+Per-agent models come from the `LLM_BY_AGENT` registry and are **provider-agnostic**:
+each agent's model is a `provider/model` string (bare → `openai`), resolved through a
+provider registry in `lib/core/llm.py` (`openai` → `OpenAIResponses`, `anthropic` →
+native `Anthropic`, `openrouter`/`groq`/`xai`/`openai-compat` → `OpenAILike`). See
+"Models / providers" below. Conversation continuity is owned by us in Postgres
+(`lib/domain/conversation.py`), not by the OpenAI Responses API's `previous_response_id`.
+(The project migrated off the OpenAI Agents SDK. The `litellm` dependency is present but
+unused — a universal adapter was rejected in favor of native per-provider LLM classes for
+tool-calling fidelity; left in place to avoid extra lockfile churn.)
 
 `lib/` is layered as a strict import DAG — imports go **up only**:
 `runtime → agents → {domain, core}`, `domain → core`, `core → (nothing in lib)`.
@@ -40,20 +50,27 @@ app/main.py            Entry point: load env, configure logging, run the chatbot
 
 lib/core/              LEAF layer — no imports from elsewhere in lib
   registry.py          The 3 registries (TOOLS_BY_AGENT/AGENTS/LLM_BY_AGENT) + decorators
-  cache.py             Redis-backed Cache + Ctx (shared run context object)
+  cache.py             Ctx (shared run context) + Cache (Redis; now idle/optional) +
+                         app_context()/bind_app_context() contextvar accessors
+  agent_tool.py        agent_as_tool() — wrap a sub-agent as a coordinator FunctionTool
+  tooling.py           function_tool — LlamaIndex analogue of the old @function_tool
   env.py               environment_preamble() — date/time/locale block for every agent
-  llm.py               Per-agent model + ModelSettings factories (registered via decorator)
+  llm.py               Provider-agnostic LLM resolution: model-prefix parser +
+                         PROVIDER_BUILDERS + build_llm(agent_name) config resolution
+  reasoning.py         Provider-normalized reasoning effort (effort enum → OpenAI
+                         effort literal / Anthropic thinking budget / compat field)
   logger.py            Root logger config + custom CONVERSATION log level
 
 lib/domain/            Shared stateful stores (used by agents AND runtime)
   memory.py            Long-term memory store (JSON or Postgres backend; see app/db)
   scheduler.py         Scheduled-jobs store (JSON or Postgres backend)
+  conversation.py      Conversation-history store (JSON or Postgres backend)
 
 lib/agents/            Coordinator + one feature subpackage per agent
   __init__.py          Aggregator: imports every subpackage (registration), public surface
-  coordinator/         create_coordinator_agent (wires subagents in as tools)
-  composer/            create_composer_agent (handoff target: writes the final reply)
-  <agent>/agent.py     the create_*_agent() factory
+  coordinator/         create_coordinator_agent (wires subagents in as tools; gathers only)
+  composer/            create_composer_agent (deterministic final step: writes the reply)
+  <agent>/agent.py     the create_*_agent() factory (returns a FunctionAgent)
   <agent>/tools.py     that agent's @tool_ownership function-tools
   <agent>/<helper>.py  that agent's private helpers, e.g.
                          iot_operator/{device,tuya_link}.py (Tuya model + link),
@@ -65,22 +82,36 @@ lib/runtime/           TOP layer — wires the network to a transport / runs job
   chatbot.py           REPL loop
   messenger.py         Messenger webhook adapter (signature, send)
   scheduler_runner.py  in-process loop that fires due jobs out of band
-  hooks.py run_config.py tracing.py
+  tracing.py           MLflow tracing setup + last_trace_id()
 
 app/db/                Postgres access layer: connection, schema, repos, migration
+                         (incl. conversation_repo.py — conversations + messages)
 data/                  JSON "databases" (devices, preferences, maps memory, memory)
 logs/                  Per-run log files
 ```
 
 ### How a turn flows
-1. `Chatbot.start_chatbot()` loops on `input()`.
-2. Each turn builds a fresh `RunConfig` (`lib/runtime/run_config.py`) and a fresh
-   coordinator (`create_coordinator_agent()`).
-3. `Runner.run(coordinator, input=text, previous_response_id=..., context=ctx)`
-   executes. The **previous response id** is stored in Redis so the OpenAI
-   Responses API keeps conversation continuity across turns.
-4. The coordinator calls sub-agents **as tools** (`agent.as_tool(...)`), possibly
-   in parallel. Sub-agents call their own function-tools.
+`lib/runtime/engine.py` `handle_message(conversation_id, text, ctx)` is the single
+entry point (REPL and Messenger both call it):
+1. It binds the shared `Ctx` for the turn via `bind_app_context(ctx)` (a contextvar),
+   so every tool reaches the same run state, and sets `ctx.conversation_id`.
+2. It loads the **full prior history** for `conversation_id` from
+   `lib.domain.conversations` and maps it to LlamaIndex `ChatMessage`s.
+3. It builds a fresh coordinator (`create_coordinator_agent()`) and runs it:
+   `coordinator.run(user_msg=text, chat_history=history, ctx=Context(coordinator))`.
+   The coordinator calls sub-agents **as tools** (`agent_as_tool(...)`), in parallel
+   when the query spans domains (LlamaIndex caps concurrent tool calls at
+   `num_workers=4` per step). It **only gathers** — it never writes the user's reply.
+4. It then runs the **composer deterministically** (`composer.run(...)`) on the
+   gathered results — a code step, not an LLM decision — which writes the final reply
+   in Polish.
+5. It persists the turn (user message + assistant reply) via `conversations.record_turn`,
+   stamping the assistant row with the MLflow trace id (`last_trace_id()`, empty when
+   tracing is off), and returns the reply.
+
+Conversation continuity is **ours** (Postgres/JSON), not the OpenAI Responses API's
+`previous_response_id` — that mechanism, along with `RunConfig`/`Runner` and the run
+hooks, is gone.
 
 ### Registration patterns (important conventions)
 The three decorator-backed registries now all live in `lib/core/registry.py` (imported
@@ -88,27 +119,42 @@ as `from lib.core import ...`); registration happens by **import-time side effec
 tool/agent module must be imported for its decorator to fire. `lib/agents/__init__.py`
 imports every feature subpackage precisely to trigger this. Follow them when adding things:
 
-- **Agents** — `@agents_decorator(name)` registers a factory into `AGENTS`. Each
-  sub-agent lives in `lib/agents/<name>/agent.py` as a `create_*_agent()` factory
-  returning an `Agent`; the coordinator wires them in via
-  `.as_tool(tool_name=, tool_description=)`. A new agent needs a package with
-  `agent.py` + `tools.py` + an `__init__.py` (importing `.tools` for the side effect and
-  re-exporting the factory), plus one import line in `lib/agents/__init__.py` and the
+- **Agents** — `@agents_decorator(name)` registers a factory into `AGENTS` and prepends
+  the environment preamble to the agent's `system_prompt`. Each sub-agent lives in
+  `lib/agents/<name>/agent.py` as a `create_*_agent()` factory returning a
+  LlamaIndex `FunctionAgent`; the coordinator wires them in via
+  `agent_as_tool(factory(), tool_name=, tool_description=)`. A new agent needs a package
+  with `agent.py` + `tools.py` + an `__init__.py` (importing `.tools` for the side effect
+  and re-exporting the factory), plus one import line in `lib/agents/__init__.py` and the
   coordinator's `subagents` list.
-- **Tools** — `@tool_ownership(agent_name)` **above** `@function_tool` in that agent's
-  `lib/agents/<name>/tools.py` appends the tool to `TOOLS_BY_AGENT[agent_name]`. An agent
-  picks up its tools with `tools = TOOLS_BY_AGENT[name]`. Decorator order matters:
-  `@tool_ownership` outermost, `@function_tool` innermost.
-- **Models** — `@llm_usage([agent_names])` in `lib/core/llm.py` maps agents to a model
-  factory returning `{"model_name", "settings"}`. Agents read it via `LLM_BY_AGENT[name]()`.
+- **Tools** — `@tool_ownership(agent_name)` **above** `@function_tool` (the LlamaIndex
+  one from `lib.core`) in that agent's `lib/agents/<name>/tools.py` appends the tool to
+  `TOOLS_BY_AGENT[agent_name]`. An agent picks up its tools with `tools = TOOLS_BY_AGENT[name]`.
+  Decorator order matters: `@tool_ownership` outermost, `@function_tool` innermost. Tool
+  functions take `ctx: Context` (the LlamaIndex workflow Context, auto-injected and hidden
+  from the model's schema) and reach shared run state via `app_context(ctx)`.
+- **Models** — every agent reads its LLM via `LLM_BY_AGENT[name]()` and passes it as
+  `llm=`. There is **no per-agent factory to write**: `LLM_BY_AGENT` falls back to a
+  config-driven resolver (`build_llm(agent_name)`, bound via `bind_default_llm_resolver`)
+  that reads `AGENT_<NAME>_MODEL`/`AGENT_<NAME>_REASONING_EFFORT` and dispatches through
+  `PROVIDER_BUILDERS`. `@llm_usage([agent_names])` in `lib/core/llm.py` remains available
+  as an explicit, code-level override (it wins over the resolver).
 
 ### Shared context
-`Ctx` (`lib/core/cache.py`, imported as `from lib.core import Ctx`) is passed as
-`context=` into `Runner.run` and reaches every tool as `RunContextWrapper[Ctx]`. Tools
-stash intermediate state on it (`ctx.context.devices`, `ctx.context.devices_preferences`,
-`ctx.context.known_adresses`). It also holds the Redis `Cache`. `Ctx.devices` is typed
-as `dict[str, Any]` (not `SmartDevice`) on purpose, so `core` stays a leaf and never
-imports the iot domain.
+`Ctx` (`lib/core/cache.py`, imported as `from lib.core import Ctx`) is the per-turn
+shared state. `engine.handle_message` binds it for the turn with `bind_app_context(ctx)`
+(a contextvar), and every tool reaches it via `app = app_context(ctx)` — reading/writing
+`app.devices`, `app.devices_preferences`, `app.known_adresses`, `app.time_date_now`,
+`app.conversation_id`. The contextvar propagates to the coordinator's step-worker tasks
+and to every nested sub-agent run, so state written by one tool is visible to any later
+tool in the same turn. (The workflow `Context` itself is *not* used to carry `Ctx`: its
+store is serialized and `Ctx` — Redis client, live device handles — is not serializable,
+and arbitrary Context attributes don't reach the tool's injected Context.) `Ctx.devices`
+is typed as `dict[str, Any]` (not `SmartDevice`) on purpose, so `core` stays a leaf and
+never imports the iot domain. `Ctx` also holds a Redis `Cache`, which is now **idle**:
+its only user was the removed `previous_response_id` continuity, so Redis is optional
+(nothing calls its methods; a missing Redis no longer breaks a turn). It was left in
+place rather than removed.
 
 ## Agents & their status
 
@@ -126,8 +172,11 @@ imports the iot domain.
 
 ## Running it
 
-Requires **Redis** on `localhost:6379`, a `.env` (copy from `.env_template`), and
-Poetry.
+Requires a `.env` (copy from `.env_template`) and Poetry. Postgres (docker-compose
+service) is used for conversation history, memory and scheduled jobs when
+`DATABASE_URL` is set (otherwise on-disk JSON under `data/`). **Redis** is now
+optional — after the LlamaIndex migration nothing uses the cache — but the
+docker-compose service and the default `Cache()` remain harmlessly in place.
 
 ```bash
 # 1. Fill in .env (see .env_template for required keys)
@@ -143,19 +192,49 @@ scaffolded; note the compose file exposes port 8002 for a future HTTP entry poin
 that does not exist yet). When running the whole stack in Docker, switch the Redis
 URL in `lib/core/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
 
+### Models / providers
+Each agent's model is a `provider/model` string; the provider is the part before the
+**first** `/` (so OpenRouter ids like `openrouter/deepseek/deepseek-r1` keep their inner
+slash), and a **bare** model (no `/`) means provider `openai` — backward-compatible with
+old bare model names. `lib/core/llm.py` parses the prefix and dispatches through a
+provider registry:
+
+| provider | builder | notes |
+|----------|---------|-------|
+| `openai` | `OpenAIResponses` | `/responses` — tools + reasoning together |
+| `anthropic` | native `Anthropic` | extended thinking (`thinking_dict`) |
+| `openrouter` / `groq` / `xai` | `OpenAILike(api_base=…)` | OpenAI-compatible |
+| `openai-compat` | `OpenAILike(api_base=env)` | local/vLLM/Ollama escape hatch |
+
+Config is per agent, same `AGENT_<NAME>_…` convention as `AGENT_<NAME>_ENABLED`:
+`AGENT_<NAME>_MODEL`, `AGENT_<NAME>_REASONING_EFFORT`, and (Anthropic only)
+`AGENT_<NAME>_THINKING_BUDGET`. Global fallbacks: `DEFAULT_MODEL` and
+`DEFAULT_REASONING_EFFORT`. Resolution per agent: `AGENT_<NAME>_MODEL` → `DEFAULT_MODEL`
+→ legacy. **Legacy fallbacks** keep old configs working: `COORDINATOR_MODEL` /
+`COORDINATOR_REASONING_EFFORT` back the coordinator's new keys, and `OPENAI_DEFAULT_MODEL`
+backs `DEFAULT_MODEL` (a bare value → `openai/…`). The coordinator keeps its historical
+`medium` reasoning default when nothing is set.
+
+Reasoning effort is one vocabulary — `off`/`minimal`/`low`/`medium`/`high` (plus the
+disable sentinels `none`/`off`/`no`/`false`/`disabled`/empty) — normalized per provider in
+`lib/core/reasoning.py`:
+
+| effort | OpenAI (Responses) | Anthropic (native) | OpenAI-compatible |
+|--------|--------------------|--------------------|-------------------|
+| off | omit `reasoning_options` | thinking off | omit |
+| minimal/low/medium/high | `reasoning_options={"effort": …}` | `thinking_dict` budget from `EFFORT_BUDGET` (1k/4k/12k/32k) | `reasoning_effort=…` |
+
+For Anthropic thinking the builder enforces the API's constraints: `temperature=1` and
+`max_tokens` > budget; `AGENT_<NAME>_THINKING_BUDGET` overrides the table.
+
 ### Environment variables (`.env`)
-`OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `COORDINATOR_MODEL` +
-`COORDINATOR_REASONING_EFFORT` (the coordinator runs on a dedicated "smarter"
-reasoning model — `COORDINATOR_MODEL` picks it, falling back to
-`OPENAI_DEFAULT_MODEL`; `COORDINATOR_REASONING_EFFORT` is minimal/low/medium/high,
-default medium. Reasoning can be turned OFF entirely (it is costly) with a disable
-sentinel — `none`/`off`/`no`/`false`/`disabled`/empty — which omits the reasoning block
-instead of sending an invalid effort; with it off the coordinator should run on a
-non-reasoning `COORDINATOR_MODEL` (e.g. gpt-4.1/gpt-4o), since a reasoning-only model
-would just use its own default effort. The env is the source of truth for both. Because the coordinator
-uses a *different* model, `RunConfig` no longer pins one model for the whole run —
-each agent's own model in `lib/core/llm.py` is now honored per-agent via the provider,
-so e.g. `news_agent` really runs its configured model), `GOOGLE_MAPS_API_KEY`, `XAI_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY` (provider keys — only the
+ones you use are required; `openai-compat` also reads `OPENAI_COMPAT_BASE_URL` +
+`OPENAI_COMPAT_API_KEY`), `DEFAULT_MODEL` + `DEFAULT_REASONING_EFFORT` and the per-agent
+`AGENT_<NAME>_MODEL` / `AGENT_<NAME>_REASONING_EFFORT` / `AGENT_<NAME>_THINKING_BUDGET`
+(see "Models / providers" above; legacy `OPENAI_DEFAULT_MODEL` / `COORDINATOR_MODEL` /
+`COORDINATOR_REASONING_EFFORT` still honored as fallbacks), `GOOGLE_MAPS_API_KEY`,
+`XAI_API_KEY`,
 `OPENWEATHER_API_KEY`, `TAVILY_API_KEY`, `DATABASE_URL` (Postgres; when unset the
 memory store falls back to the on-disk JSON file), `TRACING_ENABLED` +
 `MLFLOW_TRACKING_URI` + `MLFLOW_EXPERIMENT` (agent tracing; when the URI is unset or
@@ -170,9 +249,10 @@ tick interval in seconds, default 30; timezone for cron/`run_at`, default Europe
 Proactive delivery reuses `MESSENGER_PAGE_ACCESS_TOKEN`). See `docs/SCHEDULER.md`.
 
 **Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
-auto-tracing for the OpenAI Agents SDK (`lib/runtime/tracing.py`, called once from
-`app/main.py`), capturing each coordinator→sub-agent→tool run as a hierarchical
-trace. The docker-compose `mlflow` service runs the tracking server + UI (open
+auto-tracing for the LlamaIndex runtime (`mlflow.llama_index.autolog()` in
+`lib/runtime/tracing.py`, called once from `app/main.py`), capturing each
+coordinator→sub-agent→tool run as a hierarchical trace. The turn's trace id is read
+back with `last_trace_id()` and stored on the assistant message row. The docker-compose `mlflow` service runs the tracking server + UI (open
 http://localhost:5001 → "Traces"; host port 5001 avoids the macOS :5000 AirPlay
 conflict). The app uses the lightweight `mlflow-tracing` client (HTTP → server, no
 local store) on purpose, to avoid churning the lockfile. `TRACING_ENABLED` (same
@@ -225,6 +305,10 @@ grow.
   The `scheduler_agent` likewise persists jobs to Postgres (table `scheduled_jobs`, via
   `app/db/scheduler_repo.py`) when `DATABASE_URL` is set, else to
   `data/scheduler_data/jobs.json` — same JSON/Postgres backend-selection pattern as memory.
+  **Conversation history** follows the same pattern: `lib/domain/conversation.py` +
+  `app/db/conversation_repo.py` persist `conversations` + `messages` (two rows per turn:
+  the user message and the assistant reply, the latter stamped with the MLflow trace id)
+  to Postgres when `DATABASE_URL` is set, else `data/conversation_data/conversations.json`.
   Migrate with `python -m app.db.migrate`.
   See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.

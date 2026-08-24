@@ -13,7 +13,13 @@ FIXTURE = {
 
 
 def _ctx():
-    return types.SimpleNamespace(context=types.SimpleNamespace(known_adresses=dict(FIXTURE)))
+    # known_adresses now rides on a per-turn contextvar reached via app_context();
+    # bind it and return a placeholder ctx (ignored by the helpers).
+    from lib.core import Ctx, bind_app_context
+    app = Ctx()
+    app.known_adresses = dict(FIXTURE)
+    bind_app_context(app)
+    return None
 
 
 def test_known_entries_alias_list_excludes_addresses():

@@ -6,9 +6,9 @@ from datetime import datetime
 
 import requests
 from requests import HTTPError
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 from lib.agents.finance_agent.fx import validate_currency_code
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @tool_ownership("finance_agent")
 @function_tool
-async def get_exchange_rate(ctx: RunContextWrapper[Ctx],
+async def get_exchange_rate(ctx: Context,
                             foreign_currency: str,
                             base_currency: str = "PLN") -> dict:
     f"""
@@ -25,7 +25,7 @@ async def get_exchange_rate(ctx: RunContextWrapper[Ctx],
         the base currency.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     foreign_currency: str
@@ -82,7 +82,7 @@ async def get_exchange_rate(ctx: RunContextWrapper[Ctx],
 
 @tool_ownership("finance_agent")
 @function_tool
-async def get_stock_quote(ctx: RunContextWrapper[Ctx], symbol: str) -> dict:
+async def get_stock_quote(ctx: Context, symbol: str) -> dict:
     """
     Description:
         This tool returns the latest market quote (current price, day OHLC, previous
@@ -90,7 +90,7 @@ async def get_stock_quote(ctx: RunContextWrapper[Ctx], symbol: str) -> dict:
         data source. It covers the Polish stock market (GPW) as well as global markets.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     symbol: str

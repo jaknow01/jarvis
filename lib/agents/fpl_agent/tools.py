@@ -12,9 +12,9 @@ import os
 from typing import Optional
 
 import requests
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 from lib.agents.fpl_agent.fpl_api import (
     fetch_fpl,
     fetch_fpl_bootstrap,
@@ -48,7 +48,7 @@ def _fpl_league_id(override: Optional[int]) -> Optional[int]:
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def get_fpl_fixtures(ctx: RunContextWrapper[Ctx], gameweek: Optional[int] = None) -> dict:
+async def get_fpl_fixtures(ctx: Context, gameweek: Optional[int] = None) -> dict:
     """
     Description:
         Lists the Premier League fixtures (matches) for a Fantasy Premier League
@@ -57,7 +57,7 @@ async def get_fpl_fixtures(ctx: RunContextWrapper[Ctx], gameweek: Optional[int] 
         upcoming matches / this round" questions.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     gameweek: Optional[int] = None
@@ -105,7 +105,7 @@ async def get_fpl_fixtures(ctx: RunContextWrapper[Ctx], gameweek: Optional[int] 
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def get_pl_teams(ctx: RunContextWrapper[Ctx]) -> dict:
+async def get_pl_teams(ctx: Context) -> dict:
     """
     Description:
         Lists all Premier League teams in the current Fantasy Premier League season,
@@ -114,7 +114,7 @@ async def get_pl_teams(ctx: RunContextWrapper[Ctx]) -> dict:
         themselves (who is in the league, relative strength).
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     Output:
@@ -145,7 +145,7 @@ async def get_pl_teams(ctx: RunContextWrapper[Ctx]) -> dict:
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def get_my_fpl_squad(ctx: RunContextWrapper[Ctx],
+async def get_my_fpl_squad(ctx: Context,
                            gameweek: Optional[int] = None,
                            entry_id: Optional[int] = None) -> dict:
     """
@@ -156,7 +156,7 @@ async def get_my_fpl_squad(ctx: RunContextWrapper[Ctx],
         gameweek's points, squad value and money in the bank.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     gameweek: Optional[int] = None
@@ -228,7 +228,7 @@ async def get_my_fpl_squad(ctx: RunContextWrapper[Ctx],
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def get_my_fpl_leagues(ctx: RunContextWrapper[Ctx], entry_id: Optional[int] = None) -> dict:
+async def get_my_fpl_leagues(ctx: Context, entry_id: Optional[int] = None) -> dict:
     """
     Description:
         Lists the classic (points-based) mini-leagues the owner's Fantasy Premier League
@@ -237,7 +237,7 @@ async def get_my_fpl_leagues(ctx: RunContextWrapper[Ctx], entry_id: Optional[int
         answer "which leagues am I in / what's my rank".
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     entry_id: Optional[int] = None
@@ -275,7 +275,7 @@ async def get_my_fpl_leagues(ctx: RunContextWrapper[Ctx], entry_id: Optional[int
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def get_fpl_league_standings(ctx: RunContextWrapper[Ctx],
+async def get_fpl_league_standings(ctx: Context,
                                    league_id: Optional[int] = None,
                                    limit: int = 25) -> dict:
     """
@@ -286,7 +286,7 @@ async def get_fpl_league_standings(ctx: RunContextWrapper[Ctx],
         what's the table in my league".
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     league_id: Optional[int] = None
@@ -378,7 +378,7 @@ def _player_playing_status(match_state: dict, stats: dict) -> str:
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def get_fpl_live(ctx: RunContextWrapper[Ctx],
+async def get_fpl_live(ctx: Context,
                        gameweek: Optional[int] = None,
                        include_my_players: bool = True,
                        entry_id: Optional[int] = None) -> dict:
@@ -398,7 +398,7 @@ async def get_fpl_live(ctx: RunContextWrapper[Ctx],
         players. This becomes known only once lineups are confirmed at kickoff.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     gameweek: Optional[int] = None
@@ -593,7 +593,7 @@ async def _fetch_league_squads(league_id: int, gw: int, max_managers: int):
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def who_owns_player_in_league(ctx: RunContextWrapper[Ctx],
+async def who_owns_player_in_league(ctx: Context,
                                     player: str,
                                     league_id: Optional[int] = None,
                                     gameweek: Optional[int] = None,
@@ -606,7 +606,7 @@ async def who_owns_player_in_league(ctx: RunContextWrapper[Ctx],
         gameweek, so it also knows who has captained the player or has him on their bench.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     player: str
@@ -702,7 +702,7 @@ async def who_owns_player_in_league(ctx: RunContextWrapper[Ctx],
 
 @tool_ownership("fpl_agent")
 @function_tool
-async def get_league_ownership(ctx: RunContextWrapper[Ctx],
+async def get_league_ownership(ctx: Context,
                                league_id: Optional[int] = None,
                                gameweek: Optional[int] = None,
                                top_n: int = 20,
@@ -716,7 +716,7 @@ async def get_league_ownership(ctx: RunContextWrapper[Ctx],
         who_owns_player_in_league.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     league_id: Optional[int] = None

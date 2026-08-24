@@ -93,6 +93,35 @@ SCHEMA_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS scheduled_jobs_due
         ON scheduled_jobs (status, next_run_at)
     """,
+    # Conversation history (owned by us now that previous_response_id / the Responses
+    # API continuity is gone). A conversation is identified by a stable per-channel
+    # key (e.g. 'repl', 'messenger:{psid}') so channels/users never share history.
+    """
+    CREATE TABLE IF NOT EXISTS conversations (
+        id             UUID PRIMARY KEY,
+        channel_key    TEXT NOT NULL UNIQUE,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_active_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    # Only the user's message and the composer's final reply are stored per turn
+    # (never the internal coordinator/sub-agent/tool exchanges). `turn_index` orders
+    # messages within a conversation; `mlflow_trace_id` links a reply to its run.
+    """
+    CREATE TABLE IF NOT EXISTS messages (
+        id              UUID PRIMARY KEY,
+        conversation_id UUID NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        role            TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+        content         TEXT NOT NULL,
+        turn_index      INTEGER NOT NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        mlflow_trace_id TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS messages_by_conversation
+        ON messages (conversation_id, turn_index)
+    """,
 ]
 
 

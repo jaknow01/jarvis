@@ -15,6 +15,10 @@ from lib.domain.memory import (
     SUMMARY_CAP,
     SUGGESTED_CATEGORIES,
 )
+from lib.domain.conversation import (
+    conversations,
+    ConversationStore,
+)
 from lib.domain.scheduler import (
     store,
     build_job,
@@ -31,6 +35,8 @@ from lib.domain.scheduler import (
 )
 
 __all__ = [
+    "conversations",
+    "ConversationStore",
     "memory",
     "MemoryStore",
     "summarize",

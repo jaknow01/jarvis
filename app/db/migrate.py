@@ -29,6 +29,7 @@ MEMORY_JSON = REPO_ROOT / "data" / "memory_data" / "memory.json"
 DEVICES_JSON = REPO_ROOT / "data" / "smart_device_data" / "smart_devices.json"
 PREFERENCES_JSON = REPO_ROOT / "data" / "smart_device_data" / "preferences.json"
 MAPS_JSON = REPO_ROOT / "data" / "maps_data" / "maps_memory.json"
+CONVERSATIONS_JSON = REPO_ROOT / "data" / "conversation_data" / "conversations.json"
 
 
 def _load(path: Path):
@@ -112,6 +113,56 @@ def migrate_devices(conn) -> int:
     return n
 
 
+def migrate_conversations(conn) -> int:
+    """Copy any on-disk JSON conversations + their messages into Postgres (idempotent).
+
+    Conversations start fresh post-migration, so this is usually a no-op; it exists so
+    a dev who accumulated JSON history before configuring Postgres keeps it."""
+    data = _load(CONVERSATIONS_JSON)
+    if not data:
+        return 0
+    convs = data.get("conversations", {}) if isinstance(data, dict) else {}
+    n = 0
+    for channel_key, conv in convs.items():
+        conn.execute(
+            """
+            INSERT INTO conversations (id, channel_key, created_at, last_active_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (channel_key) DO NOTHING
+            """,
+            (
+                conv.get("id") or str(__import__("uuid").uuid4()),
+                channel_key,
+                _parse_dt(conv.get("created_at")),
+                _parse_dt(conv.get("last_active_at")),
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM conversations WHERE channel_key = %s", (channel_key,)
+        ).fetchone()
+        conv_id = row[0]
+        for m in conv.get("messages", []):
+            conn.execute(
+                """
+                INSERT INTO messages (id, conversation_id, role, content, turn_index,
+                                      created_at, mlflow_trace_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                (
+                    m.get("id") or str(__import__("uuid").uuid4()),
+                    conv_id,
+                    m.get("role", "user"),
+                    m.get("content", ""),
+                    m.get("turn_index", 0),
+                    _parse_dt(m.get("created_at")),
+                    m.get("mlflow_trace_id", ""),
+                ),
+            )
+        n += 1
+    return n
+
+
 def _migrate_document(conn, table: str, data) -> int:
     if data is None:
         return 0
@@ -140,12 +191,14 @@ def main() -> int:
         dev = migrate_devices(conn)
         prefs = _migrate_document(conn, "device_preferences", _load(PREFERENCES_JSON))
         maps = _migrate_document(conn, "maps_memory", _load(MAPS_JSON))
+        convs = migrate_conversations(conn)
 
     print("\nMigration complete (JSON files left untouched):")
     print(f"  memory_entries      : {mem} row(s)")
     print(f"  smart_devices       : {dev} row(s)")
     print(f"  device_preferences  : {prefs} document(s)")
     print(f"  maps_memory         : {maps} document(s)")
+    print(f"  conversations       : {convs} conversation(s)")
     return 0
 
 

@@ -1,6 +1,6 @@
 import logging
 
-from agents import Agent
+from llama_index.core.agent.workflow import FunctionAgent
 
 from lib.core import LLM_BY_AGENT, TOOLS_BY_AGENT, agents_decorator
 
@@ -8,13 +8,14 @@ logger = logging.getLogger(__name__)
 
 
 @agents_decorator(name="weather_agent")
-def create_weather_agent():
-    name="weather_agent"
-    model_settings = LLM_BY_AGENT[name]()
+def create_weather_agent() -> FunctionAgent:
+    name = "weather_agent"
+    llm = LLM_BY_AGENT[name]()
 
-    agent = Agent(
+    agent = FunctionAgent(
         name=name,
-        instructions=(
+        description="Checks current weather and weather forecast at a given location.",
+        system_prompt=(
             "You can check current weather conditions as well as a short-term forecast.\
             Before answering ANY question that involves a date or a relative day\
             ('today', 'tomorrow', 'jutro', 'weekend', a weekday name, etc.), you MUST first call\
@@ -23,9 +24,8 @@ def create_weather_agent():
             what 'today' or 'tomorrow' is - always resolve it from get_current_date_and_time first,\
             and make sure the date you report back to the user matches that resolution."
         ),
-        tools = TOOLS_BY_AGENT[name],
-        model=model_settings["model_name"],
-        model_settings=model_settings["settings"]
+        tools=TOOLS_BY_AGENT[name],
+        llm=llm,
     )
 
     logger.info("Weather agent created")

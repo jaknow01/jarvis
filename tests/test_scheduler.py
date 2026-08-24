@@ -184,7 +184,7 @@ def test_tick_recurring_stops_at_max_runs(tmp_path):
 # -- registry -----------------------------------------------------------------
 
 def test_scheduler_agent_tools_registered():
-    names = {getattr(t, "name", "") for t in TOOLS_BY_AGENT["scheduler_agent"]}
+    names = {t.metadata.name for t in TOOLS_BY_AGENT["scheduler_agent"]}
     assert {
         "create_scheduled_job",
         "list_scheduled_jobs",

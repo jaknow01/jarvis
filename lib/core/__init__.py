@@ -13,8 +13,11 @@ from lib.core.registry import (
     agents_decorator,
     agent_enabled,
     llm_usage,
+    bind_default_llm_resolver,
 )
-from lib.core.cache import Cache, Ctx
+from lib.core.cache import Cache, Ctx, app_context, bind_app_context, reset_app_context
+from lib.core.agent_tool import agent_as_tool
+from lib.core.tooling import function_tool
 from lib.core.env import environment_preamble, TIMEZONE, BASE_CURRENCY, LOCALE
 from lib.core.logger import Logger
 
@@ -30,8 +33,14 @@ __all__ = [
     "agents_decorator",
     "agent_enabled",
     "llm_usage",
+    "bind_default_llm_resolver",
     "Cache",
     "Ctx",
+    "app_context",
+    "bind_app_context",
+    "reset_app_context",
+    "agent_as_tool",
+    "function_tool",
     "environment_preamble",
     "TIMEZONE",
     "BASE_CURRENCY",

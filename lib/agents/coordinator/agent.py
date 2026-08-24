@@ -1,8 +1,8 @@
 import logging
 
-from agents import Agent
+from llama_index.core.agent.workflow import FunctionAgent
 
-from lib.core import LLM_BY_AGENT, agents_decorator, agent_enabled
+from lib.core import LLM_BY_AGENT, agents_decorator, agent_enabled, agent_as_tool
 from lib.domain import memory
 
 # Sibling factories, imported from their own feature packages (public surface). These
@@ -15,17 +15,14 @@ from lib.agents.news_agent import create_news_agent
 from lib.agents.memory_operator import create_memory_agent
 from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
-from lib.agents.composer import create_composer_agent
 
 logger = logging.getLogger(__name__)
 
 
 @agents_decorator(name="coordinator")
-def create_coordinator_agent() -> Agent:
+def create_coordinator_agent() -> FunctionAgent:
     name = "coordinator"
-    model_settings = LLM_BY_AGENT[name]()
-
-    # create_subagents() - trzeba stworzyc pomocnikow
+    llm = LLM_BY_AGENT[name]()
 
     instructions = (
         "You are a coordinator of a multiagent personal assistant network called Jarvis.\
@@ -37,10 +34,12 @@ def create_coordinator_agent() -> Agent:
         Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
         You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
         \
-        IMPORTANT: You do NOT write the final answer to the user yourself. Once you have gathered everything needed\
-        (including any error messages from failed tool calls), you MUST always hand off to the 'composer' agent, which\
-        writes the final user-facing reply. Do not paraphrase or summarize the results yourself - just gather and hand off.\
-        If a tool call fails, still hand off to the composer and let it inform the user; pass along what went wrong."
+        IMPORTANT: You do NOT write the final answer to the user yourself. Your only job is to gather everything needed\
+        (including any error messages from failed tool calls) by calling the subagent tools. A separate composer step\
+        writes the final user-facing reply from what you gathered, so do not craft the user's answer, and do not\
+        apologize or converse - just gather. When you are done gathering, return a concise summary of the collected\
+        results (and any errors) for the composer to turn into the reply. If a tool call fails, include what went wrong\
+        so the composer can inform the user."
     )
 
     # Each subagent can be switched off via AGENT_<NAME>_ENABLED; a disabled agent is
@@ -80,17 +79,17 @@ def create_coordinator_agent() -> Agent:
     tools = []
     for sub_name, factory, description in subagents:
         if agent_enabled(sub_name):
-            tools.append(factory().as_tool(tool_name=sub_name, tool_description=description))
+            tools.append(agent_as_tool(factory(), tool_name=sub_name, tool_description=description))
         else:
             logger.info(f"Subagent '{sub_name}' disabled via env; not exposed to coordinator")
 
-    agent = Agent(
-        name = name,
-        instructions = instructions,
-        tools = tools,
-        handoffs = [create_composer_agent()],
-        model = model_settings["model_name"],
-        model_settings = model_settings["settings"]
+    agent = FunctionAgent(
+        name=name,
+        description="Routes user requests to specialized subagents and gathers their results.",
+        system_prompt=instructions,
+        tools=tools,
+        llm=llm,
+        allow_parallel_tool_calls=True,
     )
     logger.info(f"Coordinator initiated with {len(tools)} subagent tool(s)")
 

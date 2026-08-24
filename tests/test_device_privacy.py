@@ -30,7 +30,14 @@ def test_get_status_device_info_has_no_secrets():
 
 
 def _ctx(devices):
-    return types.SimpleNamespace(context=types.SimpleNamespace(devices=devices))
+    # The shared run state (devices) now rides on a per-turn contextvar reached via
+    # app_context(); bind it and return a placeholder ctx (the arg is ignored by the
+    # helpers, which read the contextvar).
+    from lib.core import Ctx, bind_app_context
+    app = Ctx()
+    app.devices = devices
+    bind_app_context(app)
+    return None
 
 
 def test_resolve_devices_exact_and_case_insensitive():

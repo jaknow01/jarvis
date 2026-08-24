@@ -24,7 +24,7 @@ def test_coordinator_excludes_disabled_subagents(monkeypatch):
     monkeypatch.setenv("AGENT_NEWS_AGENT_ENABLED", "false")
     monkeypatch.setenv("AGENT_IOT_OPERATOR_ENABLED", "off")
     coord = agents.create_coordinator_agent()
-    names = {getattr(t, "name", "") for t in coord.tools}
+    names = {t.metadata.name for t in coord.tools}
     assert "news_agent" not in names
     assert "iot_operator" not in names
     # untouched agents remain exposed
@@ -36,23 +36,23 @@ def test_coordinator_has_all_subagents_by_default(monkeypatch):
     for a in ["IOT_OPERATOR", "WEATHER_AGENT", "FINANCE_AGENT", "MAPS_AGENT", "NEWS_AGENT", "MEMORY_OPERATOR", "FPL_AGENT", "SCHEDULER_AGENT"]:
         monkeypatch.delenv(f"AGENT_{a}_ENABLED", raising=False)
     coord = agents.create_coordinator_agent()
-    names = {getattr(t, "name", "") for t in coord.tools}
+    names = {t.metadata.name for t in coord.tools}
     assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent"}
 
 
-def test_coordinator_hands_off_to_composer(monkeypatch):
+def test_coordinator_does_not_expose_composer_and_has_no_handoffs(monkeypatch):
+    # The composer is now a deterministic final step run by the engine, not a
+    # coordinator tool and not an SDK handoff target.
     monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
     coord = agents.create_coordinator_agent()
-    handoff_names = {getattr(h, "name", "") for h in coord.handoffs}
-    assert "composer" in handoff_names
-    # The composer is a handoff target, not a coordinator tool.
-    assert "composer" not in {getattr(t, "name", "") for t in coord.tools}
+    assert "composer" not in {t.metadata.name for t in coord.tools}
+    assert not coord.can_handoff_to
 
 
 def test_every_agent_gets_environment_preamble(monkeypatch):
     monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
     for factory in (agents.create_composer_agent, agents.create_weather_agent, agents.create_coordinator_agent):
         agent = factory()
-        assert isinstance(agent.instructions, str)
-        assert "Environment context" in agent.instructions
-        assert "Base currency: PLN" in agent.instructions
+        assert isinstance(agent.system_prompt, str)
+        assert "Environment context" in agent.system_prompt
+        assert "Base currency: PLN" in agent.system_prompt

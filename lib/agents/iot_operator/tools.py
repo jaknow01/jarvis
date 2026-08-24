@@ -4,13 +4,13 @@ temperature. Registered into TOOLS_BY_AGENT["iot_operator"] via @tool_ownership.
 The model refers to devices only by their human-readable NAME; ip / local_key / dev_id
 never reach the LLM (resolved back to a real SmartDevice server-side here)."""
 
-from agents import RunContextWrapper, function_tool
+from llama_index.core.workflow import Context
 from typing import List, Annotated
 import json
 import asyncio
 import logging
 
-from lib.core import Ctx, tool_ownership
+from lib.core import tool_ownership, function_tool, app_context
 from lib.agents.iot_operator.device import SmartDevice, RGB, Mode
 from lib.agents.iot_operator.tuya_link import manager, SCAN_TIMEOUT
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # name back to the real SmartDevice (which holds ip/local_key) on the server side, so
 # connection secrets are never exposed to or round-tripped through the LLM.
 
-async def _load_devices(ctx: RunContextWrapper[Ctx]) -> dict:
+async def _load_devices(ctx: Context) -> dict:
     """Load the device registry (name -> SmartDevice) into the context."""
     with open(DEVICES_PARAMS_PATH, "r", encoding="utf-8") as f:
         configs = json.load(f)["list_of_elements"]
@@ -36,7 +36,7 @@ async def _load_devices(ctx: RunContextWrapper[Ctx]) -> dict:
             devices[dev.name] = dev
         except Exception as e:
             logging.error(f"Error creating device: {e}")
-    ctx.context.devices = devices
+    app_context(ctx).devices = devices
     return devices
 
 
@@ -58,15 +58,15 @@ async def _wake_and_heal_ips(devices: dict) -> None:
             dev.ip = ip
 
 
-async def _ensure_devices(ctx: RunContextWrapper[Ctx]) -> dict:
-    if not getattr(ctx.context, "devices", None):
+async def _ensure_devices(ctx: Context) -> dict:
+    if not getattr(app_context(ctx), "devices", None):
         await _load_devices(ctx)
-    return ctx.context.devices
+    return app_context(ctx).devices
 
 
-def _resolve_devices(ctx: RunContextWrapper[Ctx], names: List[str]):
+def _resolve_devices(ctx: Context, names: List[str]):
     """Map model-supplied device names to real devices. Returns (found, unknown_names)."""
-    registry = getattr(ctx.context, "devices", None) or {}
+    registry = getattr(app_context(ctx), "devices", None) or {}
     lower = {name.lower(): dev for name, dev in registry.items()}
     found, unknown = [], []
     for n in names:
@@ -78,16 +78,16 @@ def _resolve_devices(ctx: RunContextWrapper[Ctx], names: List[str]):
     return found, unknown
 
 
-def _unknown_device_error(ctx: RunContextWrapper[Ctx], name: str) -> dict:
+def _unknown_device_error(ctx: Context, name: str) -> dict:
     return {
         "Error": f"Unknown device '{name}'.",
-        "available_devices": list((getattr(ctx.context, "devices", None) or {}).keys()),
+        "available_devices": list((getattr(app_context(ctx), "devices", None) or {}).keys()),
     }
 
 
 @tool_ownership("iot_operator")
 @function_tool
-async def get_devices_state(ctx: RunContextWrapper[Ctx]):
+async def get_devices_state(ctx: Context):
     """
     Description:
         This tool is used to download initial neccessary data about all smart devices from a database.
@@ -108,16 +108,16 @@ async def get_devices_state(ctx: RunContextWrapper[Ctx]):
     logger.info("Loading user preferences")
     with open(DEVICES_PREFERENCES_PATH, "r", encoding="utf-8") as f:
         preferences = json.load(f)
-    ctx.context.devices_preferences = preferences
+    app_context(ctx).devices_preferences = preferences
 
     states = await asyncio.gather(*(d.get_status() for d in devices.values()))
-    ctx.context.devices_states = states
+    app_context(ctx).devices_states = states
 
     return {"states" : states, "known_user_preferences": preferences}
 
 @tool_ownership("iot_operator")
 @function_tool
-async def get_one_device_status(ctx: RunContextWrapper[Ctx], device_name: str) -> dict:
+async def get_one_device_status(ctx: Context, device_name: str) -> dict:
     """
     Description:
     This tool is used to check the status of a given device without the unnecessary overhead
@@ -128,7 +128,7 @@ async def get_one_device_status(ctx: RunContextWrapper[Ctx], device_name: str) -
         When agents wants to interact with multiple devices this tool should be run in parallel.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     device_name : str
@@ -144,18 +144,18 @@ async def get_one_device_status(ctx: RunContextWrapper[Ctx], device_name: str) -
         return _unknown_device_error(ctx, device_name)
 
     state = await found[0].get_status()
-    ctx.context.devices_states[found[0].get_name()] = state
+    app_context(ctx).devices_states[found[0].get_name()] = state
     return state
 
 @tool_ownership("iot_operator")
 @function_tool
-async def turn_on_devices(ctx: RunContextWrapper[Ctx], device_names: List[str]) -> dict:
+async def turn_on_devices(ctx: Context, device_names: List[str]) -> dict:
     """
     Description:
     This tool is used to turn on all mentioned devices.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     device_names : List[str]
@@ -178,13 +178,13 @@ async def turn_on_devices(ctx: RunContextWrapper[Ctx], device_names: List[str]) 
 
 @tool_ownership("iot_operator")
 @function_tool
-async def turn_off_devices(ctx: RunContextWrapper[Ctx], device_names: List[str]) -> dict:
+async def turn_off_devices(ctx: Context, device_names: List[str]) -> dict:
     """
     Description:
     This tool is used to turn off all mentioned devices.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     device_names : List[str]
@@ -207,7 +207,7 @@ async def turn_off_devices(ctx: RunContextWrapper[Ctx], device_names: List[str])
 
 @tool_ownership("iot_operator")
 @function_tool(strict_mode=False)
-async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device_name: str, new_mode: Mode) -> dict:
+async def change_lighting_mode(ctx: Context, device_name: str, new_mode: Mode) -> dict:
     """
     Description:
     This tool is used to change the lighting mode of a given smart device. Lighting mode can either
@@ -215,7 +215,7 @@ async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device_name: str, ne
     device. When in white mode the lighting temperature can be adjusted.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     device_name: str
@@ -233,14 +233,14 @@ async def change_lighting_mode(ctx: RunContextWrapper[Ctx], device_name: str, ne
 
 @tool_ownership("iot_operator")
 @function_tool(strict_mode=False)
-async def change_color(ctx: RunContextWrapper[Ctx], device_name: str, new_color: RGB) -> dict:
+async def change_color(ctx: Context, device_name: str, new_color: RGB) -> dict:
     """
     Description:
     This tool is used to change the colour of the given smart device.
     In order to set a new RGB value device must be in 'colour' lighting mode.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     device_name: str
@@ -263,14 +263,14 @@ async def change_color(ctx: RunContextWrapper[Ctx], device_name: str, new_color:
 
 @tool_ownership("iot_operator")
 @function_tool(strict_mode=False)
-async def change_light_temperature(ctx: RunContextWrapper, device_name: str, new_temp: Annotated[int, "range 0-1000"]) -> dict:
+async def change_light_temperature(ctx: Context, device_name: str, new_temp: Annotated[int, "range 0-1000"]) -> dict:
     """
     Description:
     This tool is used to change the colour temperature of the given device.
     In order to set a new color temperature the device must be in 'white' lighting mode.
 
     Parameters:
-    ctx : RunContextWrapper[Ctx]
+    ctx : Context
         Context in which the tool operates
 
     device_name: str
