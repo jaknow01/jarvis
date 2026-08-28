@@ -1,0 +1,69 @@
+[
+  {
+    "id": "trip_london",
+    "scenario": "Właściciel planuje jutrzejszy wyjazd do Londynu i dopytuje o szczegóły.",
+    "persona": "Właściciel asystenta Jarvis: jedna osoba mieszkająca w Warszawie, mówiąca po polsku, bazowa waluta PLN. Pyta krótko i naturalnie, jak do osobistego asystenta w telefonie.",
+    "turns": [
+      {
+        "input": "Wybieram się jutro do Londynu."
+      },
+      {
+        "input": "Jaka będzie tam pogoda?",
+        "expected_routing": [
+          "weather_agent"
+        ]
+      },
+      {
+        "input": "A ile kosztuje funt?",
+        "expected_routing": [
+          "finance_agent"
+        ]
+      },
+      {
+        "input": "Ustaw mi przypomnienie, żebym spakował parasol.",
+        "expected_routing": [
+          "scheduler_agent"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "coffee_memory",
+    "scenario": "Właściciel podaje preferencję, potem pyta o coś innego, na końcu prosi o przypomnienie preferencji.",
+    "persona": "Właściciel asystenta Jarvis: jedna osoba mieszkająca w Warszawie, mówiąca po polsku, bazowa waluta PLN. Pyta krótko i naturalnie, jak do osobistego asystenta w telefonie.",
+    "turns": [
+      {
+        "input": "Zapamiętaj, że nie piję kawy z mlekiem — zawsze czarna.",
+        "expected_routing": [
+          "memory_operator"
+        ]
+      },
+      {
+        "input": "Jaka jest teraz pogoda w Warszawie?",
+        "expected_routing": [
+          "weather_agent"
+        ]
+      },
+      {
+        "input": "Przypomnij mi, jak piję kawę?"
+      }
+    ]
+  },
+  {
+    "id": "brief_followup",
+    "scenario": "Właściciel prosi o poranny brief, a potem dopytuje o szczegół z briefu.",
+    "persona": "Właściciel asystenta Jarvis: jedna osoba mieszkająca w Warszawie, mówiąca po polsku, bazowa waluta PLN. Pyta krótko i naturalnie, jak do osobistego asystenta w telefonie.",
+    "turns": [
+      {
+        "input": "Daj mi poranny brief: pogoda w Warszawie i kurs euro.",
+        "expected_routing": [
+          "weather_agent",
+          "finance_agent"
+        ]
+      },
+      {
+        "input": "A jaka była ta temperatura?"
+      }
+    ]
+  }
+]

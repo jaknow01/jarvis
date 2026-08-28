@@ -32,7 +32,12 @@ from lib.core import Ctx
 
 from evals.harness.config import EvalConfig, JudgeConfig
 from evals.harness.cost import PriceTable
-from evals.harness.conversation import ScriptedConversation, ScriptedTurn, ConversationRun
+from evals.harness.conversation import (
+    ScriptedConversation,
+    ScriptedTurn,
+    ConversationRun,
+    SimScenario,
+)
 from evals.harness.datasets import PERSONA
 from evals.harness.deepeval_model import deepeval_model_for
 from evals.harness.driver import run_golden
@@ -63,6 +68,11 @@ def make_conversational_golden(
         expected_outcome=expected_outcome,
         user_description=persona,
     )
+
+
+def golden_from_sim_scenario(sim: SimScenario) -> ConversationalGolden:
+    """Build a deepeval ConversationalGolden from a JSON-loaded :class:`SimScenario`."""
+    return make_conversational_golden(sim.scenario, sim.expected_outcome, sim.persona)
 
 
 def simulate_conversation(

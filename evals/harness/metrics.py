@@ -43,16 +43,16 @@ class MetricResult:
     reason: str | None
 
 
-def build_composer_quality(judge: JudgeConfig, threshold: float = 0.7) -> GEval:
+def build_composer_quality(judge_model, threshold: float = 0.7) -> GEval:
     """Polish-language answer quality on the final composer reply.
 
     CONTEXT carries the coordinator's gathered data, so the judge scores *faithfulness to
     what the sub-agents actually returned* rather than penalising every specific number as
-    if it were unfounded.
+    if it were unfounded. ``judge_model`` is a resolved deepeval model (string or adapter).
     """
     return GEval(
         name="composer_quality_pl",
-        model=judge.model,
+        model=judge_model,
         threshold=threshold,
         evaluation_params=[
             LLMTestCaseParams.INPUT,
@@ -101,10 +101,11 @@ async def score_golden(
         composer_threshold: pass threshold for the composer-quality GEval.
     """
     results: list[MetricResult] = []
+    judge_model = judge.deepeval_model()  # resolve once; reuse for every metric in this call
 
     # 1) Composer answer quality (always, reference-free). The coordinator's gathered data
     #    is passed as CONTEXT so faithfulness is judged against what the sub-agents returned.
-    geval = build_composer_quality(judge, threshold=composer_threshold)
+    geval = build_composer_quality(judge_model, threshold=composer_threshold)
     gathered = run.capture.agent_outputs.get("coordinator", "")
     tc = LLMTestCase(
         input=run.input,
@@ -133,7 +134,7 @@ async def score_golden(
                 expected=[ToolCall(name=n) for n in expected_routing],
                 actual_output=run.reply,
                 user_input=run.input,
-                judge=judge,
+                judge_model=judge_model,
             )
         )
 
@@ -147,7 +148,7 @@ async def score_golden(
                 expected=[ToolCall(name=n) for n in expected_tools],
                 actual_output=run.reply,
                 user_input=run.input,
-                judge=judge,
+                judge_model=judge_model,
             )
         )
 
@@ -161,9 +162,9 @@ async def _tool_correctness(
     expected: list[ToolCall],
     actual_output: str,
     user_input: str,
-    judge: JudgeConfig,
+    judge_model,
 ) -> MetricResult:
-    metric = ToolCorrectnessMetric(model=judge.model)
+    metric = ToolCorrectnessMetric(model=judge_model)
     tc = LLMTestCase(
         input=user_input,
         actual_output=actual_output,

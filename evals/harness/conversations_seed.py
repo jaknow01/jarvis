@@ -8,29 +8,19 @@ retention (recall a fact the user stated several turns earlier).
 
 from __future__ import annotations
 
-from evals.harness.conversation import ScriptedConversation, ScriptedTurn as T
+from pathlib import Path
 
+from evals.harness.conversation import (
+    ScriptedConversation,
+    ScriptedTurn as T,
+    SimScenario,
+    load_conversations,
+    load_sim_scenarios,
+    save_conversations,
+    save_sim_scenarios,
+)
 
-# Scenarios for the DYNAMIC (simulated) layer: (scenario, expected_outcome) pairs the owner
-# persona pursues. Fed to `simulator.make_conversational_golden` — no fixed turns, the
-# simulated user LLM improvises them.
-SIM_SCENARIO_SPECS: list[tuple[str, str]] = [
-    (
-        "Właściciel planuje jutrzejszy poranny wyjazd na lotnisko Chopina i chce znać pogodę "
-        "oraz czas dojazdu, a na końcu ustawić przypomnienie o wyjściu.",
-        "Użytkownik zna pogodę i czas dojazdu i ma ustawione przypomnienie.",
-    ),
-    (
-        "Właściciel prosi o poranny brief i dopytuje o szczegóły (kurs, pogoda, newsy), "
-        "zmieniając zdanie w trakcie rozmowy.",
-        "Użytkownik dostał brief i odpowiedzi na dopytania, spójne z wcześniejszymi turami.",
-    ),
-    (
-        "Właściciel ustala preferencje oświetlenia na wieczór i chce, by asystent zapamiętał je "
-        "na przyszłość.",
-        "Preferencja została zapamiętana, a asystent potwierdził ustawienie światła.",
-    ),
-]
+_DATASETS_DIR = Path(__file__).resolve().parent.parent / "datasets"
 
 
 SEED_CONVERSATIONS: list[ScriptedConversation] = [
@@ -68,3 +58,47 @@ SEED_CONVERSATIONS: list[ScriptedConversation] = [
         ],
     ),
 ]
+
+
+# Scenarios for the DYNAMIC (simulated) layer — no fixed turns; the simulated user LLM
+# improvises them toward the expected outcome.
+SEED_SIM_SCENARIOS: list[SimScenario] = [
+    SimScenario(
+        id="sim_airport_trip",
+        scenario="Właściciel planuje jutrzejszy poranny wyjazd na lotnisko Chopina i chce znać "
+                 "pogodę oraz czas dojazdu, a na końcu ustawić przypomnienie o wyjściu.",
+        expected_outcome="Użytkownik zna pogodę i czas dojazdu i ma ustawione przypomnienie.",
+    ),
+    SimScenario(
+        id="sim_morning_brief",
+        scenario="Właściciel prosi o poranny brief i dopytuje o szczegóły (kurs, pogoda, newsy), "
+                 "zmieniając zdanie w trakcie rozmowy.",
+        expected_outcome="Użytkownik dostał brief i odpowiedzi na dopytania, spójne z wcześniejszymi turami.",
+    ),
+    SimScenario(
+        id="sim_evening_lighting",
+        scenario="Właściciel ustala preferencje oświetlenia na wieczór i chce, by asystent "
+                 "zapamiętał je na przyszłość.",
+        expected_outcome="Preferencja została zapamiętana, a asystent potwierdził ustawienie światła.",
+    ),
+]
+
+
+# --------------------------------------------------------------- ensure-on-disk (JSON)
+def ensure_scripted(name: str = "conversations") -> list[ScriptedConversation]:
+    """Return scripted conversations, writing the seed to JSON on first use (reproducible,
+    and easy to review/edit as data). Re-reads the JSON if it already exists."""
+    path = _DATASETS_DIR / f"{name}.json"
+    if path.exists():
+        return load_conversations(name)
+    save_conversations(SEED_CONVERSATIONS, name)
+    return SEED_CONVERSATIONS
+
+
+def ensure_simulations(name: str = "simulations") -> list[SimScenario]:
+    """Return simulation scenarios, writing the seed to JSON on first use."""
+    path = _DATASETS_DIR / f"{name}.json"
+    if path.exists():
+        return load_sim_scenarios(name)
+    save_sim_scenarios(SEED_SIM_SCENARIOS, name)
+    return SEED_SIM_SCENARIOS

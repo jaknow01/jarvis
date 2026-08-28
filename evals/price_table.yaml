@@ -39,3 +39,10 @@ models:
   "openrouter/deepseek/deepseek-v4-flash-0731":
     input_per_mtok: 0.14
     output_per_mtok: 0.28
+  # Qwen 3.6 (OpenRouter listed pricing, USD per 1M tokens).
+  "openrouter/qwen/qwen3.6-27b":
+    input_per_mtok: 0.30
+    output_per_mtok: 2.00
+  "openrouter/qwen/qwen3.6-35b-a3b":
+    input_per_mtok: 0.05
+    output_per_mtok: 0.70

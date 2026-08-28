@@ -53,18 +53,27 @@ mechanism the whole harness relies on. No judge, so it's cheap.
 
 ## Running a sweep
 
+Sweeps are defined by a small **YAML config** (`evals/sweeps/*.yaml`) so experiments live in
+data — easy to review, diff, and modify. See `evals/sweeps/composer_example.yaml` and the
+schema in `harness/sweep_config.py`.
+
 ```bash
-evals/.venv/bin/python -m evals.scripts.run_sweep composer \
-    openai/gpt-4.1-mini openai/gpt-5.6-luna
+evals/.venv/bin/python -m evals.scripts.run_sweep evals/sweeps/composer_example.yaml
+# or by bare name (resolves to evals/sweeps/<name>.yaml):
+evals/.venv/bin/python -m evals.scripts.run_sweep composer_example
 ```
 
-Every candidate is evaluated on the **same** goldens (fair comparison), scored by the
-constant judge, and written to `evals/reports/<run>.json` + `<run>.md`. The markdown is the
-quality × cost table: one row per candidate, metric means + pass rates next to the swept
-role's mean USD and the total USD per turn.
+The config sets the swept `role`, `candidates` (model + optional `reasoning_effort`), the
+constant `judge_model`, `mock`, the `dataset`, an optional `baseline` (fixed models for the
+other roles), and an optional subset (`limit` / `only_ids`) for cheap first runs.
 
-Sweep any role the same way (`coordinator`, `weather_agent`, …). Only the swept role varies;
-all other roles stay on the baseline.
+Every candidate is evaluated on the **same** goldens (fair comparison), scored by the
+constant judge, and written to `evals/reports/<name>.json` + `<name>.md`. The markdown is the
+quality × cost table: one row per candidate, metric means + pass rates next to the swept
+role's mean USD and the total USD per turn. Only the swept role varies; every other role
+stays on the baseline. Sweep any role (`coordinator`, `weather_agent`, …) the same way.
+
+Programmatic use: `SweepConfig.load(path)` → `run_sweep_from_config(cfg)`.
 
 ## Mocked tools (deterministic benchmark)
 
@@ -114,7 +123,13 @@ sync context (the simulator manages its own loop); conversations run sequentiall
   `Synthesizer`, generating fresh persona-styled inputs. Reference-free (input only); label a
   subset by hand for the optional ToolCorrectness metrics.
 
-Datasets persist under `evals/datasets/` for reproducibility.
+Everything under `evals/datasets/` is JSON, so it can be reviewed and edited as data
+(the code seeds are written to JSON on first use via `ensure_*`, and loaders read the JSON):
+
+- `labeled.json` — the 42 single/multi-hop goldens (with `expected_routing` / `expected_execution`).
+- `conversations.json` — scripted multi-turn conversations (`ensure_scripted()` / `load_conversations()`).
+- `simulations.json` — dynamic simulation scenarios: scenario + expected_outcome
+  (`ensure_simulations()` / `load_sim_scenarios()`, fed to the simulator).
 
 ## How it works (and one gotcha)
 

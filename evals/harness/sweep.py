@@ -16,6 +16,11 @@ from evals.harness.cost import PriceTable
 from evals.harness.datasets import EvalGolden
 from evals.harness.driver import GoldenRun, run_golden
 from evals.harness.metrics import MetricResult, score_golden
+from evals.harness.conversation import (
+    ScriptedConversation,
+    run_conversation,
+    score_conversation,
+)
 
 
 @dataclass
@@ -85,21 +90,28 @@ async def sweep_role(
     baseline: EvalConfig | None = None,
     composer_threshold: float = 0.7,
     mock: bool = True,
+    conversations: list[ScriptedConversation] | None = None,
 ) -> list[CandidateResult]:
-    """Run the full grid for ``role`` over ``candidates`` across ``goldens``.
+    """Run the full grid for ``role`` over ``candidates`` across ``goldens`` (and optionally
+    scripted multi-turn ``conversations``).
 
     Args:
         role: the role being swept (e.g. "composer", "coordinator", "weather_agent").
         candidates: the {model, effort} points to try for that role.
-        goldens: the fixed dataset every candidate is evaluated on.
+        goldens: the single/multi-hop dataset every candidate is evaluated on.
         judge: the constant judge used for all metrics across the sweep.
         table: price table for cost.
         baseline: overrides for the *other* roles, held fixed; the swept role's baseline
             entry (if any) is replaced per candidate.
         composer_threshold: pass threshold for the composer-quality GEval.
         mock: run against deterministic mocked tools (default) vs the real tools/APIs.
+        conversations: optional scripted multi-turn conversations. Each conversation's turns
+            are scored per-turn (like goldens) and the whole conversation gets the multi-turn
+            metrics (conversation_quality_pl, knowledge_retention). Simulated conversations are
+            NOT included here (non-deterministic; run them separately).
     """
     base_overrides = dict(baseline.overrides) if baseline else {}
+    conversations = conversations or []
     results: list[CandidateResult] = []
 
     for cand in candidates:
@@ -113,6 +125,8 @@ async def sweep_role(
         cr = CandidateResult(
             role=role, label=label, model=cand.model, reasoning_effort=cand.reasoning_effort
         )
+
+        # 1) single/multi-hop goldens
         for g in goldens:
             run = await run_golden(g.id, g.input, config, table, mock=mock)
             metrics = await score_golden(
@@ -123,6 +137,33 @@ async def sweep_role(
                 composer_threshold=composer_threshold,
             )
             cr.outcomes.append(GoldenOutcome(golden_id=g.id, run=run, metrics=metrics))
+
+        # 2) scripted multi-turn conversations
+        for conv in conversations:
+            crun = await run_conversation(conv, config, table, mock=mock)
+            scored = await score_conversation(
+                crun, judge, per_turn=True, composer_threshold=composer_threshold
+            )
+            # per-turn outcomes carry the real cost (tokens spent each turn)
+            for i, turn_run in enumerate(crun.turn_runs):
+                cr.outcomes.append(
+                    GoldenOutcome(golden_id=f"{conv.id}#t{i}", run=turn_run, metrics=scored["per_turn"][i])
+                )
+            # one conversation-level outcome for the multi-turn metrics; its run carries NO
+            # cost (a cost-free summary) so it does not double-count the turns' tokens.
+            summary = GoldenRun(
+                golden_id=conv.id,
+                config_label=label,
+                input=conv.scenario or conv.id,
+                reply=" | ".join(tr.reply for tr in crun.turn_runs),
+                usage_by_role={},
+                costs=[],
+                total_cost_usd=None,
+            )
+            cr.outcomes.append(
+                GoldenOutcome(golden_id=conv.id, run=summary, metrics=scored["conversation"])
+            )
+
         results.append(cr.finalize())
 
     return results

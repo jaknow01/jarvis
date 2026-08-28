@@ -51,12 +51,22 @@ class EvalConfig:
 class JudgeConfig:
     """The constant LLM-as-judge used for all metrics across a whole sweep.
 
-    ``model`` is a deepeval model string (e.g. ``gpt-5-mini`` or ``gpt-4o``). Kept fixed so
-    quality scores are comparable between candidates. Read from ``EVAL_JUDGE_MODEL`` with a
-    sensible default; the judge's own token cost is accounted separately from agent cost.
+    ``model`` is a ``provider/model`` string kept fixed so quality scores are comparable
+    between candidates. A bare id (no ``/``) is deepeval's native OpenAI path; a
+    provider-prefixed id (e.g. ``openrouter/deepseek/...``) is wrapped via the adapter so any
+    provider can judge. Read from ``EVAL_JUDGE_MODEL`` with a sensible default; the judge's own
+    token cost is accounted separately from agent cost.
     """
 
     model: str = field(default_factory=lambda: os.getenv("EVAL_JUDGE_MODEL", "gpt-4o"))
+
+    def deepeval_model(self):
+        """The value to pass as a metric's ``model=``: a plain string for a bare OpenAI id,
+        or a provider-agnostic adapter for a ``provider/model`` id. Lazy-imported so this
+        low-level module stays free of the deepeval/lib import cost until needed."""
+        from evals.harness.deepeval_model import deepeval_model_for
+
+        return deepeval_model_for(self.model)
 
 
 @contextlib.contextmanager

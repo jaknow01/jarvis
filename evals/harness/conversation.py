@@ -18,8 +18,10 @@ Per-agent token/cost capture works per turn and is summed to a conversation tota
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from deepeval.metrics import ConversationalGEval, KnowledgeRetentionMetric
 from deepeval.test_case import ConversationalTestCase, Turn, TurnParams
@@ -32,6 +34,8 @@ from evals.harness.datasets import PERSONA
 from evals.harness.driver import GoldenRun, run_golden
 from evals.harness.metrics import MetricResult, score_golden
 
+_DATASETS_DIR = Path(__file__).resolve().parent.parent / "datasets"
+
 
 @dataclass
 class ScriptedTurn:
@@ -40,6 +44,22 @@ class ScriptedTurn:
     input: str
     expected_routing: list[str] | None = None
     expected_execution: dict[str, list[str]] | None = None
+
+    def to_dict(self) -> dict:
+        d: dict = {"input": self.input}
+        if self.expected_routing is not None:
+            d["expected_routing"] = self.expected_routing
+        if self.expected_execution is not None:
+            d["expected_execution"] = self.expected_execution
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ScriptedTurn":
+        return cls(
+            input=d["input"],
+            expected_routing=d.get("expected_routing"),
+            expected_execution=d.get("expected_execution"),
+        )
 
 
 @dataclass
@@ -50,6 +70,85 @@ class ScriptedConversation:
     turns: list[ScriptedTurn]
     scenario: str = ""
     persona: str = PERSONA
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "scenario": self.scenario,
+            "persona": self.persona,
+            "turns": [t.to_dict() for t in self.turns],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ScriptedConversation":
+        return cls(
+            id=d["id"],
+            scenario=d.get("scenario", ""),
+            persona=d.get("persona", PERSONA),
+            turns=[ScriptedTurn.from_dict(t) for t in d["turns"]],
+        )
+
+
+@dataclass
+class SimScenario:
+    """A scenario for the DYNAMIC layer: no fixed turns — the simulated user improvises them.
+
+    ``scenario`` describes what the owner wants; ``expected_outcome`` is the success
+    condition the simulator drives toward. Serialisable to JSON like the scripted set.
+    """
+
+    id: str
+    scenario: str
+    expected_outcome: str
+    persona: str = PERSONA
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "scenario": self.scenario,
+            "expected_outcome": self.expected_outcome,
+            "persona": self.persona,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SimScenario":
+        return cls(
+            id=d["id"],
+            scenario=d["scenario"],
+            expected_outcome=d["expected_outcome"],
+            persona=d.get("persona", PERSONA),
+        )
+
+
+# --------------------------------------------------------------- JSON persistence
+def save_conversations(conversations: list[ScriptedConversation], name: str = "conversations") -> Path:
+    """Persist scripted conversations to ``evals/datasets/<name>.json``."""
+    _DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _DATASETS_DIR / f"{name}.json"
+    path.write_text(json.dumps([c.to_dict() for c in conversations], ensure_ascii=False, indent=2))
+    return path
+
+
+def load_conversations(name: str = "conversations") -> list[ScriptedConversation]:
+    """Load scripted conversations from ``evals/datasets/<name>.json``."""
+    path = _DATASETS_DIR / f"{name}.json"
+    data = json.loads(path.read_text())
+    return [ScriptedConversation.from_dict(d) for d in data]
+
+
+def save_sim_scenarios(scenarios: list[SimScenario], name: str = "simulations") -> Path:
+    """Persist simulation scenarios to ``evals/datasets/<name>.json``."""
+    _DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _DATASETS_DIR / f"{name}.json"
+    path.write_text(json.dumps([s.to_dict() for s in scenarios], ensure_ascii=False, indent=2))
+    return path
+
+
+def load_sim_scenarios(name: str = "simulations") -> list[SimScenario]:
+    """Load simulation scenarios from ``evals/datasets/<name>.json``."""
+    path = _DATASETS_DIR / f"{name}.json"
+    data = json.loads(path.read_text())
+    return [SimScenario.from_dict(d) for d in data]
 
 
 @dataclass
@@ -98,11 +197,12 @@ async def run_conversation(
     return run
 
 
-def build_conversation_geval(judge: JudgeConfig, threshold: float = 0.7) -> ConversationalGEval:
-    """Polish multi-turn quality: role adherence + cross-turn context consistency."""
+def build_conversation_geval(judge_model, threshold: float = 0.7) -> ConversationalGEval:
+    """Polish multi-turn quality: role adherence + cross-turn context consistency.
+    ``judge_model`` is a resolved deepeval model (string or adapter)."""
     return ConversationalGEval(
         name="conversation_quality_pl",
-        model=judge.model,
+        model=judge_model,
         threshold=threshold,
         evaluation_params=[TurnParams.ROLE, TurnParams.CONTENT],
         evaluation_steps=[
@@ -148,7 +248,8 @@ async def score_conversation(
         user_description=run.conversation.persona,
     )
 
-    conv_geval = build_conversation_geval(judge)
+    judge_model = judge.deepeval_model()  # resolve once for the conversation-level metrics
+    conv_geval = build_conversation_geval(judge_model)
     await conv_geval.a_measure(tc)
     result["conversation"].append(
         MetricResult(
@@ -162,7 +263,7 @@ async def score_conversation(
     )
 
     if knowledge_retention:
-        kr = KnowledgeRetentionMetric(model=judge.model)
+        kr = KnowledgeRetentionMetric(model=judge_model)
         await kr.a_measure(tc)
         result["conversation"].append(
             MetricResult(

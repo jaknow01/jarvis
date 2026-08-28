@@ -130,6 +130,70 @@ def test_mock_fixture_lookup():
     assert _fixture_for("some_unknown_tool") == {"status": "ok", "_mock": "some_unknown_tool"}
 
 
+def test_sweep_config_parsing():
+    from evals.harness.sweep_config import SweepConfig
+
+    raw = {
+        "name": "t",
+        "role": "composer",
+        "judge_model": "gpt-4o",
+        "dataset": "labeled",
+        "limit": 3,
+        "baseline": {"coordinator": "openai/gpt-5.6-luna"},
+        "candidates": [
+            "openai/gpt-4.1-mini",                          # bare string form
+            {"model": "openai/gpt-5.6-luna", "reasoning_effort": "low"},  # dict form
+        ],
+    }
+    cfg = SweepConfig.from_dict(raw)
+    assert cfg.role == "composer" and cfg.limit == 3
+    assert [c.model for c in cfg.candidates] == ["openai/gpt-4.1-mini", "openai/gpt-5.6-luna"]
+    assert cfg.candidates[1].reasoning_effort == "low"
+    # every candidate is bound to the swept role
+    assert all(c.role == "composer" for c in cfg.candidates)
+    assert cfg.judge().model == "gpt-4o"
+    assert cfg.baseline_config().overrides["coordinator"].model == "openai/gpt-5.6-luna"
+
+
+def test_sweep_config_select_goldens_limit():
+    from evals.harness.sweep_config import SweepConfig
+
+    cfg = SweepConfig.from_dict({"role": "composer", "dataset": "labeled",
+                                 "limit": 2, "candidates": ["openai/x"]})
+    assert len(cfg.select_goldens()) == 2
+
+    cfg2 = SweepConfig.from_dict({"role": "composer", "dataset": "labeled",
+                                  "only_ids": ["sh_weather_now"], "candidates": ["openai/x"]})
+    picked = cfg2.select_goldens()
+    assert len(picked) == 1 and picked[0].id == "sh_weather_now"
+
+
+def test_sweep_config_conversations_and_goldens_optional():
+    from evals.harness.sweep_config import SweepConfig
+
+    # goldens + conversations together
+    cfg = SweepConfig.from_dict({"role": "composer", "dataset": "labeled",
+                                 "conversations": "conversations", "candidates": ["openai/x"]})
+    assert cfg.dataset == "labeled" and cfg.conversations == "conversations"
+
+    # conversations only: dataset defaults to None (no goldens) when omitted
+    conv_only = SweepConfig.from_dict({"role": "composer", "conversations": "conversations",
+                                       "candidates": ["openai/x"]})
+    assert conv_only.dataset is None and conv_only.select_goldens() == []
+    assert len(conv_only.select_conversations()) >= 1
+
+    # neither given -> back-compat default to labeled goldens
+    default = SweepConfig.from_dict({"role": "composer", "candidates": ["openai/x"]})
+    assert default.dataset == "labeled"
+
+
+def test_judge_bare_model_is_native_string():
+    from evals.harness.config import JudgeConfig
+
+    # a bare OpenAI id stays a plain string (deepeval's native path, no adapter)
+    assert JudgeConfig(model="gpt-4o").deepeval_model() == "gpt-4o"
+
+
 def test_unwrap_simulated_input():
     from evals.harness.simulator import _unwrap_simulated_input
 
