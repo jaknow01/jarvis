@@ -64,9 +64,12 @@ def write_reports(
     The markdown is the quality-vs-cost comparison table: one row per candidate, metric means
     and pass rates alongside the swept role's mean USD and the mean total USD per turn.
     """
-    out = Path(out_dir) if out_dir else _REPORTS_DIR
+    now = datetime.now(timezone.utc)
+    # Group reports by the date they were produced: evals/reports/<YYYY-MM-DD>/<name>.{json,md}
+    base = Path(out_dir) if out_dir else _REPORTS_DIR
+    out = base / now.strftime("%Y-%m-%d")
     out.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = now.strftime("%Y%m%d-%H%M%S")
     run_name = run_name or f"sweep-{role}-{stamp}"
 
     payload = {

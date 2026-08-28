@@ -14,9 +14,10 @@ Workloads (which data each needs in the config):
     scripted   deterministic conversations     -> `conversations:` (e.g. conversations)
     simulated  dynamic, LLM-driven conversations -> `simulations:` (e.g. simulations)
 
-Every candidate model is compared under identical conditions. Reports are written to
-evals/reports/<name>-<kind>.{json,md}. Goldens + scripted share one deterministic report;
-simulated is reported separately (it is non-deterministic and runs via its own event loop).
+Every candidate model is compared under identical conditions. Reports are written to a
+date-stamped folder: evals/reports/<YYYY-MM-DD>/<name>-<kind>.{json,md}. Goldens + scripted
+share one deterministic report; simulated is reported separately (it is non-deterministic
+and runs via its own event loop).
 
 Model sweeps are driven the same way for all kinds: the `role` + `candidates` in the config
 apply to goldens, scripted, AND simulated. `simulator_model:` (default DEFAULT_MODEL) is the
@@ -25,6 +26,7 @@ LLM that role-plays the user in the simulated kind.
 
 import argparse
 import asyncio
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -57,6 +59,7 @@ def main() -> None:
     want_simulated = only in ("all", "simulated")
 
     ran_any = False
+    date_dir = f"{_REPORTS_DIR}/{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
     print(f"Config '{cfg.name}': role={cfg.role}, {len(cfg.candidates)} candidate(s), "
           f"judge={cfg.judge().model}, mock={cfg.mock}")
 
@@ -77,7 +80,7 @@ def main() -> None:
             cfg, table, include_goldens=det_goldens, include_conversations=det_scripted,
             report_name=f"{cfg.name}-{suffix}",
         ))
-        print(f"    wrote {_REPORTS_DIR}/{cfg.name}-{suffix}.json + .md")
+        print(f"    wrote {date_dir}/{cfg.name}-{suffix}.json + .md")
         ran_any = True
 
     # --- simulated part: dynamic conversations (sync simulate + async score) ---
@@ -88,7 +91,7 @@ def main() -> None:
             n_s = len(cfg.select_simulations())
             print(f"  → running {n_s} simulated scenario(s) (simulator={cfg.simulator_model or 'DEFAULT_MODEL'}) …")
             run_simulations_from_config(cfg, table)
-            print(f"    wrote {_REPORTS_DIR}/{cfg.name}-simulated.json + .md")
+            print(f"    wrote {date_dir}/{cfg.name}-simulated.json + .md")
             ran_any = True
 
     if not ran_any:
