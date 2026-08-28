@@ -1,0 +1,41 @@
+# Per-model prices in USD per 1,000,000 tokens (input / output), keyed by the same
+# `provider/model` string the app uses for AGENT_<NAME>_MODEL. A bare model name is looked
+# up as `openai/<model>` too. Models absent here are reported as "unpriced" (not zero-cost),
+# so gaps are visible in the report rather than hidden.
+#
+# NOTE: these values MUST be verified against each provider's current pricing page before
+# trusting a cost comparison — they are maintained here by hand on purpose (deepeval's
+# automatic cost only covers OpenAI/Anthropic/Gemini and would leave OpenRouter/groq/xai
+# uncovered). Update the numbers, not the code.
+
+models:
+  # --- OpenAI (Responses) ---
+  "openai/gpt-4o":
+    input_per_mtok: 2.50
+    output_per_mtok: 10.00
+  "openai/gpt-4o-mini":
+    input_per_mtok: 0.15
+    output_per_mtok: 0.60
+  "openai/gpt-5-mini":
+    input_per_mtok: 0.25
+    output_per_mtok: 2.00
+  # Models currently referenced by .env (AGENT_COORDINATOR_MODEL / AGENT_COMPOSER_MODEL).
+  # PLACEHOLDER prices — verify against OpenAI's pricing page before trusting comparisons.
+  "openai/gpt-5.6-luna":
+    input_per_mtok: 1.25
+    output_per_mtok: 10.00
+  "openai/gpt-4.1-mini":
+    input_per_mtok: 0.40
+    output_per_mtok: 1.60
+
+  # --- Anthropic (native, extended thinking) ---
+  "anthropic/claude-sonnet-4-20250514":
+    input_per_mtok: 3.00
+    output_per_mtok: 15.00
+
+  # --- OpenRouter (OpenAI-compatible; inner slash preserved) ---
+  # The model currently referenced by DEFAULT_MODEL in .env is an OpenRouter deepseek model;
+  # keep its exact provider/model id as the key. Verify the numbers on openrouter.ai.
+  "openrouter/deepseek/deepseek-v4-flash-0731":
+    input_per_mtok: 0.14
+    output_per_mtok: 0.28

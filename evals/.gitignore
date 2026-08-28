@@ -1,0 +1,6 @@
+# Isolated eval venv and generated outputs
+.venv/
+__pycache__/
+*.egg-info/
+reports/*.json
+reports/*.md

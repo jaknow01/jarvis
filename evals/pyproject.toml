@@ -1,0 +1,40 @@
+[project]
+name = "jarvis-evals"
+version = "0.1.0"
+description = "Isolated evaluation harness for Jarvis (deepeval): quality + token/cost per agent role"
+requires-python = ">=3.10,<4.0"
+
+# Only the eval-specific dependency lives here. Everything the harness needs to RUN
+# the real agents (llama-index, provider SDKs, lib/) comes from the production project,
+# installed into this venv as an EDITABLE PATH DEPENDENCY on the repo root — see below.
+# This keeps the heavy `deepeval` tree out of the production poetry.lock, while avoiding
+# any duplication of the production dependency list.
+dependencies = [
+    "deepeval (>=4.2.0,<5.0.0)",
+    "pyyaml (>=6.0,<7.0)",
+]
+
+# ---------------------------------------------------------------------------
+# Path dependency on the production project ("jarvis" == repo root, package "app").
+#
+# The production root is `package-mode = false`, so it is not published as a wheel;
+# nonetheless `pip install -e ..` builds an editable install (poetry-core honours its
+# `packages = [lib, app]`), which makes `import lib` work AND pulls the production
+# `[project.dependencies]` (llama-index, openai, anthropic, ...) into this venv.
+#
+# The bootstrap (`scripts/bootstrap.sh`, or `make install`) performs, in order:
+#     pip install -e ..     # root -> prod deps + `lib` importable  (the path dependency)
+#     pip install -e .      # this project -> deepeval + pyyaml
+#
+# We intentionally do NOT manage this through a poetry path-dep block: the root's
+# `package-mode = false` and package name ("app") make poetry path resolution fragile,
+# whereas the pip editable install is verified to work on Python 3.14.
+# ---------------------------------------------------------------------------
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["harness*"]
