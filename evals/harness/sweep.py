@@ -8,6 +8,7 @@ role's own mean USD). The result feeds :mod:`evals.harness.report`.
 
 from __future__ import annotations
 
+import asyncio
 import statistics
 from dataclasses import dataclass, field
 
@@ -48,8 +49,12 @@ class CandidateResult:
     mean_total_cost_usd: float | None = None
     mean_role_cost_usd: float | None = None
     unpriced_models: list[str] = field(default_factory=list)
+    n_errors: int = 0
 
     def finalize(self) -> "CandidateResult":
+        self.n_errors = sum(
+            1 for oc in self.outcomes for m in oc.metrics if m.metric == "run_error"
+        )
         # metric aggregates across goldens
         by_metric: dict[str, list[float]] = {}
         by_metric_pass: dict[str, list[bool]] = {}
@@ -91,6 +96,7 @@ async def sweep_role(
     composer_threshold: float = 0.7,
     mock: bool = True,
     conversations: list[ScriptedConversation] | None = None,
+    item_timeout: float | None = 180.0,
 ) -> list[CandidateResult]:
     """Run the full grid for ``role`` over ``candidates`` across ``goldens`` (and optionally
     scripted multi-turn ``conversations``).
@@ -128,42 +134,84 @@ async def sweep_role(
 
         # 1) single/multi-hop goldens
         for g in goldens:
-            run = await run_golden(g.id, g.input, config, table, mock=mock)
-            metrics = await score_golden(
-                run,
-                judge,
-                expected_routing=g.expected_routing,
-                expected_execution=g.expected_execution,
-                composer_threshold=composer_threshold,
-            )
-            cr.outcomes.append(GoldenOutcome(golden_id=g.id, run=run, metrics=metrics))
+            try:
+                async def _one() -> GoldenOutcome:
+                    run = await run_golden(g.id, g.input, config, table, mock=mock)
+                    metrics = await score_golden(
+                        run, judge,
+                        expected_routing=g.expected_routing,
+                        expected_execution=g.expected_execution,
+                        composer_threshold=composer_threshold,
+                    )
+                    return GoldenOutcome(golden_id=g.id, run=run, metrics=metrics)
 
-        # 2) scripted multi-turn conversations
+                # A hung model call (no client timeout) must not block the whole sweep, so cap
+                # each item; a timeout/exception is recorded as an error and the sweep goes on.
+                cr.outcomes.append(await asyncio.wait_for(_one(), timeout=item_timeout))
+            except (Exception, asyncio.TimeoutError) as e:
+                cr.outcomes.append(_error_outcome(g.id, config.label, g.input, cr.role, e))
+
+        # 2) scripted multi-turn conversations (allow more time — multiple turns)
+        conv_timeout = item_timeout * 4 if item_timeout else None
         for conv in conversations:
-            crun = await run_conversation(conv, config, table, mock=mock)
-            scored = await score_conversation(
-                crun, judge, per_turn=True, composer_threshold=composer_threshold
-            )
-            # per-turn outcomes carry the real cost (tokens spent each turn)
-            for i, turn_run in enumerate(crun.turn_runs):
-                cr.outcomes.append(
-                    GoldenOutcome(golden_id=f"{conv.id}#t{i}", run=turn_run, metrics=scored["per_turn"][i])
-                )
-            # one conversation-level outcome for the multi-turn metrics; its run carries NO
-            # cost (a cost-free summary) so it does not double-count the turns' tokens.
-            summary = GoldenRun(
-                golden_id=conv.id,
-                config_label=label,
-                input=conv.scenario or conv.id,
-                reply=" | ".join(tr.reply for tr in crun.turn_runs),
-                usage_by_role={},
-                costs=[],
-                total_cost_usd=None,
-            )
-            cr.outcomes.append(
-                GoldenOutcome(golden_id=conv.id, run=summary, metrics=scored["conversation"])
-            )
+            try:
+                async def _one_conv() -> None:
+                    crun = await run_conversation(conv, config, table, mock=mock)
+                    await score_and_append_conversation(cr, crun, judge, composer_threshold)
+
+                await asyncio.wait_for(_one_conv(), timeout=conv_timeout)
+            except (Exception, asyncio.TimeoutError) as e:
+                cr.outcomes.append(_error_outcome(conv.id, config.label, conv.scenario or conv.id, cr.role, e))
 
         results.append(cr.finalize())
 
     return results
+
+
+def _error_outcome(item_id: str, config_label: str, input_text: str, role: str, err: Exception) -> GoldenOutcome:
+    """Record a failed item (timeout, API error, …) as an outcome so the sweep continues and
+    the report shows what broke, instead of crashing the whole run."""
+    run = GoldenRun(
+        golden_id=item_id,
+        config_label=config_label,
+        input=input_text,
+        reply=f"<ERROR: {type(err).__name__}: {err}>",
+        usage_by_role={},
+        costs=[],
+        total_cost_usd=None,
+    )
+    metric = MetricResult(
+        metric="run_error", role=role, score=None, threshold=0.0, passed=None,
+        reason=f"{type(err).__name__}: {err}",
+    )
+    return GoldenOutcome(golden_id=item_id, run=run, metrics=[metric])
+
+
+async def score_and_append_conversation(cr, conv_run, judge, composer_threshold: float) -> None:
+    """Score one conversation run and append its outcomes to a candidate result.
+
+    Adds one per-turn outcome per turn (carrying that turn's real cost) plus one
+    conversation-level outcome for the multi-turn metrics. The conversation-level outcome's
+    run carries NO cost, so it never double-counts the turns' tokens. Shared by the scripted
+    sweep and the simulated sweep.
+    """
+    conv = conv_run.conversation
+    scored = await score_conversation(
+        conv_run, judge, per_turn=True, composer_threshold=composer_threshold
+    )
+    for i, turn_run in enumerate(conv_run.turn_runs):
+        cr.outcomes.append(
+            GoldenOutcome(golden_id=f"{conv.id}#t{i}", run=turn_run, metrics=scored["per_turn"][i])
+        )
+    summary = GoldenRun(
+        golden_id=conv.id,
+        config_label=cr.label,
+        input=conv.scenario or conv.id,
+        reply=" | ".join(tr.reply for tr in conv_run.turn_runs),
+        usage_by_role={},
+        costs=[],
+        total_cost_usd=None,
+    )
+    cr.outcomes.append(
+        GoldenOutcome(golden_id=conv.id, run=summary, metrics=scored["conversation"])
+    )

@@ -27,6 +27,7 @@ def _candidate_dict(cr: CandidateResult) -> dict:
         "mean_total_cost_usd": cr.mean_total_cost_usd,
         "mean_role_cost_usd": cr.mean_role_cost_usd,
         "unpriced_models": cr.unpriced_models,
+        "n_errors": cr.n_errors,
         "goldens": [
             {
                 "golden_id": oc.golden_id,
@@ -104,7 +105,7 @@ def _render_markdown(
     header = ["candidate", "model", "effort"]
     header += [f"{m} (mean)" for m in metric_names]
     header += [f"{m} (pass%)" for m in metric_names]
-    header += ["role $/turn", "total $/turn", "unpriced"]
+    header += ["role $/turn", "total $/turn", "errors", "unpriced"]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join(["---"] * len(header)) + " |")
 
@@ -118,6 +119,7 @@ def _render_markdown(
             row.append(f"{v*100:.0f}%" if v is not None else "—")
         row.append(f"{c.mean_role_cost_usd:.6f}" if c.mean_role_cost_usd is not None else "—")
         row.append(f"{c.mean_total_cost_usd:.6f}" if c.mean_total_cost_usd is not None else "—")
+        row.append(str(c.n_errors) if c.n_errors else "—")
         row.append(", ".join(c.unpriced_models) if c.unpriced_models else "—")
         lines.append("| " + " | ".join(row) + " |")
 

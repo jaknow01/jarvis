@@ -4,10 +4,12 @@
 name: composer_example        # report/run name -> evals/reports/composer_example.{json,md}
 role: composer                # the role being swept (others held at baseline)
 
-judge_model: gpt-5.6-luna     # one constant judge across the sweep (fair comparison).
-                              # bare id = OpenAI native; provider/model = via adapter.
-                              # Use the strongest judge available on your account for real
-                              # runs; gpt-4.1-mini is a cheap, verified default here.
+judge_model: openai/gpt-5.6-luna  # one constant judge across the sweep (fair comparison).
+                              # bare id = deepeval's native OpenAI path (forces temperature=0);
+                              # provider/model = our adapter (keeps the model's default temp).
+                              # Reasoning models that require temperature=1 (e.g. gpt-5.6-luna)
+                              # MUST be provider-prefixed (openai/...) or the native path 400s.
+                              # gpt-4.1-mini is a cheap, verified alternative.
 
 mock: true                    # deterministic, side-effect-free tools (recommended)
 
@@ -18,19 +20,31 @@ limit: 4                      # cap goldens for a cheap first run (remove for th
 # evals/datasets/<name>.json). Each conversation is scored per-turn plus the multi-turn
 # metrics (conversation_quality_pl, knowledge_retention). Omit for goldens-only.
 # Simulated conversations are NOT swept here (non-deterministic — run them separately).
-# conversations: conversations
+conversations: conversations
 #
 # You can also run conversations ONLY: set `dataset:` to nothing (drop the line) and keep
 # `conversations:`.
+
+# To ALSO run DYNAMIC (simulated) conversations, add this (loads
+# evals/datasets/<name>.json of scenarios). Simulated runs are reported separately as
+# <name>-simulated (non-deterministic — kept out of the deterministic comparison).
+simulations: simulations
+simulator_model: openrouter/deepseek/deepseek-v4-flash-0731   # who role-plays the user
+max_turns: 6
+
+# Pick what runs with the CLI:  python -m evals.run <this file> --only goldens|scripted|simulated|all
 # only_ids:                   # ...or pick specific goldens instead of limit:
 #   - sh_weather_now
 #   - mh_commute_weather
 
 composer_threshold: 0.7       # pass threshold for composer_quality_pl
 
-# Fixed models for the OTHER roles (optional). Omit to use ambient .env / DEFAULT_MODEL.
-# baseline:
-#   coordinator: openai/gpt-5.6-luna
+# Fixed models for the OTHER roles, held constant across the sweep. For a COMPOSER sweep
+# keep the coordinator on a FAST model: it runs every turn and only feeds the composer, so a
+# slow reasoning model here (e.g. gpt-5.6-luna) just adds latency/timeouts without affecting
+# what we're comparing. Omit to use ambient .env / DEFAULT_MODEL.
+baseline:
+  coordinator: openai/gpt-4.1-mini
 
 candidates:                   # the grid for the swept role
   - model: openrouter/deepseek/deepseek-v4-flash-0731

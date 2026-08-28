@@ -75,6 +75,41 @@ stays on the baseline. Sweep any role (`coordinator`, `weather_agent`, …) the 
 
 Programmatic use: `SweepConfig.load(path)` → `run_sweep_from_config(cfg)`.
 
+### One runner for every kind of test
+
+`python -m evals.run <config> [--only KIND]` runs all agent tests from one config, or just
+one kind:
+
+```bash
+python -m evals.run evals/sweeps/composer_example.yaml                 # everything configured
+python -m evals.run evals/sweeps/composer_example.yaml --only goldens   # single/multi-hop only
+python -m evals.run evals/sweeps/composer_example.yaml --only scripted  # deterministic convos only
+python -m evals.run evals/sweeps/composer_example.yaml --only simulated # dynamic convos only
+```
+
+| kind | what | config field it needs |
+|------|------|-----------------------|
+| `goldens` | single/multi-hop questions | `dataset:` (e.g. `labeled`) |
+| `scripted` | deterministic conversations | `conversations:` (e.g. `conversations`) |
+| `simulated` | dynamic, LLM-driven conversations | `simulations:` + `simulator_model:` |
+
+Goldens + scripted share one **deterministic** report (`<name>-deterministic`, or
+`-goldens` / `-scripted` when run alone). Simulated is reported separately
+(`<name>-simulated`) — it is non-deterministic and runs via the simulator's own event loop.
+
+### Where conversation model-sweeps are controlled
+
+The **same** `role` + `candidates` in the sweep config drive the sweep for *all three kinds*.
+So to compare models on conversations, you list your candidate models once and add the
+relevant dataset field:
+
+- scripted-conversation sweep → add `conversations: conversations`;
+- simulated-conversation sweep → add `simulations: simulations` and `simulator_model:` (the
+  LLM that role-plays the user; defaults to `DEFAULT_MODEL`).
+
+Each candidate is evaluated on the same conversations, per-turn **and** at the conversation
+level (`conversation_quality_pl`, `knowledge_retention`), with per-turn cost summed.
+
 ## Mocked tools (deterministic benchmark)
 
 By default every eval run **mocks the agents' tools** (`harness/mocks.py`, `mock=True`):

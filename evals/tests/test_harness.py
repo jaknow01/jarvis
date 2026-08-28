@@ -187,6 +187,24 @@ def test_sweep_config_conversations_and_goldens_optional():
     assert default.dataset == "labeled"
 
 
+def test_sweep_config_simulations_and_candidate_config():
+    from evals.harness.sweep_config import SweepConfig
+
+    cfg = SweepConfig.from_dict({
+        "role": "composer",
+        "simulations": "simulations",
+        "simulator_model": "openrouter/deepseek/deepseek-v4-flash-0731",
+        "max_turns": 4,
+        "candidates": ["openai/gpt-4.1-mini"],
+    })
+    assert cfg.max_turns == 4 and cfg.simulator_model.startswith("openrouter/")
+    assert len(cfg.select_simulations()) >= 1
+    # candidate_config injects the candidate as the swept role's override
+    label, ec = cfg.candidate_config(cfg.candidates[0])
+    assert label == "composer=openai/gpt-4.1-mini"
+    assert ec.overrides["composer"].model == "openai/gpt-4.1-mini"
+
+
 def test_judge_bare_model_is_native_string():
     from evals.harness.config import JudgeConfig
 
