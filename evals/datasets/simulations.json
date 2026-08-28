@@ -1,0 +1,20 @@
+[
+  {
+    "id": "sim_airport_trip",
+    "scenario": "Właściciel planuje jutrzejszy poranny wyjazd na lotnisko Chopina i chce znać pogodę oraz czas dojazdu, a na końcu ustawić przypomnienie o wyjściu.",
+    "expected_outcome": "Użytkownik zna pogodę i czas dojazdu i ma ustawione przypomnienie.",
+    "persona": "Właściciel asystenta Jarvis: jedna osoba mieszkająca w Warszawie, mówiąca po polsku, bazowa waluta PLN. Pyta krótko i naturalnie, jak do osobistego asystenta w telefonie."
+  },
+  {
+    "id": "sim_morning_brief",
+    "scenario": "Właściciel prosi o poranny brief i dopytuje o szczegóły (kurs, pogoda, newsy), zmieniając zdanie w trakcie rozmowy.",
+    "expected_outcome": "Użytkownik dostał brief i odpowiedzi na dopytania, spójne z wcześniejszymi turami.",
+    "persona": "Właściciel asystenta Jarvis: jedna osoba mieszkająca w Warszawie, mówiąca po polsku, bazowa waluta PLN. Pyta krótko i naturalnie, jak do osobistego asystenta w telefonie."
+  },
+  {
+    "id": "sim_evening_lighting",
+    "scenario": "Właściciel ustala preferencje oświetlenia na wieczór i chce, by asystent zapamiętał je na przyszłość.",
+    "expected_outcome": "Preferencja została zapamiętana, a asystent potwierdził ustawienie światła.",
+    "persona": "Właściciel asystenta Jarvis: jedna osoba mieszkająca w Warszawie, mówiąca po polsku, bazowa waluta PLN. Pyta krótko i naturalnie, jak do osobistego asystenta w telefonie."
+  }
+]

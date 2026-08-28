@@ -1,0 +1,7 @@
+# Isolated eval venv and generated outputs
+.venv/
+__pycache__/
+*.egg-info/
+# ignore all report outputs (incl. date-stamped subfolders), keep the dir
+reports/*
+!reports/.gitkeep

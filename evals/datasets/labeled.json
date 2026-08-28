@@ -1,0 +1,563 @@
+[
+  {
+    "id": "sh_weather_now",
+    "input": "Jaka jest teraz pogoda w Warszawie?",
+    "expected_routing": [
+      "weather_agent"
+    ],
+    "expected_execution": {
+      "weather_agent": [
+        "current_weather"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_weather_tomorrow",
+    "input": "Jaka będzie pogoda jutro po południu w Warszawie?",
+    "expected_routing": [
+      "weather_agent"
+    ],
+    "expected_execution": {
+      "weather_agent": [
+        "weather_forecast"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_weather_rain",
+    "input": "Czy dziś wieczorem w Warszawie będzie padać?",
+    "expected_routing": [
+      "weather_agent"
+    ],
+    "expected_execution": {
+      "weather_agent": [
+        "weather_forecast"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_fx_eur",
+    "input": "Ile teraz kosztuje euro w złotówkach?",
+    "expected_routing": [
+      "finance_agent"
+    ],
+    "expected_execution": {
+      "finance_agent": [
+        "get_exchange_rate"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_fx_usd",
+    "input": "Jaki jest kurs dolara do złotego?",
+    "expected_routing": [
+      "finance_agent"
+    ],
+    "expected_execution": {
+      "finance_agent": [
+        "get_exchange_rate"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_stock_apple",
+    "input": "Po ile są teraz akcje Apple?",
+    "expected_routing": [
+      "finance_agent"
+    ],
+    "expected_execution": {
+      "finance_agent": [
+        "get_stock_quote"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_index_wig20",
+    "input": "Jak stoi dziś WIG20?",
+    "expected_routing": [
+      "finance_agent"
+    ],
+    "expected_execution": {
+      "finance_agent": [
+        "get_stock_quote"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_route_home_work",
+    "input": "Ile zajmie mi teraz dojazd z domu do pracy?",
+    "expected_routing": [
+      "maps_agent"
+    ],
+    "expected_execution": {
+      "maps_agent": [
+        "get_route_details"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_route_airport",
+    "input": "Jak najszybciej dojadę autem z domu na lotnisko Chopina?",
+    "expected_routing": [
+      "maps_agent"
+    ],
+    "expected_execution": {
+      "maps_agent": [
+        "get_route_details"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_news_world",
+    "input": "Co ważnego dzieje się dziś na świecie? Streść w kilku zdaniach.",
+    "expected_routing": [
+      "news_agent"
+    ],
+    "expected_execution": {
+      "news_agent": [
+        "search_news"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_news_markets",
+    "input": "Jakie są najnowsze wiadomości z rynków finansowych?",
+    "expected_routing": [
+      "news_agent"
+    ],
+    "expected_execution": {
+      "news_agent": [
+        "search_news"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_iot_on_living",
+    "input": "Włącz światło w salonie.",
+    "expected_routing": [
+      "iot_operator"
+    ],
+    "expected_execution": {
+      "iot_operator": [
+        "turn_on_devices"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_iot_off_bedroom",
+    "input": "Zgaś światło w sypialni.",
+    "expected_routing": [
+      "iot_operator"
+    ],
+    "expected_execution": {
+      "iot_operator": [
+        "turn_off_devices"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_iot_state",
+    "input": "Które światła są teraz włączone?",
+    "expected_routing": [
+      "iot_operator"
+    ],
+    "expected_execution": {
+      "iot_operator": [
+        "get_devices_state"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_iot_warm_dim",
+    "input": "Ustaw w salonie cieplejsze, przygaszone światło.",
+    "expected_routing": [
+      "iot_operator"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_mem_save_coffee",
+    "input": "Zapamiętaj, że rano piję kawę bez cukru.",
+    "expected_routing": [
+      "memory_operator"
+    ],
+    "expected_execution": {
+      "memory_operator": [
+        "save_memory"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_mem_get_coffee",
+    "input": "Co zapamiętałeś o moich preferencjach kawowych?",
+    "expected_routing": [
+      "memory_operator"
+    ],
+    "expected_execution": {
+      "memory_operator": [
+        "get_memory"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_fpl_fixtures",
+    "input": "Jakie są najbliższe mecze w Premier League?",
+    "expected_routing": [
+      "fpl_agent"
+    ],
+    "expected_execution": {
+      "fpl_agent": [
+        "get_fpl_fixtures"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_fpl_squad",
+    "input": "Jak stoi mój skład w Fantasy Premier League?",
+    "expected_routing": [
+      "fpl_agent"
+    ],
+    "expected_execution": {
+      "fpl_agent": [
+        "get_my_fpl_squad"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "sh_sched_umbrella",
+    "input": "Przypomnij mi jutro o 8 rano, żeby wziąć parasol.",
+    "expected_routing": [
+      "scheduler_agent"
+    ],
+    "expected_execution": {
+      "scheduler_agent": [
+        "create_scheduled_job"
+      ]
+    },
+    "metadata": {
+      "hop": "single"
+    }
+  },
+  {
+    "id": "mh_commute_weather",
+    "input": "Jaka jest teraz pogoda w Warszawie i ile zajmie dojazd z domu do pracy?",
+    "expected_routing": [
+      "weather_agent",
+      "maps_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_fx_weather",
+    "input": "Ile kosztuje dziś dolar i jaka jest pogoda w Warszawie?",
+    "expected_routing": [
+      "finance_agent",
+      "weather_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_news_wig20",
+    "input": "Jakie są dziś newsy z rynków i jak stoi WIG20?",
+    "expected_routing": [
+      "news_agent",
+      "finance_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_weather_fx_forecast",
+    "input": "Jaka będzie jutro pogoda w Warszawie i ile kosztuje euro?",
+    "expected_routing": [
+      "weather_agent",
+      "finance_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_airport_trip",
+    "input": "Sprawdź pogodę na jutro rano i ile zajmie dojazd na lotnisko Chopina.",
+    "expected_routing": [
+      "weather_agent",
+      "maps_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_run_pref_weather",
+    "input": "Biegam rano — czy jutro w Warszawie będzie dobra pogoda na bieganie?",
+    "expected_routing": [
+      "memory_operator",
+      "weather_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_pref_stocks",
+    "input": "Pamiętasz moje ulubione spółki? Sprawdź ich dzisiejsze kursy.",
+    "expected_routing": [
+      "memory_operator",
+      "finance_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_news_schedule_brief",
+    "input": "Streść mi dzisiejsze najważniejsze newsy i zaplanuj taki skrót codziennie o 7 rano.",
+    "expected_routing": [
+      "news_agent",
+      "scheduler_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_fpl_news",
+    "input": "Jak stoi mój skład FPL i czy są jakieś newsy o kontuzjach w Premier League?",
+    "expected_routing": [
+      "fpl_agent",
+      "news_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_commute_mode",
+    "input": "Przy dzisiejszej pogodzie lepiej jechać autem czy iść pieszo z domu do pracy?",
+    "expected_routing": [
+      "weather_agent",
+      "maps_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_fx_news_why",
+    "input": "Dlaczego dolar dziś tak drożeje? Sprawdź kurs i powiązane newsy.",
+    "expected_routing": [
+      "finance_agent",
+      "news_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_morning_brief",
+    "input": "Daj mi poranny brief: pogoda w Warszawie, kurs euro i najważniejsze newsy.",
+    "expected_routing": [
+      "weather_agent",
+      "finance_agent",
+      "news_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_airport_fx",
+    "input": "Ile zajmie dojazd z pracy na lotnisko i po ile jest dziś dolar?",
+    "expected_routing": [
+      "maps_agent",
+      "finance_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_mem_sched_dentist",
+    "input": "Zapamiętaj, że mam dentystę we wtorek, i przypomnij mi dzień wcześniej.",
+    "expected_routing": [
+      "memory_operator",
+      "scheduler_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_weather_news",
+    "input": "Jaka jest pogoda w Warszawie i co ciekawego dziś w wiadomościach?",
+    "expected_routing": [
+      "weather_agent",
+      "news_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_fpl_deadline",
+    "input": "Sprawdź moich zawodników FPL i przypomnij mi o zmianach przed najbliższym deadline'em.",
+    "expected_routing": [
+      "fpl_agent",
+      "scheduler_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_travel_london",
+    "input": "Wybieram się do Londynu — jaka tam pogoda i ile kosztuje funt?",
+    "expected_routing": [
+      "weather_agent",
+      "finance_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_news_league",
+    "input": "Jakie są najnowsze newsy o Premier League i jak wygląda tabela mojej ligi FPL?",
+    "expected_routing": [
+      "news_agent",
+      "fpl_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_usual_commute_umbrella",
+    "input": "Jak zwykle jadę do pracy — sprawdź dojazd i czy powinienem wziąć parasol.",
+    "expected_routing": [
+      "maps_agent",
+      "weather_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_light_dark_pref",
+    "input": "Lubię wieczorem ciepłe światło — jeśli na zewnątrz zrobiło się ciemno, ustaw je w salonie.",
+    "expected_routing": [
+      "weather_agent",
+      "iot_operator"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_evening_routine",
+    "input": "Sprawdź pogodę na jutro i przypomnij mi wieczorem, żeby przygotować ubranie.",
+    "expected_routing": [
+      "weather_agent",
+      "scheduler_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  },
+  {
+    "id": "mh_market_open_brief",
+    "input": "Poranny przegląd rynku: kurs euro i dolara, jak stoi WIG20 i najważniejsze newsy ekonomiczne.",
+    "expected_routing": [
+      "finance_agent",
+      "news_agent"
+    ],
+    "expected_execution": null,
+    "metadata": {
+      "hop": "multi"
+    }
+  }
+]
