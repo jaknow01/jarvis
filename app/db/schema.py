@@ -122,6 +122,18 @@ SCHEMA_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS messages_by_conversation
         ON messages (conversation_id, turn_index)
     """,
+    # Rolling-window context engineering: a per-conversation running summary of the
+    # turns that have fallen outside the verbatim window, updated incrementally as
+    # exchanges age out (see lib/runtime/history_window.py). `summary_upto` is the
+    # number of message rows already folded into `summary` (kept in step with
+    # `turn_index`), so only the freshly-evicted exchange is compressed each turn.
+    # ADD COLUMN IF NOT EXISTS keeps init_db() idempotent on pre-existing tables.
+    """
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''
+    """,
+    """
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary_upto INTEGER NOT NULL DEFAULT 0
+    """,
 ]
 
 

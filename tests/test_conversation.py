@@ -59,6 +59,35 @@ def test_assistant_message_carries_trace_id(tmp_path):
     assert msgs[1]["role"] == "assistant" and msgs[1]["mlflow_trace_id"] == "trace-42"
 
 
+def test_summary_defaults_to_empty(tmp_path):
+    s = _store(tmp_path)
+    s.record_turn("repl", "a", "b")
+    assert s.load_summary("repl") == ("", 0)
+
+
+def test_summary_absent_channel_is_empty(tmp_path):
+    assert _store(tmp_path).load_summary("nope") == ("", 0)
+
+
+def test_save_and_load_summary_roundtrips(tmp_path):
+    s = _store(tmp_path)
+    s.record_turn("repl", "a", "b")
+    s.save_summary("repl", "Użytkownik lubi kawę.", 2)
+    assert s.load_summary("repl") == ("Użytkownik lubi kawę.", 2)
+
+
+def test_save_summary_creates_conversation_if_absent(tmp_path):
+    s = _store(tmp_path)
+    s.save_summary("repl", "streszczenie", 4)
+    assert s.load_summary("repl") == ("streszczenie", 4)
+
+
+def test_summary_persists_across_instances(tmp_path):
+    _store(tmp_path).save_summary("repl", "trwałe", 6)
+    reopened = ConversationStore(path=tmp_path / "conversations.json")
+    assert reopened.load_summary("repl") == ("trwałe", 6)
+
+
 def test_backend_selection_defaults_to_json_without_database_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     from lib.domain.conversation import _select_backend, ConversationStore

@@ -52,7 +52,27 @@ class PostgresConversationStore:
             ).fetchall()
         return [{"role": r[0], "content": r[1]} for r in rows]
 
+    def load_summary(self, channel_key: str) -> tuple[str, int]:
+        """Return ``(summary, summary_upto)`` for the channel (``("", 0)`` if absent)."""
+        with connection() as conn:
+            row = conn.execute(
+                "SELECT summary, summary_upto FROM conversations WHERE channel_key = %s",
+                (channel_key,),
+            ).fetchone()
+        if not row:
+            return "", 0
+        return (row[0] or ""), int(row[1] or 0)
+
     # -- writes ---------------------------------------------------------------
+    def save_summary(self, channel_key: str, summary: str, summary_upto: int) -> None:
+        """Persist the rolling summary + coverage pointer, creating the row if needed."""
+        with connection() as conn:
+            conv_id = self._resolve_conversation(conn, channel_key)
+            conn.execute(
+                "UPDATE conversations SET summary = %s, summary_upto = %s WHERE id = %s",
+                (summary or "", int(summary_upto), conv_id),
+            )
+
     def record_turn(self, channel_key: str, user_text: str, assistant_text: str,
                     trace_id: str = "") -> None:
         now = datetime.now()
