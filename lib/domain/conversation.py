@@ -70,6 +70,8 @@ class ConversationStore:
                 "created_at": _now(),
                 "last_active_at": _now(),
                 "messages": [],
+                "summary": "",
+                "summary_upto": 0,
             }
             data["conversations"][channel_key] = conv
         return conv
@@ -83,7 +85,27 @@ class ConversationStore:
         msgs = sorted(conv.get("messages", []), key=lambda m: m.get("turn_index", 0))
         return [{"role": m["role"], "content": m["content"]} for m in msgs]
 
+    def load_summary(self, channel_key: str) -> tuple[str, int]:
+        """Return this channel's rolling summary and how many messages it covers.
+
+        ``(summary_text, summary_upto)`` — ``summary_upto`` is the number of message
+        rows already folded into ``summary`` (0 when nothing has been compressed yet).
+        """
+        conv = self._load()["conversations"].get(channel_key)
+        if not conv:
+            return "", 0
+        return conv.get("summary", "") or "", int(conv.get("summary_upto", 0) or 0)
+
     # -- writes ---------------------------------------------------------------
+    def save_summary(self, channel_key: str, summary: str, summary_upto: int) -> None:
+        """Persist the rolling summary and its coverage pointer for ``channel_key``."""
+        with self._lock:
+            data = self._load()
+            conv = self._conversation(data, channel_key)
+            conv["summary"] = summary or ""
+            conv["summary_upto"] = int(summary_upto)
+            self._save(data)
+
     def record_turn(self, channel_key: str, user_text: str, assistant_text: str,
                     trace_id: str = "") -> None:
         """Append the user message and the assistant reply for one completed turn."""
@@ -136,6 +158,12 @@ class _ConversationProxy:
 
     def load_history(self, *args, **kwargs) -> list[dict]:
         return self._store().load_history(*args, **kwargs)
+
+    def load_summary(self, *args, **kwargs) -> tuple[str, int]:
+        return self._store().load_summary(*args, **kwargs)
+
+    def save_summary(self, *args, **kwargs) -> None:
+        return self._store().save_summary(*args, **kwargs)
 
     def record_turn(self, *args, **kwargs) -> None:
         return self._store().record_turn(*args, **kwargs)

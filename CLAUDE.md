@@ -64,7 +64,7 @@ lib/core/              LEAF layer — no imports from elsewhere in lib
 lib/domain/            Shared stateful stores (used by agents AND runtime)
   memory.py            Long-term memory store (JSON or Postgres backend; see app/db)
   scheduler.py         Scheduled-jobs store (JSON or Postgres backend)
-  conversation.py      Conversation-history store (JSON or Postgres backend)
+  conversation.py      Conversation-history store + rolling-window summary (JSON or Postgres)
 
 lib/agents/            Coordinator + one feature subpackage per agent
   __init__.py          Aggregator: imports every subpackage (registration), public surface
@@ -79,6 +79,7 @@ lib/agents/            Coordinator + one feature subpackage per agent
 
 lib/runtime/           TOP layer — wires the network to a transport / runs jobs
   engine.py            transport-agnostic handle_message(conversation_id, text, ctx)
+  history_window.py    rolling-window context: last N pairs verbatim + incremental summary
   chatbot.py           REPL loop
   messenger.py         Messenger webhook adapter (signature, send)
   scheduler_runner.py  in-process loop that fires due jobs out of band
@@ -95,8 +96,13 @@ logs/                  Per-run log files
 entry point (REPL and Messenger both call it):
 1. It binds the shared `Ctx` for the turn via `bind_app_context(ctx)` (a contextvar),
    so every tool reaches the same run state, and sets `ctx.conversation_id`.
-2. It loads the **full prior history** for `conversation_id` from
-   `lib.domain.conversations` and maps it to LlamaIndex `ChatMessage`s.
+2. It builds a **bounded, context-engineered history** for `conversation_id` via
+   `lib.runtime.history_window.build_chat_history`: the last N user/assistant pairs
+   verbatim (`HISTORY_WINDOW_PAIRS`, default 3), prefixed by an incrementally-maintained
+   running summary (system message, Polish, ≤ `HISTORY_SUMMARY_MAX_SENTENCES` sentences,
+   default 5) of everything older. Each turn folds only the just-evicted exchange into
+   the stored summary with one small LLM call (model `history_compressor`). Set
+   `HISTORY_COMPRESSION_ENABLED` falsy to fall back to replaying the full history.
 3. It builds a fresh coordinator (`create_coordinator_agent()`) and runs it:
    `coordinator.run(user_msg=text, chat_history=history, ctx=Context(coordinator))`.
    The coordinator calls sub-agents **as tools** (`agent_as_tool(...)`), in parallel
@@ -309,6 +315,9 @@ grow.
   `app/db/conversation_repo.py` persist `conversations` + `messages` (two rows per turn:
   the user message and the assistant reply, the latter stamped with the MLflow trace id)
   to Postgres when `DATABASE_URL` is set, else `data/conversation_data/conversations.json`.
+  Each conversation also carries the rolling-window `summary` + `summary_upto` coverage
+  pointer (see the context-window note under "How a turn flows"); on Postgres these are
+  two `ADD COLUMN IF NOT EXISTS` columns on `conversations`.
   Migrate with `python -m app.db.migrate`.
   See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.

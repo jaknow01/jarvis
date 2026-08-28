@@ -18,12 +18,12 @@ Responses API `previous_response_id` mechanism is gone.
 
 import logging
 
-from llama_index.core.llms import ChatMessage
 from llama_index.core.workflow import Context
 
 from lib.agents import create_coordinator_agent, create_composer_agent
 from lib.core import Ctx, bind_app_context, reset_app_context
 from lib.domain import conversations
+from lib.runtime.history_window import build_chat_history
 from lib.runtime.tracing import last_trace_id
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,6 @@ _SYSTEM_PROMPT_MARKER = (
     "bieżąca wiadomość użytkownika. Wykonaj poniższe zadanie i przygotuj gotową "
     "wiadomość do użytkownika:]\n"
 )
-
-
-def _to_chat_history(history: list[dict]) -> list[ChatMessage]:
-    """Map stored ``{role, content}`` dicts to LlamaIndex ``ChatMessage``s (in order)."""
-    return [ChatMessage(role=m["role"], content=m["content"]) for m in history]
 
 
 async def handle_message(
@@ -70,7 +65,10 @@ async def handle_message(
     ctx.conversation_id = conversation_id
     token = bind_app_context(ctx)
     try:
-        history = _to_chat_history(conversations.load_history(conversation_id))
+        # Bounded, context-engineered history: last N pairs verbatim, prefixed by an
+        # incrementally-maintained running summary of everything older (see
+        # lib/runtime/history_window.py). Falls back to full history when disabled.
+        history = await build_chat_history(conversation_id)
         input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
 
         # 1) Coordinator gathers results from the subagent tools (never writes the reply).
