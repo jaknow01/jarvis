@@ -15,12 +15,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Optional
 
 from lib.core import Cache, Ctx
 from lib.runtime.engine import handle_message
 from lib.runtime.messenger import send_message
+from lib.agents.scheduler_agent import (
+    PredicateEvaluator,
+    default_evaluator,
+    fetch_source,
+    resolve_evaluator,
+)
 from lib.domain import (
     describe_schedule,
     is_expired,
@@ -117,15 +123,69 @@ async def _run_job(store, invoke, deliver, job: dict, now: datetime) -> None:
     store.save(job)
 
 
-async def tick_once(store, invoke, deliver, now: Optional[datetime] = None) -> int:
+async def _run_watch(store, evaluator: PredicateEvaluator, deliver, job: dict,
+                     now: datetime) -> None:
+    """Poll one conditional watch: fetch source -> evaluate predicate -> edge-trigger.
+
+    Delivers the watch's message (stored in ``prompt``) exactly once on the predicate's
+    false->true transition (compared to ``last_result``), then terminates the watch
+    (single-condition v1). A ``unknown`` read (unavailable source / evaluator failure)
+    delivers nothing, leaves ``last_result`` untouched, and re-arms for the next poll.
+    A delivery failure does NOT consume the edge — ``last_result`` stays put so the next
+    poll retries the notification."""
+    interval = int(job.get("poll_interval") or 0) or 1
+
+    def _rearm() -> None:
+        job["last_run_at"] = now.isoformat()
+        job["next_run_at"] = (now + timedelta(seconds=interval)).isoformat()
+        store.save(job)
+
+    state, data = await fetch_source(job.get("source"), job.get("params"))
+    result: Optional[bool] = None  # None == unknown
+    if state == "ok":
+        try:
+            result = bool(await evaluator.evaluate(job["check_code"], data or {}))
+        except Exception:
+            logger.exception("Watch %s: predicate evaluation failed (-> unknown)", job["id"])
+            result = None
+
+    # Edge false->true: deliver once, then complete.
+    if result is True and job.get("last_result") is not True:
+        try:
+            await deliver(job, job["prompt"])
+        except Exception:
+            logger.exception("Watch %s: delivery failed; will retry next poll", job["id"])
+            _rearm()  # edge NOT consumed — retry the notification next poll
+            return
+        job["last_result"] = True
+        job["status"] = "done"
+        job["next_run_at"] = None
+        job["last_run_at"] = now.isoformat()
+        logger.info("Watch %s fired and completed", job["id"])
+        store.save(job)
+        return
+
+    # No fire: record a definite false; leave last_result untouched on unknown. Re-arm.
+    if result is not None:
+        job["last_result"] = result
+    _rearm()
+
+
+async def tick_once(store, invoke, deliver, now: Optional[datetime] = None,
+                    evaluator: PredicateEvaluator = default_evaluator) -> int:
     """Fire every job due at ``now`` (sequentially, to keep conversation continuity).
 
-    Returns the number of jobs fired. Injectable ``invoke``/``deliver`` make this
-    unit-testable without network or the model."""
+    Time-based jobs (once/cron) run their prompt through the coordinator; ``watch`` jobs
+    poll a source and evaluate a predicate. Returns the number of jobs processed.
+    Injectable ``invoke``/``deliver``/``evaluator`` make this unit-testable without
+    network or the model."""
     now = now or now_tz()
     due = store.due(now)
     for job in due:
-        await _run_job(store, invoke, deliver, job, now)
+        if job.get("kind") == "watch":
+            await _run_watch(store, evaluator, deliver, job, now)
+        else:
+            await _run_job(store, invoke, deliver, job, now)
     return len(due)
 
 
@@ -135,17 +195,22 @@ async def run_scheduler_loop(
     deliver: Optional[Callable[[dict, str], Awaitable[None]]] = None,
     seconds: Optional[int] = None,
     cache: Optional[Cache] = None,
+    evaluator: Optional[PredicateEvaluator] = None,
 ) -> None:
-    """Run the scheduler forever: every `seconds`, fire due jobs. Never raises."""
+    """Run the scheduler forever: every `seconds`, fire due jobs. Never raises.
+
+    The predicate evaluator defaults to the real sandbox client when
+    ``WATCH_SANDBOX_SOCKET`` is set, else the in-process stub (see ``resolve_evaluator``)."""
     store = store or default_store
     cache = cache or Cache()
     invoke = invoke or _make_default_invoke(cache)
     deliver = deliver or default_deliver
+    evaluator = evaluator or resolve_evaluator()
     seconds = seconds or tick_seconds()
     logger.info("Scheduler loop started (tick=%ss)", seconds)
     while True:
         try:
-            await tick_once(store, invoke, deliver)
+            await tick_once(store, invoke, deliver, evaluator=evaluator)
         except asyncio.CancelledError:
             logger.info("Scheduler loop cancelled; stopping")
             raise

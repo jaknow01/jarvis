@@ -34,9 +34,25 @@ logger = logging.getLogger(__name__)
 JOBS_PATH = Path("data/scheduler_data/jobs.json")
 DEFAULT_TIMEZONE = "Europe/Warsaw"
 
-VALID_KINDS = ("once", "cron")
+VALID_KINDS = ("once", "cron", "watch")
 VALID_STATUSES = ("active", "done", "disabled")
 VALID_CHANNELS = ("messenger", "log")
+
+# Catalog of named data sources a conditional watch may poll (source-id -> human
+# description of its params and notable data fields). This is metadata only — the concrete
+# fetchers live in the agents layer (lib/agents/scheduler_agent/watch_sources.py, which
+# reuses other agents' tools) and assert they cover exactly this catalog. Keeping the
+# catalog here in domain lets it be shared without pulling agents into the domain layer.
+WATCH_SOURCES: dict[str, str] = {
+    "finance.fx": (
+        "Currency exchange rate. params: {foreign_currency: 'USD', base_currency: 'PLN' "
+        "(optional, default PLN)}. Data includes the current numeric rate."
+    ),
+    "finance.quote": (
+        "Stock/index quote. params: {symbol: 'AAPL' or 'PKN.WA' for GPW}. Data includes "
+        "the latest price."
+    ),
+}
 
 
 # -- time helpers -------------------------------------------------------------
@@ -102,6 +118,8 @@ def is_expired(job: dict, candidate: Optional[datetime]) -> bool:
 
 def describe_schedule(job: dict) -> str:
     """Human-readable one-liner for a job's schedule (internal / for the composer)."""
+    if job.get("kind") == "watch":
+        return f"watch on '{job.get('source')}' every {job.get('poll_interval')}s"
     if job.get("kind") == "cron":
         base = f"cron '{job['cron_expr']}' ({os.getenv('SCHEDULER_TIMEZONE') or DEFAULT_TIMEZONE})"
         extras = []
@@ -166,8 +184,67 @@ def build_job(prompt: str, channel: str, target: Optional[str], conversation_id:
     }
 
 
+def build_watch(message: str, source: str, params: dict, check_code: str,
+                poll_interval: int, channel: str, target: Optional[str],
+                conversation_id: str) -> dict:
+    """Validate inputs and assemble a conditional-watch job (kind="watch").
+
+    A watch polls ``source`` every ``poll_interval`` seconds, evaluates ``check_code``
+    against the fetched data, and delivers ``message`` once on the predicate's false→true
+    transition (edge-trigger via ``last_result``). ``check_code`` is stored **verbatim**;
+    its generation/validation belong to the ``watch-authoring`` change. The delivery text
+    reuses the ``prompt`` column so both storage backends share one shape. Raises
+    ``ValueError`` on invalid input."""
+    message = (message or "").strip()
+    source = (source or "").strip()
+    check_code = (check_code or "").strip()
+    if not message:
+        raise ValueError("watch message cannot be empty")
+    if not source:
+        raise ValueError("watch source cannot be empty")
+    if not check_code:
+        raise ValueError("watch check_code cannot be empty")
+    if channel not in VALID_CHANNELS:
+        raise ValueError(f"unknown channel '{channel}'")
+    try:
+        poll_interval = int(poll_interval)
+    except (TypeError, ValueError):
+        raise ValueError("poll_interval must be an integer number of seconds")
+    if poll_interval <= 0:
+        raise ValueError("poll_interval must be a positive number of seconds")
+    if params is not None and not isinstance(params, dict):
+        raise ValueError("params must be an object/dict")
+
+    base = now_tz()
+    first = base + timedelta(seconds=poll_interval)
+    return {
+        "id": "job_" + uuid.uuid4().hex[:8],
+        "prompt": message,  # delivery text (reuses the prompt column)
+        "channel": channel,
+        "target": target,
+        "conversation_id": conversation_id,
+        "kind": "watch",
+        "cron_expr": None,
+        "run_at": None,
+        "next_run_at": first.isoformat(),
+        "until": None,
+        "max_runs": None,
+        "run_count": 0,
+        "last_run_at": None,
+        "status": "active",
+        "created_at": base.isoformat(timespec="seconds"),
+        # watch-specific:
+        "source": source,
+        "params": params or {},
+        "check_code": check_code,
+        "poll_interval": poll_interval,
+        "last_result": None,  # tri-state: None=unknown, False, True
+    }
+
+
 def public_view(job: dict) -> dict:
-    """Model/user-facing projection of a job — never exposes the raw target (PSID)."""
+    """Model/user-facing projection of a job — never exposes the raw target (PSID),
+    nor a watch's raw predicate/params (internal)."""
     return {
         "id": job["id"],
         "prompt": job["prompt"],

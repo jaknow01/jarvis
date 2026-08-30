@@ -7,3 +7,10 @@ logs/*
 .cache.sqlite
 .DS_Store
 **/.DS_Store
+
+# Sandbox (predicate execution) internals are kept OUT of the public repo on purpose:
+# not exposing the exact sandbox/hardening architecture is an extra layer of defense.
+# Everything under sandbox/ is local-only; see docs for the public-facing contract.
+sandbox/
+# Local-only compose override (e.g. Pi sandbox socket wiring); never commit.
+docker-compose.override.yml

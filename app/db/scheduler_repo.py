@@ -14,6 +14,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from psycopg.types.json import Json
+
 from app.db.connection import connection
 from lib.domain.scheduler import parse_dt
 
@@ -21,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 _COLS = (
     "id, prompt, channel, target, conversation_id, kind, cron_expr, run_at, "
-    "next_run_at, until_spec, max_runs, run_count, last_run_at, status, created_at"
+    "next_run_at, until_spec, max_runs, run_count, last_run_at, status, created_at, "
+    "source, params, check_code, poll_interval, last_result"
 )
 
 # Time fields stored as TIMESTAMPTZ (converted to/from ISO strings at the boundary).
@@ -49,6 +52,11 @@ def _row(r) -> dict:
         "last_run_at": _iso(r[12]),
         "status": r[13],
         "created_at": _iso(r[14]),
+        "source": r[15],
+        "params": r[16],
+        "check_code": r[17],
+        "poll_interval": r[18],
+        "last_result": r[19],
     }
 
 
@@ -58,12 +66,15 @@ def _to_ts(value):
 
 
 def _params(job: dict) -> tuple:
+    watch_params = job.get("params")
     return (
         job["id"], job["prompt"], job["channel"], job.get("target"),
         job["conversation_id"], job["kind"], job.get("cron_expr"),
         _to_ts(job.get("run_at")), _to_ts(job.get("next_run_at")), job.get("until"),
         job.get("max_runs"), job.get("run_count", 0), _to_ts(job.get("last_run_at")),
         job.get("status", "active"), _to_ts(job.get("created_at")),
+        job.get("source"), Json(watch_params) if watch_params is not None else None,
+        job.get("check_code"), job.get("poll_interval"), job.get("last_result"),
     )
 
 
@@ -115,17 +126,19 @@ class PostgresJobStore:
         with connection() as conn:
             conn.execute(
                 f"INSERT INTO scheduled_jobs ({_COLS}) VALUES "
-                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "%s, %s, %s, %s, %s)",
                 _params(job),
             )
         return job
 
     def save(self, job: dict) -> dict:
-        """Upsert a whole job (used after a run advances next_run_at/status)."""
+        """Upsert a whole job (used after a run advances next_run_at/status/last_result)."""
         with connection() as conn:
             conn.execute(
                 f"INSERT INTO scheduled_jobs ({_COLS}) VALUES "
-                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "%s, %s, %s, %s, %s) "
                 "ON CONFLICT (id) DO UPDATE SET "
                 "prompt = EXCLUDED.prompt, channel = EXCLUDED.channel, "
                 "target = EXCLUDED.target, conversation_id = EXCLUDED.conversation_id, "
@@ -133,7 +146,9 @@ class PostgresJobStore:
                 "run_at = EXCLUDED.run_at, next_run_at = EXCLUDED.next_run_at, "
                 "until_spec = EXCLUDED.until_spec, max_runs = EXCLUDED.max_runs, "
                 "run_count = EXCLUDED.run_count, last_run_at = EXCLUDED.last_run_at, "
-                "status = EXCLUDED.status",
+                "status = EXCLUDED.status, source = EXCLUDED.source, "
+                "params = EXCLUDED.params, check_code = EXCLUDED.check_code, "
+                "poll_interval = EXCLUDED.poll_interval, last_result = EXCLUDED.last_result",
                 _params(job),
             )
         return job

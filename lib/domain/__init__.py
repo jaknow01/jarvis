@@ -22,6 +22,7 @@ from lib.domain.conversation import (
 from lib.domain.scheduler import (
     store,
     build_job,
+    build_watch,
     public_view,
     parse_dt,
     describe_schedule,
@@ -32,6 +33,7 @@ from lib.domain.scheduler import (
     VALID_KINDS,
     VALID_STATUSES,
     VALID_CHANNELS,
+    WATCH_SOURCES,
 )
 
 __all__ = [
@@ -46,6 +48,7 @@ __all__ = [
     "SUGGESTED_CATEGORIES",
     "store",
     "build_job",
+    "build_watch",
     "public_view",
     "parse_dt",
     "describe_schedule",
@@ -56,4 +59,5 @@ __all__ = [
     "VALID_KINDS",
     "VALID_STATUSES",
     "VALID_CHANNELS",
+    "WATCH_SOURCES",
 ]
