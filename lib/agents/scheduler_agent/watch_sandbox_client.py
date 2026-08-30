@@ -33,7 +33,7 @@ import logging
 import os
 from typing import Optional
 
-from lib.runtime.watch_evaluator import PredicateEvaluator, default_evaluator
+from lib.agents.scheduler_agent.watch_evaluator import PredicateEvaluator, default_evaluator
 
 logger = logging.getLogger(__name__)
 

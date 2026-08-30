@@ -7,7 +7,7 @@ import asyncio
 
 from lib.domain.scheduler import build_watch, now_tz, parse_dt
 from lib.runtime.scheduler_runner import _run_watch
-from lib.runtime.watch_sources import register_source
+from lib.agents.scheduler_agent.watch_sources import register_source
 
 
 # fake sources: one returning clean data, one returning an error dict (-> unknown)

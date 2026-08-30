@@ -11,9 +11,10 @@ fetch into a three-state result:
 The ``ctx`` argument of the underlying tools is decorative (``app_context`` reads a
 contextvar, not the argument), so ctx-free sources are called with ``ctx=None``.
 
-This module lives in the runtime layer because it imports from ``lib.agents`` (the fetchers).
-The *catalog* of valid source-ids is owned by the domain layer (``WATCH_SOURCES``) so the
-``create_watch`` tool can validate against it without an agents->runtime import; this module
+This module lives in the ``agents`` layer (alongside the ``scheduler_agent`` that owns
+watches) because it reuses other agents' data fetchers — an agents->agents import — and is
+consumed both by the ``create_watch`` tool (agents) and the scheduler runner (runtime). The
+*catalog* of valid source-ids is owned by the domain layer (``WATCH_SOURCES``); this module
 provides one fetcher per catalog entry and asserts it covers exactly that catalog.
 """
 from __future__ import annotations
@@ -75,7 +76,7 @@ def _register_default_sources() -> None:
     The finance tools take a decorative ``ctx`` they never use, so we call their
     underlying coroutine (``.async_fn``) with ``ctx=None``.
     """
-    from lib.agents.finance_agent.tools import get_exchange_rate, get_stock_quote
+    from lib.agents.finance_agent import get_exchange_rate, get_stock_quote
 
     async def finance_fx(params: dict) -> dict:
         return await get_exchange_rate.async_fn(

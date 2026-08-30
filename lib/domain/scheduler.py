@@ -39,11 +39,10 @@ VALID_STATUSES = ("active", "done", "disabled")
 VALID_CHANNELS = ("messenger", "log")
 
 # Catalog of named data sources a conditional watch may poll (source-id -> human
-# description of its params and notable data fields). This is metadata only — it lives
-# in the domain layer so both the `create_watch` tool (agents) and the fetcher registry
-# (runtime, which reuses subagent tools) can share one source of truth without an
-# agents->runtime import. The runtime registry (lib/runtime/watch_sources.py) provides a
-# concrete fetcher for each id and asserts it covers exactly this catalog.
+# description of its params and notable data fields). This is metadata only — the concrete
+# fetchers live in the agents layer (lib/agents/scheduler_agent/watch_sources.py, which
+# reuses other agents' tools) and assert they cover exactly this catalog. Keeping the
+# catalog here in domain lets it be shared without pulling agents into the domain layer.
 WATCH_SOURCES: dict[str, str] = {
     "finance.fx": (
         "Currency exchange rate. params: {foreign_currency: 'USD', base_currency: 'PLN' "

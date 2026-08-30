@@ -1,4 +1,4 @@
-"""Unit tests for the public predicate-sandbox client (lib/runtime/watch_sandbox_client.py).
+"""Unit tests for the public predicate-sandbox client (lib/agents/scheduler_agent/watch_sandbox_client.py).
 
 Drives the client against a fake in-process unix-socket server implementing the wire
 protocol — no real sandbox, no container. Socket paths live under /tmp to stay within the
@@ -10,8 +10,8 @@ import tempfile
 
 import pytest
 
-from lib.runtime.watch_evaluator import StubEvaluator
-from lib.runtime.watch_sandbox_client import (
+from lib.agents.scheduler_agent.watch_evaluator import StubEvaluator
+from lib.agents.scheduler_agent.watch_sandbox_client import (
     SandboxClient,
     SandboxError,
     resolve_evaluator,

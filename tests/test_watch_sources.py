@@ -1,9 +1,9 @@
-"""Unit tests for the watch source registry + three-state read (lib/runtime/watch_sources.py).
+"""Unit tests for the watch source registry + three-state read (lib/agents/scheduler_agent/watch_sources.py).
 
 Uses fake fetchers — no network. Async entry points run via asyncio.run."""
 import asyncio
 
-from lib.runtime.watch_sources import (
+from lib.agents.scheduler_agent.watch_sources import (
     fetch_source,
     is_known,
     known_sources,

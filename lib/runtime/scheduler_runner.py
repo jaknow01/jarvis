@@ -21,9 +21,12 @@ from typing import Awaitable, Callable, Optional
 from lib.core import Cache, Ctx
 from lib.runtime.engine import handle_message
 from lib.runtime.messenger import send_message
-from lib.runtime.watch_evaluator import PredicateEvaluator, default_evaluator
-from lib.runtime.watch_sandbox_client import resolve_evaluator
-from lib.runtime.watch_sources import fetch_source
+from lib.agents.scheduler_agent import (
+    PredicateEvaluator,
+    default_evaluator,
+    fetch_source,
+    resolve_evaluator,
+)
 from lib.domain import (
     describe_schedule,
     is_expired,

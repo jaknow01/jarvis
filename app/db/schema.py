@@ -93,7 +93,7 @@ SCHEMA_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS scheduled_jobs_due
         ON scheduled_jobs (status, next_run_at)
     """,
-    # Conditional "watch" jobs (kind="watch", see lib/runtime/watch_*.py): poll a named
+    # Conditional "watch" jobs (kind="watch", see lib/agents/scheduler_agent/watch_*.py): poll a named
     # data source every `poll_interval` seconds, evaluate `check_code` against the fetched
     # data, and deliver (edge-trigger via `last_result`, tri-state: NULL=unknown/true/false).
     # Added idempotently so init_db() stays safe on pre-existing tables. The delivery text

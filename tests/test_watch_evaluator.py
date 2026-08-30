@@ -1,4 +1,4 @@
-"""Unit tests for the in-process STUB predicate evaluator (lib/runtime/watch_evaluator.py).
+"""Unit tests for the in-process STUB predicate evaluator (lib/agents/scheduler_agent/watch_evaluator.py).
 
 The stub is dev/test-only (not a security boundary); these tests cover the calling
 convention (`def check(data)`), the injected `get` helper, and bool coercion."""
@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from lib.runtime.watch_evaluator import StubEvaluator, _get
+from lib.agents.scheduler_agent.watch_evaluator import StubEvaluator, _get
 
 
 def _eval(code, data):
