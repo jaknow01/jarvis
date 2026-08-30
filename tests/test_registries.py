@@ -28,6 +28,7 @@ def test_fpl_agent_has_its_tools():
     assert {
         "get_fpl_fixtures",
         "get_pl_teams",
+        "get_fpl_player",
         "get_my_fpl_squad",
         "get_my_fpl_leagues",
         "get_fpl_league_standings",

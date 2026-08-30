@@ -145,6 +145,89 @@ async def get_pl_teams(ctx: Context) -> dict:
 
 @tool_ownership("fpl_agent")
 @function_tool
+async def get_fpl_player(ctx: Context, name: str, upcoming_fixtures: int = 5) -> dict:
+    """
+    Description:
+        Looks up a single Premier League player by name and returns their FPL profile:
+        current price, position, team, total points, form, ownership (% selected),
+        availability status, and the next few fixtures with their FDR difficulty. Use
+        this for questions about ANY player (not just the owner's squad), e.g. "how much
+        does Haaland cost now?", "what's Saka's form?", "who does Palmer play next and
+        how hard are the fixtures?".
+
+    Parameters:
+    ctx : Context
+        Context in which the tool operates
+
+    name: str
+        Free-text player name to resolve (e.g. 'Haaland', 'Bruno Fernandes', 'Saka').
+        Matching is by web name first (an exact web-name match wins); otherwise all
+        substring matches across first/second/web name are returned for disambiguation.
+
+    upcoming_fixtures: int = 5
+        How many of the player's next fixtures to include (each with opponent,
+        home/away, FDR difficulty 1-5 and kickoff time). Set to 0 to skip fixtures.
+
+    Output:
+        JSON object. On a single match: the player's profile plus `upcoming_fixtures`
+        and `chance_of_playing_this_round`/`chance_of_playing_next_round`. When the name
+        is ambiguous, returns `ambiguous: true` with a compact list of candidates (name,
+        team, position, price) so the caller can pick one. Note: `status`/`chance_of_playing`
+        report AVAILABILITY (injury/suspension), NOT a confirmed pre-match starting lineup —
+        the FPL API does not publish announced XIs.
+    """
+    logger.info(f"Getting FPL player info for query={name!r}")
+    try:
+        bootstrap = await fetch_fpl_bootstrap()
+        teams_by_id, _, positions_by_id = index_bootstrap(bootstrap)
+        candidates = find_players_by_name(bootstrap, name)
+    except Exception as e:
+        logger.error("Error while getting FPL player", exc_info=True)
+        return {"Message": "Error while getting the FPL player", "Error": str(e)}
+
+    if not candidates:
+        return {"Error": f"No Premier League player matches '{name}'.", "query": name}
+
+    if len(candidates) > 1:
+        return {
+            "query": name,
+            "ambiguous": True,
+            "matches_count": len(candidates),
+            "matches": [describe_player(e, teams_by_id, positions_by_id) for e in candidates[:15]],
+            "Tip": "Several players matched; ask the user which one or pass a more specific name.",
+        }
+
+    element = candidates[0]
+    info = describe_player(element, teams_by_id, positions_by_id)
+    # Availability for the upcoming round(s) — an injury/suspension signal, NOT a
+    # confirmed team sheet. The FPL API has no announced-lineup (starting XI vs bench) data.
+    info["chance_of_playing_this_round"] = element.get("chance_of_playing_this_round")
+    info["chance_of_playing_next_round"] = element.get("chance_of_playing_next_round")
+
+    fixtures_out = []
+    if upcoming_fixtures and upcoming_fixtures > 0:
+        try:
+            summary = await fetch_fpl(f"element-summary/{element.get('id')}/")
+            for fx in (summary.get("fixtures") or [])[:upcoming_fixtures]:
+                is_home = fx.get("is_home")
+                opp = teams_by_id.get(fx.get("team_a") if is_home else fx.get("team_h"), {})
+                fixtures_out.append({
+                    "gameweek": fx.get("event"),
+                    "opponent": opp.get("name"),
+                    "opponent_short": opp.get("short_name"),
+                    "home_or_away": "H" if is_home else "A",
+                    "difficulty": fx.get("difficulty"),
+                    "kickoff_time": fx.get("kickoff_time"),
+                })
+        except Exception:
+            logger.warning("Could not fetch upcoming fixtures for player", exc_info=True)
+    info["upcoming_fixtures"] = fixtures_out
+
+    return info
+
+
+@tool_ownership("fpl_agent")
+@function_tool
 async def get_my_fpl_squad(ctx: Context,
                            gameweek: Optional[int] = None,
                            entry_id: Optional[int] = None) -> dict:

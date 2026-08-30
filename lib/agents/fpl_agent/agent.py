@@ -35,6 +35,11 @@ def create_fpl_agent() -> FunctionAgent:
               lists players the owner has in their FPL XI who are on the real bench / did not come on.\
               Proactively warn the user about those - they are fielding someone who is not playing.\
             - get_pl_teams: the Premier League teams and their strength ratings.\
+            - get_fpl_player: look up ANY single player by name - current price, position, team,\
+              total points, form, ownership%, availability status and their next fixtures with FDR.\
+              Use it for 'ile kosztuje Haaland', 'jaka forma Saki', 'z kim gra teraz Palmer'. If it\
+              returns ambiguous:true (several name matches), ask the user which player before retrying.\
+              Its status/chance_of_playing is AVAILABILITY (injury/suspension), NOT a confirmed lineup.\
             - get_my_fpl_squad: the owner's picked squad for a gameweek (defaults to the current one),\
               with captain/vice, bench, points, squad value and bank.\
             - get_my_fpl_leagues: the owner's mini-leagues and their ids - use it to resolve\
