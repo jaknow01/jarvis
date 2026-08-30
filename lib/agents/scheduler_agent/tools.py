@@ -21,6 +21,8 @@ from lib.domain import (
     public_view as scheduler_public_view,
     WATCH_SOURCES,
 )
+from lib.agents.scheduler_agent.authoring import author_watch
+from lib.agents.scheduler_agent.watch_sandbox_client import resolve_evaluator
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,101 @@ async def create_scheduled_job(
 
 @tool_ownership("scheduler_agent")
 @function_tool
+async def prepare_watch(
+    ctx: Context,
+    message: str,
+    source: str,
+    check_code: str,
+    poll_interval: int,
+    intent: str,
+    params: Optional[dict] = None,
+) -> dict:
+    """
+    Description:
+        STEP 1 of setting up a CONDITIONAL watch ("daj znać, gdy...", "powiadom mnie,
+        kiedy..."). This prepares and CHECKS the watch but does NOT arm it yet. It
+        validates your `check_code`, auto-repairs it if needed, and runs it once against
+        freshly fetched data so you can show the user what it currently returns. After the
+        user confirms, call `create_watch` with the SAME `source`/`params`/`poll_interval`/
+        `message` and the returned `check_code` to actually arm it.
+
+    Parameters:
+    ctx : Context
+        Context in which the tool operates.
+
+    message: str
+        The exact text to deliver when the condition first becomes true (user's language).
+
+    source: str
+        Which data source to poll. One of the known source ids:
+          - finance.fx: exchange rate. params: {"foreign_currency": "USD",
+            "base_currency": "PLN" (optional)}. Data has the numeric "rate".
+          - finance.quote: stock/index quote. params: {"symbol": "AAPL" or "PKN.WA"}.
+            Data has the latest price.
+
+    check_code: str
+        The condition as `def check(data): return <bool>` in Starlark (a Python dialect:
+        no import / try-except / f-strings / while). Use `get(data, "a.b", default)` for
+        safe access. Example: `def check(data):\n    return data["rate"] < 3.9`.
+
+    poll_interval: int
+        How often to check, in seconds (positive).
+
+    intent: str
+        A short natural-language description of what the condition should detect (e.g.
+        "USD/PLN below 3.90"). Used to auto-repair the code if it does not compile.
+
+    params: Optional[dict]
+        Parameters for the chosen source.
+
+    Output:
+        On success: {"prepared": {..., "check_code": <validated>, "current_result": <bool>}}
+        — show `current_result` to the user and ask them to confirm before arming. If the
+        code could not be validated or the data is unavailable, an {"Error": ...} object;
+        relay it (ask the user to clarify the condition). NEVER treat prepare as armed.
+    """
+    if source not in WATCH_SOURCES:
+        return {"Error": f"unknown source '{source}'", "known_sources": sorted(WATCH_SOURCES)}
+    try:
+        if int(poll_interval) <= 0:
+            return {"Error": "poll_interval must be a positive number of seconds"}
+    except (TypeError, ValueError):
+        return {"Error": "poll_interval must be an integer number of seconds"}
+
+    res = await author_watch(check_code, intent, source, params or {}, resolve_evaluator())
+    if not res.ok:
+        return {
+            "Error": "could not validate the condition code",
+            "detail": res.error,
+            "repairs_tried": res.attempts,
+            "hint": "ask the user to clarify the condition, then try again",
+        }
+    if res.smoke_state != "ok":
+        return {
+            "Error": "condition validated but the source data is currently unavailable",
+            "validated_check_code": res.code,
+            "hint": "try again later; do not arm the watch",
+        }
+    return {
+        "prepared": {
+            "message": message,
+            "source": source,
+            "params": params or {},
+            "poll_interval": poll_interval,
+            "check_code": res.code,          # validated (possibly repaired) code
+            "current_result": res.smoke_result,
+            "repairs_used": res.attempts,
+        },
+        "note": (
+            "NOT armed. Tell the user what the condition currently returns (current_result) "
+            "and ask them to confirm. Only after they confirm, call create_watch with this "
+            "exact check_code."
+        ),
+    }
+
+
+@tool_ownership("scheduler_agent")
+@function_tool
 async def create_watch(
     ctx: Context,
     message: str,
@@ -120,51 +217,46 @@ async def create_watch(
 ) -> dict:
     """
     Description:
-        Create a CONDITIONAL watch: instead of firing at a time, Jarvis repeatedly polls a
-        data source and notifies the user ONCE, the moment a condition becomes true. Use
-        this for "daj znać, gdy...", "powiadom mnie, jak tylko...", "kiedy kurs spadnie
-        poniżej...". The watch checks `source` every `poll_interval` seconds, evaluates
-        `check_code` against the fetched data, and delivers `message` on the first
-        false->true transition, then stops.
+        STEP 2: ARM a conditional watch after the user has confirmed it. Call this only
+        after `prepare_watch` succeeded and the user agreed, passing the SAME parameters and
+        the validated `check_code` that prepare returned. The watch then polls `source`
+        every `poll_interval` seconds, evaluates `check_code`, and delivers `message` once on
+        the first false->true transition, then stops. The code is re-validated here as a
+        safety net; do not call this with code that has not been through `prepare_watch`.
 
     Parameters:
     ctx : Context
         Context in which the tool operates (also carries the delivery channel).
 
     message: str
-        The exact text to deliver to the user when the condition first becomes true
-        (in the user's language), e.g. "Kurs USD/PLN spadł poniżej 3,90.".
+        The exact text to deliver when the condition first becomes true (user's language).
 
     source: str
-        Which data source to poll. Must be one of the known source ids below.
-        Currently available:
-          - finance.fx: currency exchange rate. params: {"foreign_currency": "USD",
-            "base_currency": "PLN" (optional, default PLN)}. Data has the numeric "rate".
-          - finance.quote: stock/index quote. params: {"symbol": "AAPL" or "PKN.WA"
-            for GPW}. Data has the latest price.
+        The same source id used in `prepare_watch` (e.g. finance.fx, finance.quote).
 
     check_code: str
-        The condition, as a small function `def check(data): return <bool>` over the
-        source's data dict. Example: `def check(data): return data["rate"] < 3.9`. It is
-        stored as-is here (generation/validation of this code is handled elsewhere).
+        The validated `def check(data): return <bool>` returned by `prepare_watch`.
 
     poll_interval: int
-        How often to check, in seconds (positive). Pick a value proportional to how fast
-        the data changes; avoid needlessly small intervals.
+        How often to check, in seconds (positive).
 
     params: Optional[dict]
-        Parameters for the chosen source (see the descriptions above).
+        Parameters for the chosen source (same as in `prepare_watch`).
 
     Output:
-        JSON with the created watch (id, human-readable schedule, next check time) — never
-        the raw delivery target or the internal predicate. On invalid input, an
-        {"Error": ...} object; relay it so the user can correct the request.
+        JSON with the armed watch (id, human-readable schedule, next check time) — never the
+        raw delivery target or the predicate. On invalid input or code that fails
+        re-validation, an {"Error": ...} object; relay it.
     """
     if source not in WATCH_SOURCES:
         return {
             "Error": f"unknown source '{source}'",
             "known_sources": sorted(WATCH_SOURCES),
         }
+    # Safety net: never arm a watch whose predicate does not validate.
+    ok, verr = await resolve_evaluator().validate(check_code)
+    if not ok:
+        return {"Error": f"check_code did not validate: {verr}", "hint": "run prepare_watch first"}
     channel, target, conv = _channel_from_ctx(ctx)
     try:
         job = build_watch(
@@ -175,7 +267,7 @@ async def create_watch(
     except ValueError as e:
         return {"Error": str(e)}
     scheduler_store.add(job)
-    logging.info(f"Watch {job['id']} created (source={source}, every {poll_interval}s)")
+    logging.info(f"Watch {job['id']} armed (source={source}, every {poll_interval}s)")
     return {"watch": scheduler_public_view(job)}
 
 

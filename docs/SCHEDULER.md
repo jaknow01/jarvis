@@ -123,6 +123,34 @@ polling:     pętla schedulera, co tick dla due-watcha:
 - **Zakres v1:** watche **jednowarunkowe** (jeden warunek → jedna wiadomość → koniec).
   Sekwencje/FSM (np. „koniec 1. połowy, potem 2.") — kolejna iteracja.
 
+### Authoring predykatu (dwa kroki, potwierdzenie przed uzbrojeniem)
+
+Kod predykatu pisze LLM, a Starlark jest okrojonym Pythonem — dlatego tworzenie watcha idzie
+przez **pipeline authoringu** (`lib/agents/scheduler_agent/authoring.py`), całość
+**przy tworzeniu** (runtime pollingu jest bez kosztu LLM):
+
+```
+prepare_watch(message, source, check_code, poll_interval, intent, params)
+   1. normalize   (deterministycznie: zdejmij ``` fence, no-op f-string)  — bez LLM
+   2. validate    przez sandbox/stub (validate → ok | treść błędu)
+   3. repair      przy błędzie: LLM_BY_AGENT["watch_coder"] dostaje kod+błąd+intencję+reguły
+                  → iteracja z capem (WATCH_AUTHORING_MAX_REPAIRS, dflt 3) → fail-closed
+   4. smoke-test  pobierz próbkę (rejestr źródeł) → evaluate(code, sample) → pokaż wynik
+   → zwraca {prepared: {check_code(zwalidowany), current_result}}  — NIE uzbraja
+
+   ↓ (LLM pokazuje userowi current_result i prosi o potwierdzenie)
+
+create_watch(message, source, check_code, poll_interval, params)
+   re-walidacja (safety net) → build_watch → store   — DOPIERO TU uzbrojenie
+```
+
+- **Fail-closed:** jeśli kod nie przejdzie walidacji w limicie prób — **nie uzbrajamy**,
+  prosimy usera o doprecyzowanie. Tak samo gdy sandbox/źródło niedostępne.
+- **Generator = `scheduler_agent`** (pisze `check_code` + `intent`); **repair = osobny
+  „kodowy" model** przez `AGENT_WATCH_CODER_MODEL` (fallback `DEFAULT_MODEL`).
+- **Walidacja „na ślepo":** repair-LLM nie ma własnego Starlarka — faktyczna kompilacja
+  zawsze przez sandbox (w dev: stub). Reguły Starlarka: `authoring.STARLARK_RULES`.
+
 ## Weryfikacja
 
 ```bash

@@ -20,16 +20,23 @@ crashes a tick.
 from __future__ import annotations
 
 import logging
-from typing import Protocol
+from typing import Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
 
 class PredicateEvaluator(Protocol):
     """Anything the runner can call to evaluate a predicate. Both the stub and the future
-    sandbox client implement this, so the runner is agnostic to which is wired in."""
+    sandbox client implement this, so the runner is agnostic to which is wired in.
+
+    The authoring pipeline additionally uses ``validate`` and ``evaluate_checked`` (the
+    error-carrying face); both the stub and the sandbox client provide them."""
 
     async def evaluate(self, code: str, data: dict) -> bool: ...
+
+    async def validate(self, code: str) -> tuple[bool, Optional[str]]: ...
+
+    async def evaluate_checked(self, code: str, data: dict) -> tuple[Optional[bool], Optional[str]]: ...
 
 
 def _get(data, path, default=None):
@@ -77,6 +84,25 @@ class StubEvaluator:
         if not callable(check):
             raise ValueError("predicate must define a callable check(data)")
         return bool(check(data))
+
+    async def validate(self, code: str) -> tuple[bool, Optional[str]]:
+        """Authoring face: does the code compile and define a callable ``check``? Returns
+        ``(ok, error_or_None)`` — the error text feeds the repair model."""
+        ns: dict = {"__builtins__": _SAFE_BUILTINS, "get": _get}
+        try:
+            exec(code, ns)  # noqa: S102 - stub only
+        except Exception as e:  # noqa: BLE001 - surface the diagnostic to the repair loop
+            return False, f"{type(e).__name__}: {e}"
+        if not callable(ns.get("check")):
+            return False, "code must define a function check(data)"
+        return True, None
+
+    async def evaluate_checked(self, code: str, data: dict) -> tuple[Optional[bool], Optional[str]]:
+        """Authoring face: ``(result_or_None, error_or_None)`` — used by the smoke-test."""
+        try:
+            return await self.evaluate(code, data), None
+        except Exception as e:  # noqa: BLE001
+            return None, f"{type(e).__name__}: {e}"
 
 
 # Default evaluator the runner uses until the real sandbox client is wired in.

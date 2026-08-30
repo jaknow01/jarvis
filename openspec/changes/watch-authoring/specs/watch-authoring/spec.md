@@ -78,14 +78,23 @@ for confirmation before the watch is armed. A watch SHALL NOT be armed without t
 - **WHEN** the source fetch for the smoke-test is unavailable (unknown)
 - **THEN** the pipeline reports it and does not silently arm a watch it could not smoke-test
 
-### Requirement: create_watch runs the authoring pipeline before storing
+### Requirement: Two-step creation — prepare (no arm) then arm on confirmation
 
-The `create_watch` flow SHALL route through the authoring pipeline (generate → normalize → validate →
-repair → smoke-test → confirm) and persist the watch only after it validates and is confirmed. This
-supersedes the verbatim-storage behavior introduced in `watch-execution`.
+Watch creation SHALL be split into a prepare step and an arm step so confirmation can happen
+between them. A `prepare_watch` tool SHALL run the authoring pipeline (normalize → validate →
+repair → smoke-test) and return the validated code plus the current smoke result **without
+arming**. A `create_watch` (arm) tool SHALL, after the user confirms, re-validate the code as a
+safety net and store the watch only if it validates. This supersedes the verbatim-storage
+behavior introduced in `watch-execution`.
 
-#### Scenario: Watch is stored only after authoring succeeds
+#### Scenario: Prepare validates and smoke-tests but does not arm
 
-- **WHEN** a user requests a conditional watch
-- **THEN** the predicate is authored and confirmed, and the watch is stored only if that succeeds;
-  otherwise nothing is armed
+- **WHEN** `prepare_watch` succeeds
+- **THEN** it returns the validated `check_code` and the current predicate result, and no watch
+  is stored yet
+
+#### Scenario: Arm stores only validating code
+
+- **WHEN** `create_watch` is called to arm a watch
+- **THEN** the predicate is re-validated and the watch is stored only if it validates; otherwise
+  an error is returned and nothing is armed
