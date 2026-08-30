@@ -12,10 +12,15 @@ class Chatbot():
         ctx = Ctx()
         ctx.cache = Cache()
 
+        async def notify(msg: str) -> None:
+            # Interim "still working" ping surfaced in the terminal (mirrors what a
+            # Messenger user would receive) so slow turns show progress locally too.
+            logger.conversation(f"[ASSISTANT…] {msg}")
+
         while(True):
             text = input()
             logger.conversation(f"[USER] {text}")
 
-            reply = await handle_message("repl", text, ctx)
+            reply = await handle_message("repl", text, ctx, notify=notify)
 
             logger.conversation(f"[ASSISTANT] {reply}")

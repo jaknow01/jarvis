@@ -106,8 +106,16 @@ async def verify(request: Request) -> Response:
 async def _process(ctx: Ctx, sender_id: str, text: str) -> None:
     """Run the coordinator for one inbound message and send the reply back."""
     logger.conversation(f"[MESSENGER {sender_id}] {text}")
+
+    async def _notify(msg: str) -> None:
+        # Interim "still working" ping for a slow turn (send_message swallows its own
+        # errors, so a failed ping never disrupts the turn).
+        await send_message(PAGE_ACCESS_TOKEN, sender_id, msg)
+
     try:
-        reply = await handle_message(f"messenger:{sender_id}", text, ctx)
+        reply = await handle_message(
+            f"messenger:{sender_id}", text, ctx, notify=_notify
+        )
     except Exception:
         logger.exception("handle_message failed for %s", sender_id)
         reply = "Przepraszam, coś poszło nie tak po mojej stronie."

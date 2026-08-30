@@ -184,6 +184,19 @@ poetry run uvicorn app.webhook:app --host 0.0.0.0 --port 8002
 
 REPL (`app/main.py`) działa dalej niezależnie — oba wejścia dzielą ten sam rdzeń.
 
+### Wiadomość „chwila, jeszcze pracuję" (długie tury)
+
+Gdy koordynator mieli dłużej niż `PROGRESS_PING_AFTER_SECONDS` (domyślnie 7 s), webhook
+wysyła **jedną** wiadomość pośrednią, np. *„Chwila, jeszcze nad tym pracuję — sprawdziłem
+już pogodę i trasę. Zaraz kończę…"*, żebyś wiedział, że bot nie zawisł. Treść składa się z
+szablonu (bez wywołania LLM, więc nie dokłada opóźnienia), a lista „sprawdziłem już…"
+pochodzi z podagentów, które zdążyły wrócić — engine podgląda strumień zdarzeń koordynatora
+(`ToolCallResult`). Jeśli tura skończy się przed progiem, ping w ogóle nie idzie; a ponieważ
+finalna odpowiedź wychodzi dopiero po zwrocie z `handle_message`, ping zawsze ją poprzedza.
+Mechanizm: `_gather_with_progress_ping` w `lib/runtime/engine.py` + `lib/runtime/progress.py`;
+webhook wpina callback `notify` per-nadawca (`_process` w `app/webhook.py`). Wyłącznik:
+`PROGRESS_PING_ENABLED=false`. Ten sam ping widać też w REPL (jako log `[ASSISTANT…]`).
+
 ---
 
 ## Kwestia okna 24 h (proaktywny brief poranny)
