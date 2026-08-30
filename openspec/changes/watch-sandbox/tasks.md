@@ -32,7 +32,7 @@
 - [x] 4.2 Konfiguracja izolacji realizująca WYMAGANE właściwości: brak sieci, read-only rootfs
       (+ zapisywalny mount tylko na socket), limity pamięci/pids, drop capabilities, no-new-privileges,
       profil seccomp. Konkretne wartości/profil — w `sandbox/`, nie w publicznym repo.
-- [ ] 4.3 Rootless Podman; weryfikacja z wnętrza: brak dostępu do sieci i FS hosta; działa tylko socket.
+- [x] 4.3 Rootless Podman; weryfikacja z wnętrza: brak dostępu do sieci i FS hosta; działa tylko socket.
 
 ## 5. Nadzór i deployment (prywatnie, `sandbox/`)
 
@@ -51,7 +51,7 @@
 
 - [x] 7.1 Kontrakt: `def check` + helpery, `true/false`, `validate` błędnego kodu → treść błędu,
       `evaluate(code, sample)` → wynik. (Testy publicznego klienta z fake-serwisem/realnym socketem.)
-- [ ] 7.2 Izolacja (prywatnie, `sandbox/`): próba I/O/importu/sieci z predykatu → porażka w runtime;
+- [x] 7.2 Izolacja (prywatnie, `sandbox/`): próba I/O/importu/sieci z predykatu → porażka w runtime;
       runaway → przerwane; świeże środowisko per-call (brak wycieku stanu).
 - [x] 7.3 Niedostępność serwisu → `unknown` (nie `false`) po stronie klienta.
 - [x] 7.4 Brak regresji: produkcyjny `poetry.lock` Jarvisa bez `starlark`/Podman (żyją w obrazie).
