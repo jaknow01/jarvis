@@ -93,6 +93,26 @@ SCHEMA_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS scheduled_jobs_due
         ON scheduled_jobs (status, next_run_at)
     """,
+    # Conditional "watch" jobs (kind="watch", see lib/runtime/watch_*.py): poll a named
+    # data source every `poll_interval` seconds, evaluate `check_code` against the fetched
+    # data, and deliver (edge-trigger via `last_result`, tri-state: NULL=unknown/true/false).
+    # Added idempotently so init_db() stays safe on pre-existing tables. The delivery text
+    # reuses the existing `prompt` column.
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS source TEXT
+    """,
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS params JSONB
+    """,
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS check_code TEXT
+    """,
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS poll_interval INTEGER
+    """,
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS last_result BOOLEAN
+    """,
     # Conversation history (owned by us now that previous_response_id / the Responses
     # API continuity is gone). A conversation is identified by a stable per-channel
     # key (e.g. 'repl', 'messenger:{psid}') so channels/users never share history.

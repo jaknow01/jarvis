@@ -174,7 +174,7 @@ place rather than removed.
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
 | `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools |
 | `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn. See `docs/MEMORY.md` |
-| `scheduler_agent` | Proactive cron jobs / reminders | JSON or Postgres store (`lib/domain/scheduler.py`): create/list/delete/update scheduled jobs | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/runtime/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. See `docs/SCHEDULER.md` |
+| `scheduler_agent` | Proactive cron jobs / reminders + conditional watches | JSON or Postgres store (`lib/domain/scheduler.py`): create/list/delete/update scheduled jobs; `create_watch` for conditional watches | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/runtime/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. **Conditional watches** (`kind="watch"`) poll a data source and notify once on a false→true edge — see below. See `docs/SCHEDULER.md` |
 
 ## Running it
 

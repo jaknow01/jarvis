@@ -17,7 +17,9 @@ from lib.core import tool_ownership, function_tool, app_context
 from lib.domain import (
     store as scheduler_store,
     build_job,
+    build_watch,
     public_view as scheduler_public_view,
+    WATCH_SOURCES,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +106,77 @@ async def create_scheduled_job(
     scheduler_store.add(job)
     logging.info(f"Scheduled job {job['id']} created ({job['kind']}, next {job['next_run_at']})")
     return {"scheduled": scheduler_public_view(job)}
+
+
+@tool_ownership("scheduler_agent")
+@function_tool
+async def create_watch(
+    ctx: Context,
+    message: str,
+    source: str,
+    check_code: str,
+    poll_interval: int,
+    params: Optional[dict] = None,
+) -> dict:
+    """
+    Description:
+        Create a CONDITIONAL watch: instead of firing at a time, Jarvis repeatedly polls a
+        data source and notifies the user ONCE, the moment a condition becomes true. Use
+        this for "daj znać, gdy...", "powiadom mnie, jak tylko...", "kiedy kurs spadnie
+        poniżej...". The watch checks `source` every `poll_interval` seconds, evaluates
+        `check_code` against the fetched data, and delivers `message` on the first
+        false->true transition, then stops.
+
+    Parameters:
+    ctx : Context
+        Context in which the tool operates (also carries the delivery channel).
+
+    message: str
+        The exact text to deliver to the user when the condition first becomes true
+        (in the user's language), e.g. "Kurs USD/PLN spadł poniżej 3,90.".
+
+    source: str
+        Which data source to poll. Must be one of the known source ids below.
+        Currently available:
+          - finance.fx: currency exchange rate. params: {"foreign_currency": "USD",
+            "base_currency": "PLN" (optional, default PLN)}. Data has the numeric "rate".
+          - finance.quote: stock/index quote. params: {"symbol": "AAPL" or "PKN.WA"
+            for GPW}. Data has the latest price.
+
+    check_code: str
+        The condition, as a small function `def check(data): return <bool>` over the
+        source's data dict. Example: `def check(data): return data["rate"] < 3.9`. It is
+        stored as-is here (generation/validation of this code is handled elsewhere).
+
+    poll_interval: int
+        How often to check, in seconds (positive). Pick a value proportional to how fast
+        the data changes; avoid needlessly small intervals.
+
+    params: Optional[dict]
+        Parameters for the chosen source (see the descriptions above).
+
+    Output:
+        JSON with the created watch (id, human-readable schedule, next check time) — never
+        the raw delivery target or the internal predicate. On invalid input, an
+        {"Error": ...} object; relay it so the user can correct the request.
+    """
+    if source not in WATCH_SOURCES:
+        return {
+            "Error": f"unknown source '{source}'",
+            "known_sources": sorted(WATCH_SOURCES),
+        }
+    channel, target, conv = _channel_from_ctx(ctx)
+    try:
+        job = build_watch(
+            message=message, source=source, params=params or {}, check_code=check_code,
+            poll_interval=poll_interval, channel=channel, target=target,
+            conversation_id=conv,
+        )
+    except ValueError as e:
+        return {"Error": str(e)}
+    scheduler_store.add(job)
+    logging.info(f"Watch {job['id']} created (source={source}, every {poll_interval}s)")
+    return {"watch": scheduler_public_view(job)}
 
 
 @tool_ownership("scheduler_agent")

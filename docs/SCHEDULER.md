@@ -86,10 +86,48 @@ bota, by odświeżyć okno.
 kolejny czas liczony jest od **teraz** (croniter), więc okazje pominięte podczas przestoju
 **nie są odtwarzane hurtem** — bierzemy najbliższą przyszłą (polityka skip-missed).
 
+## Warunkowe watche (`kind="watch"`) — powiadomienia zależne od stanu, nie od zegara
+
+Obok jobów czasowych (`once`/`cron`) jest trzeci rodzaj — **watch**: „daj znać, **gdy**
+kurs USD/PLN spadnie poniżej 3,90". Zamiast odpalać o czasie, watch **regularnie odpytuje
+źródło danych** i powiadamia **dokładnie raz**, gdy warunek staje się prawdą.
+
+```
+utworzenie:  Ty ──► coordinator ──► scheduler_agent.create_watch(
+                        message, source, check_code, poll_interval, params)
+                                          ▼
+                                     store (kind="watch": source, params, check_code,
+                                            poll_interval, last_result)
+
+polling:     pętla schedulera, co tick dla due-watcha:
+   1. FETCH   watch_sources.fetch_source(source, params) → ("ok", data) | ("unknown", None)
+   2. EVAL    evaluator.evaluate(check_code, data) → bool           (kontrakt {code,data}->bool)
+   3. EDGE    dostawa message TYLKO na przejściu last_result: false→true
+   4. KONIEC  po wyzwoleniu status="done" (v1 jednowarunkowy); inaczej re-arm o poll_interval
+```
+
+- **Trzy stany odczytu:** `true` / `false` / **`unknown`** (źródło niedostępne lub zwróciło
+  błąd, np. `{"Error": …}`). `unknown` → **nic nie wysyłamy, `last_result` bez zmian**, retry
+  następnym tickiem. Błąd fetchu nigdy nie jest mylony z `false`.
+- **Edge-trigger:** wysyłka tylko na `false→true` (porównanie z `last_result`), więc przy
+  pollingu co minutę **nie zalewa** wiadomościami. Błąd dostawy **nie konsumuje krawędzi** —
+  `last_result` zostaje, powiadomienie ponawia się przy następnym pollu.
+- **Źródła** (`lib/runtime/watch_sources.py`): cienki rejestr `source-id → fetch subagenta`
+  (zwraca `dict`). v1: `finance.fx`, `finance.quote`. Katalog id→opis żyje w
+  `lib/domain/scheduler.py` (`WATCH_SOURCES`), więc `create_watch` waliduje `source` bez
+  importu runtime. Fetch jest **deterministyczny** (bez LLM); `ctx` toolów jest dekoracyjny.
+- **Ewaluator** (`lib/runtime/watch_evaluator.py`): kontrakt `evaluate(code, data) -> bool`.
+  W tym change to **in-process STUB** (wykonuje predykat jako Python; **NIE jest granicą
+  bezpieczeństwa**, tylko dev/test). Produkcyjny, izolowany ewaluator (Starlark w kontenerze)
+  dostarcza osobny change `watch-sandbox`; generowanie/walidacja `check_code` — `watch-authoring`.
+- **Zakres v1:** watche **jednowarunkowe** (jeden warunek → jedna wiadomość → koniec).
+  Sekwencje/FSM (np. „koniec 1. połowy, potem 2.") — kolejna iteracja.
+
 ## Weryfikacja
 
 ```bash
 poetry run pytest tests/test_scheduler.py     # schedule maths, store, runner tick (bez sieci)
+poetry run pytest tests/test_watch_*.py       # watche: store, źródła, stub, runner, create_watch
 ```
 
 Ręcznie (lokalnie, kanał `log`): poproś „przypomnij mi za 1 minutę o kawie" → job trafia do
