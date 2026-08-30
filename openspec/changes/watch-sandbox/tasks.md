@@ -44,7 +44,7 @@
 ## 6. Integracja z runtime
 
 - [x] 6.1 Przełącznik/konfiguracja wyboru ewaluatora: in-process stub (dev) vs klient socketu (prod).
-- [ ] 6.2 End-to-end: watch z `watch-execution` przechodzi na `true` przez prawdziwy sandbox → dostarcza
+- [x] 6.2 End-to-end: watch z `watch-execution` przechodzi na `true` przez prawdziwy sandbox → dostarcza
       raz; sandbox zatrzymany → odczyt `unknown`, watch aktywny.
 
 ## 7. Testy
