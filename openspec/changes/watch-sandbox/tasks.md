@@ -19,11 +19,11 @@
 
 ## 3. Kontrakt: protokół socketu + publiczny klient (w repo)
 
-- [ ] 3.1 Zdefiniować protokół unix-socket (żądanie: `mode`, `code`, `data`; odpowiedź:
+- [x] 3.1 Zdefiniować protokół unix-socket (żądanie: `mode`, `code`, `data`; odpowiedź:
       `result | error`); wersjonowanie/ramkowanie. Udokumentować jako publiczne źródło prawdy.
-- [ ] 3.2 Publiczny klient kontraktu: `evaluate(code, data) -> true|false|unknown` (runtime) i
+- [x] 3.2 Publiczny klient kontraktu: `evaluate(code, data) -> true|false|unknown` (runtime) i
       `validate/evaluate_with_error` (authoring), rozmawiający z socketem; timeout/niedostępność → `unknown`.
-- [ ] 3.3 Punkt integracji: klient implementuje ten sam interfejs co in-process stub z
+- [x] 3.3 Punkt integracji: klient implementuje ten sam interfejs co in-process stub z
       `watch-execution`, by podmiana stub→klient nie ruszała logiki runnera.
 
 ## 4. Kontener + hardening (prywatnie, `sandbox/`)
@@ -43,7 +43,7 @@
 
 ## 6. Integracja z runtime
 
-- [ ] 6.1 Przełącznik/konfiguracja wyboru ewaluatora: in-process stub (dev) vs klient socketu (prod).
+- [x] 6.1 Przełącznik/konfiguracja wyboru ewaluatora: in-process stub (dev) vs klient socketu (prod).
 - [ ] 6.2 End-to-end: watch z `watch-execution` przechodzi na `true` przez prawdziwy sandbox → dostarcza
       raz; sandbox zatrzymany → odczyt `unknown`, watch aktywny.
 

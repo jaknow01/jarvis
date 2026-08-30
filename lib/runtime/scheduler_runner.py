@@ -22,6 +22,7 @@ from lib.core import Cache, Ctx
 from lib.runtime.engine import handle_message
 from lib.runtime.messenger import send_message
 from lib.runtime.watch_evaluator import PredicateEvaluator, default_evaluator
+from lib.runtime.watch_sandbox_client import resolve_evaluator
 from lib.runtime.watch_sources import fetch_source
 from lib.domain import (
     describe_schedule,
@@ -191,13 +192,17 @@ async def run_scheduler_loop(
     deliver: Optional[Callable[[dict, str], Awaitable[None]]] = None,
     seconds: Optional[int] = None,
     cache: Optional[Cache] = None,
-    evaluator: PredicateEvaluator = default_evaluator,
+    evaluator: Optional[PredicateEvaluator] = None,
 ) -> None:
-    """Run the scheduler forever: every `seconds`, fire due jobs. Never raises."""
+    """Run the scheduler forever: every `seconds`, fire due jobs. Never raises.
+
+    The predicate evaluator defaults to the real sandbox client when
+    ``WATCH_SANDBOX_SOCKET`` is set, else the in-process stub (see ``resolve_evaluator``)."""
     store = store or default_store
     cache = cache or Cache()
     invoke = invoke or _make_default_invoke(cache)
     deliver = deliver or default_deliver
+    evaluator = evaluator or resolve_evaluator()
     seconds = seconds or tick_seconds()
     logger.info("Scheduler loop started (tick=%ss)", seconds)
     while True:
