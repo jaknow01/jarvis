@@ -52,15 +52,25 @@ def create_coordinator_agent() -> FunctionAgent:
         ("news_agent", create_news_agent, "Summarizes current world and financial-market news."),
         ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
         ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
-        ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders and recurring proactive briefs, plus listing/cancelling them."),
+        ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders, recurring proactive briefs, AND conditional watches that poll live data and notify ONLY when a condition becomes true ('daj znać, gdy...', 'powiadom, kiedy...'); plus listing/cancelling them."),
     ]
 
     if agent_enabled("scheduler_agent"):
         instructions += (
-            "\n\nWhen the user asks to be reminded later or wants something done on a recurring "
-            "schedule ('przypomnij mi za...', 'codziennie o...', 'co rano dawaj mi...'), delegate to "
-            "the scheduler_agent to create/list/cancel scheduled jobs. The scheduled task itself will "
-            "later be run by you again automatically, so phrase the job's prompt as a complete request."
+            "\n\nWhen the user wants something to happen later or on its own, delegate to the "
+            "scheduler_agent. There are two shapes and you MUST NOT collapse the second into the first:\n"
+            "- TIME-BASED ('przypomnij mi za...', 'codziennie o 8', 'co rano dawaj mi...'): a "
+            "reminder/brief that fires on a clock. It will be re-run by you automatically, so phrase "
+            "the job's prompt as a complete, self-contained request.\n"
+            "- CONDITIONAL ('daj znać, GDY/KIEDY...', 'powiadom, gdy...', 'tylko jeśli...', 'sprawdzaj "
+            "co minutę, czy...'): a watch that polls live data and notifies ONLY when a condition "
+            "becomes true. Forward the user's request FAITHFULLY to the scheduler_agent — preserve the "
+            "trigger condition, the 'only when' wording AND any stop/end condition (e.g. 'do końca "
+            "meczu'). Do NOT rewrite it into a 'do X co minutę' procedure and do NOT ask for a frequent "
+            "cron: turning a conditional alert into a per-minute cron floods the user and is a bug. Let "
+            "the scheduler_agent pick the mechanism; for a watch it will confirm the condition with the "
+            "user BEFORE arming, so pass its confirmation question/description straight back — do not "
+            "report the watch as already set up until the user has confirmed."
         )
 
     if agent_enabled("memory_operator"):
