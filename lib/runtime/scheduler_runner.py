@@ -40,6 +40,40 @@ logger = logging.getLogger(__name__)
 # Tag giving a 7-day window for proactive pushes outside the 24h Messenger window.
 _PROACTIVE_TAG = "HUMAN_AGENT"
 
+# -- loop introspection / control (read by the admin /status, /scheduler commands) --
+# In-memory, process-local, reset on restart. The loop stamps a heartbeat every tick so
+# the admin surface can tell the task is alive; a pause flag lets you halt firing without
+# tearing down the container.
+_last_tick_at: Optional[datetime] = None
+_paused: bool = False
+
+
+def scheduler_heartbeat() -> Optional[datetime]:
+    """Timestamp of the loop's last tick (None if it has never ticked)."""
+    return _last_tick_at
+
+
+def scheduler_running() -> bool:
+    """True when the loop has ticked recently enough to be considered alive."""
+    if _last_tick_at is None:
+        return False
+    return (now_tz() - _last_tick_at).total_seconds() < max(3 * tick_seconds(), 10)
+
+
+def is_paused() -> bool:
+    return _paused
+
+
+def pause() -> None:
+    """Halt job firing (the loop keeps ticking/heartbeating but skips due jobs)."""
+    global _paused
+    _paused = True
+
+
+def resume() -> None:
+    global _paused
+    _paused = False
+
 
 def scheduler_enabled() -> bool:
     """Master switch (env SCHEDULER_ENABLED); enabled unless set to a falsy value."""
@@ -207,13 +241,39 @@ async def run_scheduler_loop(
     deliver = deliver or default_deliver
     evaluator = evaluator or resolve_evaluator()
     seconds = seconds or tick_seconds()
+    global _last_tick_at
     logger.info("Scheduler loop started (tick=%ss)", seconds)
     while True:
+        _last_tick_at = now_tz()  # heartbeat: proves the task is alive to /status
         try:
-            await tick_once(store, invoke, deliver, evaluator=evaluator)
+            if _paused:
+                logger.debug("Scheduler paused; skipping tick")
+            else:
+                await tick_once(store, invoke, deliver, evaluator=evaluator)
         except asyncio.CancelledError:
             logger.info("Scheduler loop cancelled; stopping")
             raise
         except Exception:
             logger.exception("Scheduler tick failed")
         await asyncio.sleep(seconds)
+
+
+async def fire_now(job_id: str, store=None, cache: Optional[Cache] = None):
+    """Manually invoke a job by id right now (admin ``/fire``), delivering to its channel
+    but WITHOUT advancing its schedule (this is a test fire, not a scheduled run).
+
+    Returns ``(job, reply)`` — ``(None, None)`` when no job matches ``job_id``.
+    """
+    store = store or default_store
+    job = store.get(job_id)
+    if not job:
+        return None, None
+    cache = cache or Cache()
+    invoke = _make_default_invoke(cache)
+    reply = await invoke(job)
+    if reply:
+        try:
+            await default_deliver(job, reply)
+        except Exception:
+            logger.exception("Manual fire %s: delivery failed", job_id)
+    return job, reply

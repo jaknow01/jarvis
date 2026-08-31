@@ -9,6 +9,7 @@ from lib.runtime.engine import handle_message
 from lib.runtime.chatbot import Chatbot
 from lib.runtime.tracing import setup_tracing, last_trace_id
 from lib.runtime.scheduler_runner import run_scheduler_loop, scheduler_enabled
+from lib.runtime import admin, diag
 from lib.runtime.messenger import (
     iter_message_events,
     send_message,
@@ -23,6 +24,8 @@ __all__ = [
     "last_trace_id",
     "run_scheduler_loop",
     "scheduler_enabled",
+    "admin",
+    "diag",
     "iter_message_events",
     "send_message",
     "verify_challenge",

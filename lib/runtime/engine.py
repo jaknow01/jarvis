@@ -18,6 +18,7 @@ Responses API `previous_response_id` mechanism is gone.
 
 import asyncio
 import logging
+import time
 from typing import Awaitable, Callable
 
 from llama_index.core.agent.workflow import ToolCallResult
@@ -26,7 +27,7 @@ from llama_index.core.workflow import Context
 from lib.agents import create_coordinator_agent, create_composer_agent
 from lib.core import Ctx, bind_app_context, reset_app_context
 from lib.domain import conversations
-from lib.runtime import progress
+from lib.runtime import diag, progress
 from lib.runtime.history_window import build_chat_history
 from lib.runtime.tracing import last_trace_id
 
@@ -53,36 +54,49 @@ async def _gather_with_progress_ping(handler, notify, want_ping):
     the pending ping is cancelled and never fires. Both helpers are best-effort and
     swallow their own errors so tracing/telemetry can never break a turn.
 
+    On cancellation (the transport cancelling this turn via /stop), the coordinator's
+    underlying workflow task is cancelled too — not just this awaiter — so the in-flight
+    LLM call actually stops rather than finishing detached.
+
     Returns the handler's result (the coordinator's gathered summary).
     """
-    if not want_ping:
-        return await handler
+    collector = pinger = None
+    if want_ping:
+        done_labels: list[str] = []
 
-    done_labels: list[str] = []
+        async def _collect_progress() -> None:
+            async for ev in handler.stream_events():
+                if isinstance(ev, ToolCallResult):
+                    lbl = progress.label_for(ev.tool_name)
+                    if lbl and lbl not in done_labels:
+                        done_labels.append(lbl)
 
-    async def _collect_progress() -> None:
-        async for ev in handler.stream_events():
-            if isinstance(ev, ToolCallResult):
-                lbl = progress.label_for(ev.tool_name)
-                if lbl and lbl not in done_labels:
-                    done_labels.append(lbl)
+        async def _ping_after_timeout() -> None:
+            await asyncio.sleep(progress.ping_after_seconds())
+            try:
+                await notify(progress.progress_message(done_labels))
+            except Exception:
+                logger.exception("Interim progress ping failed (non-fatal)")
 
-    async def _ping_after_timeout() -> None:
-        await asyncio.sleep(progress.ping_after_seconds())
-        try:
-            await notify(progress.progress_message(done_labels))
-        except Exception:
-            logger.exception("Interim progress ping failed (non-fatal)")
+        collector = asyncio.create_task(_collect_progress())
+        pinger = asyncio.create_task(_ping_after_timeout())
 
-    collector = asyncio.create_task(_collect_progress())
-    pinger = asyncio.create_task(_ping_after_timeout())
     try:
         return await handler
+    except asyncio.CancelledError:
+        # /stop cancelled this turn: propagate into the workflow so its internal task
+        # (and the in-flight LLM request) is cancelled, not left running detached.
+        try:
+            handler.cancel()
+        except Exception:
+            pass
+        raise
     finally:
         # Turn finished (possibly before the timeout) -> cancel the pending ping so it
         # never fires, and stop the (usually already-finished) event collector.
         for task in (pinger, collector):
-            task.cancel()
+            if task is not None:
+                task.cancel()
 
 
 async def handle_message(
@@ -117,6 +131,7 @@ async def handle_message(
     # and make the shared Ctx reachable from every tool for the duration of the turn.
     ctx.conversation_id = conversation_id
     token = bind_app_context(ctx)
+    started = time.monotonic()
     try:
         # Bounded, context-engineered history: last N pairs verbatim, prefixed by an
         # incrementally-maintained running summary of everything older (see
@@ -150,7 +165,9 @@ async def handle_message(
         )
 
         # 3) Persist the turn (user msg + assistant reply), stamping the MLflow trace id.
-        conversations.record_turn(conversation_id, text, reply, trace_id=last_trace_id())
+        trace_id = last_trace_id()
+        conversations.record_turn(conversation_id, text, reply, trace_id=trace_id)
+        diag.record_turn_stats(conversation_id, time.monotonic() - started, trace_id)
         return reply
     finally:
         reset_app_context(token)

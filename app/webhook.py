@@ -26,6 +26,8 @@ from fastapi import BackgroundTasks, FastAPI, Request, Response
 
 from lib.core import Cache, Ctx, Logger
 from lib.runtime import (
+    admin,
+    diag,
     handle_message,
     iter_message_events,
     send_message,
@@ -106,19 +108,44 @@ async def verify(request: Request) -> Response:
 async def _process(ctx: Ctx, sender_id: str, text: str) -> None:
     """Run the coordinator for one inbound message and send the reply back."""
     logger.conversation(f"[MESSENGER {sender_id}] {text}")
+    conversation_id = f"messenger:{sender_id}"
+
+    # Note the inbound for the /window estimate, then let the admin surface intercept
+    # technical commands (/status, /logs, …) BEFORE the agent stack — so they still work
+    # even when the coordinator/LLM is the thing that's broken, and cost no tokens.
+    diag.record_inbound(conversation_id)
+    try:
+        admin_reply = await admin.maybe_handle(text, conversation_id=conversation_id, channel="messenger")
+    except Exception:
+        logger.exception("Admin router failed for %s", sender_id)
+        admin_reply = None
+    if admin_reply is not None:
+        logger.conversation(f"[ADMIN -> {sender_id}] {admin_reply}")
+        await send_message(PAGE_ACCESS_TOKEN, sender_id, admin_reply)
+        return
 
     async def _notify(msg: str) -> None:
         # Interim "still working" ping for a slow turn (send_message swallows its own
         # errors, so a failed ping never disrupts the turn).
         await send_message(PAGE_ACCESS_TOKEN, sender_id, msg)
 
+    # Register this task so a concurrently-arriving /stop can cancel the turn mid-flight.
+    turn = asyncio.current_task()
+    diag.register_running(conversation_id, turn)
     try:
         reply = await handle_message(
-            f"messenger:{sender_id}", text, ctx, notify=_notify
+            conversation_id, text, ctx, notify=_notify
         )
+    except asyncio.CancelledError:
+        # Turn cancelled by /stop. Swallow at this task boundary (the /stop handler
+        # already acknowledged); no reply is sent and the turn is not persisted.
+        logger.info("Turn for %s cancelled via /stop", sender_id)
+        return
     except Exception:
         logger.exception("handle_message failed for %s", sender_id)
         reply = "Przepraszam, coś poszło nie tak po mojej stronie."
+    finally:
+        diag.clear_running(conversation_id, turn)
     logger.conversation(f"[ASSISTANT -> {sender_id}] {reply}")
     await send_message(PAGE_ACCESS_TOKEN, sender_id, reply)
 

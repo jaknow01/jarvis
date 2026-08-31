@@ -126,6 +126,24 @@ class ConversationStore:
             conv["last_active_at"] = now
             self._save(data)
 
+    def reset(self, channel_key: str) -> bool:
+        """Clear a channel's message history and rolling summary (admin ``/reset``).
+
+        Returns True if the conversation existed. Keeps the conversation record (empty)
+        rather than deleting it, so continuity ids stay stable.
+        """
+        with self._lock:
+            data = self._load()
+            conv = data["conversations"].get(channel_key)
+            if not conv:
+                return False
+            conv["messages"] = []
+            conv["summary"] = ""
+            conv["summary_upto"] = 0
+            conv["last_active_at"] = _now()
+            self._save(data)
+            return True
+
 
 def _select_backend():
     """Choose the conversation backend at first use (after .env is loaded): Postgres
@@ -167,6 +185,9 @@ class _ConversationProxy:
 
     def record_turn(self, *args, **kwargs) -> None:
         return self._store().record_turn(*args, **kwargs)
+
+    def reset(self, *args, **kwargs) -> bool:
+        return self._store().reset(*args, **kwargs)
 
 
 # module-wide singleton (backend chosen on first use)

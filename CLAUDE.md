@@ -83,6 +83,9 @@ lib/runtime/           TOP layer — wires the network to a transport / runs job
   chatbot.py           REPL loop
   messenger.py         Messenger webhook adapter (signature, send)
   scheduler_runner.py  in-process loop that fires due jobs out of band
+  progress.py          interim "still working" ping helpers (labels + templated message)
+  admin.py             owner-only "/" command surface (ops/diagnostics; bypasses agents)
+  diag.py              leaf: in-memory diagnostic state (uptime, last-turn, inbound)
   tracing.py           MLflow tracing setup + last_trace_id()
 
 app/db/                Postgres access layer: connection, schema, repos, migration
@@ -126,6 +129,24 @@ entry point (REPL and Messenger both call it):
 Conversation continuity is **ours** (Postgres/JSON), not the OpenAI Responses API's
 `previous_response_id` — that mechanism, along with `RunConfig`/`Runner` and the run
 hooks, is gone.
+
+### Admin / ops command surface
+Messages starting with `/` are intercepted **before** the agent stack — in
+`app/webhook.py` `_process` and the REPL loop — by `lib.runtime.admin.maybe_handle`, which
+returns a reply string (handled deterministically, no LLM) or `None` to fall through to
+the coordinator. This is a technical window into the running service from the phone
+(`/stop` to cancel the in-flight turn, `/status`, `/logs`, `/errors`, `/jobs`,
+`/fire <id>`, `/scheduler pause|resume`, `/agents`, `/models`, `/env` with masked secrets,
+`/memory`, `/summary`, `/reset confirm`, `/last`, `/window`, `/version`, `/probe`, `/help`).
+`/stop` works because the webhook runs each inbound message as its own task: a live turn
+registers its `asyncio.Task` in `diag`, and the concurrently-arriving `/stop` cancels it. Bypassing the agents is deliberate: the
+diagnostics must work when the LLM/coordinator is the thing that's broken. It's implicitly
+owner-only (the webhook already gates on `MESSENGER_ALLOWED_SENDER_ID`; REPL is local).
+Output is plain text formatted for a mobile chat bubble (no Markdown). In-memory
+diagnostic state (uptime, last-turn stats, the `/window` inbound tracker, the scheduler
+heartbeat/pause) lives in `lib/runtime/diag.py` + `scheduler_runner` and resets on restart.
+Add a command by registering an `async` handler in `admin._COMMANDS` (`/help` is generated
+from that metadata). See `docs/ADMIN.md`.
 
 ### Registration patterns (important conventions)
 The three decorator-backed registries now all live in `lib/core/registry.py` (imported

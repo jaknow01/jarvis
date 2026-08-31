@@ -95,3 +95,24 @@ class PostgresConversationStore:
                 "UPDATE conversations SET last_active_at = %s WHERE id = %s",
                 (now, conv_id),
             )
+
+    def reset(self, channel_key: str) -> bool:
+        """Clear a channel's messages and rolling summary (admin ``/reset``).
+
+        Returns True if the conversation existed. Deletes the message rows and blanks the
+        summary but keeps the (empty) conversation row so its id stays stable.
+        """
+        with connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM conversations WHERE channel_key = %s", (channel_key,)
+            ).fetchone()
+            if not row:
+                return False
+            conv_id = row[0]
+            conn.execute("DELETE FROM messages WHERE conversation_id = %s", (conv_id,))
+            conn.execute(
+                "UPDATE conversations SET summary = '', summary_upto = 0, "
+                "last_active_at = now() WHERE id = %s",
+                (conv_id,),
+            )
+        return True

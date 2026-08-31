@@ -196,6 +196,26 @@ def build_llm(agent_name: str):
     return builder(model_id, effort, budget_override)
 
 
+def resolve_llm_config(agent_name: str) -> dict:
+    """Report an agent's resolved LLM configuration **without constructing the client**.
+
+    Read-only introspection for diagnostics (the ``/models`` admin command): it never
+    instantiates a provider client, so it cannot raise on a missing API key. Returns a
+    dict with ``provider`` / ``model`` / ``effort`` / ``budget``, or ``model=None`` when
+    no model is configured for the agent.
+    """
+    raw_model = _resolve_model(agent_name)
+    if not raw_model:
+        return {"provider": None, "model": None, "effort": None, "budget": None}
+    provider, model_id = parse_model_string(raw_model)
+    return {
+        "provider": provider,
+        "model": model_id,
+        "effort": reasoning.normalize_effort(_resolve_effort_raw(agent_name)),
+        "budget": _resolve_budget(agent_name),
+    }
+
+
 # Bind the config-driven resolver as the registry default, so every agent resolves via
 # LLM_BY_AGENT[name]() without an explicit @llm_usage factory. @llm_usage overrides still
 # win (they populate the registry directly).
