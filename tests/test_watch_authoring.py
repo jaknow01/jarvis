@@ -96,30 +96,52 @@ def test_smoke_ok(monkeypatch):
     async def fake_fetch(source, params):
         return "ok", {"rate": 3.5}
     monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
-    state, result, err = asyncio.run(
+    state, result, err, sample = asyncio.run(
         smoke_test("finance.fx", {}, "def check(data):\n    return data['rate'] < 3.9", StubEvaluator())
     )
     assert state == "ok" and result is True and err is None
+    assert sample == {"rate": 3.5}
 
 
 def test_smoke_unknown_source(monkeypatch):
     async def fake_fetch(source, params):
         return "unknown", None
     monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
-    state, result, err = asyncio.run(smoke_test("finance.fx", {}, "def check(data): return True", StubEvaluator()))
-    assert state == "unknown" and result is None and err
+    state, result, err, sample = asyncio.run(smoke_test("finance.fx", {}, "def check(data): return True", StubEvaluator()))
+    assert state == "unknown" and result is None and err and sample is None
 
 
 # -- author_watch (validate+repair then smoke) --------------------------------
 def test_author_watch_ok(monkeypatch):
     async def fake_fetch(source, params):
         return "ok", {"rate": 4.2}
+
+    async def fake_explain(code, intent, source, params, poll_interval, sample=None):
+        return "Powiadomię Cię, gdy kurs USD/PLN spadnie poniżej 3.90."
     monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
+    monkeypatch.setattr(authoring, "llm_explain", fake_explain)
     res = asyncio.run(author_watch(
         "def check(data):\n    return data['rate'] < 3.9", "fx below 3.9",
-        "finance.fx", {}, StubEvaluator(),
+        "finance.fx", {}, StubEvaluator(), poll_interval=300,
     ))
     assert res.ok and res.smoke_state == "ok" and res.smoke_result is False
+    assert res.explanation and "3.90" in res.explanation
+
+
+def test_author_watch_explanation_is_best_effort(monkeypatch):
+    """A failing explainer must NOT block a correctly-validated watch (advisory, not a gate)."""
+    async def fake_fetch(source, params):
+        return "ok", {"rate": 4.2}
+
+    async def boom_explain(code, intent, source, params, poll_interval, sample=None):
+        raise RuntimeError("model down")
+    monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
+    monkeypatch.setattr(authoring, "llm_explain", boom_explain)
+    res = asyncio.run(author_watch(
+        "def check(data):\n    return data['rate'] < 3.9", "fx below 3.9",
+        "finance.fx", {}, StubEvaluator(), poll_interval=300,
+    ))
+    assert res.ok and res.smoke_result is False and res.explanation is None
 
 
 # -- tools --------------------------------------------------------------------
@@ -136,7 +158,11 @@ def _call(tool, **kw):
 def test_prepare_watch_happy_path(monkeypatch):
     async def fake_fetch(source, params):
         return "ok", {"rate": 3.5}
+
+    async def fake_explain(code, intent, source, params, poll_interval, sample=None):
+        return "Sprawdzam kurs co 300 s; dam znać raz, gdy spadnie poniżej 3.90."
     monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
+    monkeypatch.setattr(authoring, "llm_explain", fake_explain)
     res = _call(
         prepare_watch,
         message="Kurs spadł.", source="finance.fx",
@@ -146,6 +172,7 @@ def test_prepare_watch_happy_path(monkeypatch):
     assert "prepared" in res
     assert res["prepared"]["current_result"] is True
     assert res["prepared"]["check_code"].startswith("def check")
+    assert "3.90" in res["prepared"]["explanation"]
     assert "NOT armed" in res["note"]
 
 

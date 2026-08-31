@@ -38,21 +38,12 @@ VALID_KINDS = ("once", "cron", "watch")
 VALID_STATUSES = ("active", "done", "disabled")
 VALID_CHANNELS = ("messenger", "log")
 
-# Catalog of named data sources a conditional watch may poll (source-id -> human
-# description of its params and notable data fields). This is metadata only — the concrete
-# fetchers live in the agents layer (lib/agents/scheduler_agent/watch_sources.py, which
-# reuses other agents' tools) and assert they cover exactly this catalog. Keeping the
-# catalog here in domain lets it be shared without pulling agents into the domain layer.
-WATCH_SOURCES: dict[str, str] = {
-    "finance.fx": (
-        "Currency exchange rate. params: {foreign_currency: 'USD', base_currency: 'PLN' "
-        "(optional, default PLN)}. Data includes the current numeric rate."
-    ),
-    "finance.quote": (
-        "Stock/index quote. params: {symbol: 'AAPL' or 'PKN.WA' for GPW}. Data includes "
-        "the latest price."
-    ),
-}
+# NOTE: the catalog of watch source-ids is owned by the AGENTS layer
+# (lib/agents/scheduler_agent/watch_sources.py), because a source is just a read-only
+# subagent tool reused as a data feed — the set is derived from the registered tools, not
+# hand-maintained here. The domain only stores the chosen source string on the watch job
+# (build_watch does not validate it against a catalog); validation happens in the watch
+# tools against the live registry.
 
 
 # -- time helpers -------------------------------------------------------------

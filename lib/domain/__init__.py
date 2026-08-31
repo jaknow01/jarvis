@@ -33,7 +33,6 @@ from lib.domain.scheduler import (
     VALID_KINDS,
     VALID_STATUSES,
     VALID_CHANNELS,
-    WATCH_SOURCES,
 )
 
 __all__ = [
@@ -59,5 +58,4 @@ __all__ = [
     "VALID_KINDS",
     "VALID_STATUSES",
     "VALID_CHANNELS",
-    "WATCH_SOURCES",
 ]

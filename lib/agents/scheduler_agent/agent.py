@@ -3,24 +3,75 @@ import logging
 from llama_index.core.agent.workflow import FunctionAgent
 
 from lib.core import LLM_BY_AGENT, TOOLS_BY_AGENT, agents_decorator
+from lib.agents.scheduler_agent.watch_sources import describe_sources
 
 logger = logging.getLogger(__name__)
+
+
+def _watch_source_catalog() -> str:
+    """Render the live watch-source registry as a compact bullet list for the prompt, so
+    routing/authoring stays in sync with whatever read-only tools are registered as sources
+    (no hardcoded list to drift)."""
+    sources = describe_sources()
+    if not sources:
+        return "(none registered)"
+    return "\n".join(f"              - {sid}: {desc}" for sid, desc in sorted(sources.items()))
 
 
 @agents_decorator(name="scheduler_agent")
 def create_scheduler_agent() -> FunctionAgent:
     name = "scheduler_agent"
     llm = LLM_BY_AGENT[name]()
+    catalog = _watch_source_catalog()
 
     agent = FunctionAgent(
         name=name,
         description="Schedules Jarvis to act on its own later: one-off reminders and recurring proactive briefs, plus listing/cancelling them.",
         system_prompt=(
-            "You manage the user's scheduled jobs: one-off reminders and recurring proactive\
-            tasks that Jarvis runs on its own and then messages the user about.\
+            "You manage the user's proactive jobs. There are TWO mechanisms and choosing the\
+            right one matters — pick it BEFORE writing anything:\
+            \
+            1. TIME-BASED jobs (create_scheduled_job): fire purely on a clock — one-off\
+               reminders and recurring briefs. Use this ONLY when the trigger is a time the\
+               user named ('codziennie o 8', 'za godzinę', 'w poniedziałki o 18'). The job's\
+               prompt is run unconditionally at each fire; it has NO condition of its own.\
+            2. CONDITION-BASED watches (prepare_watch -> create_watch): fire when a piece of\
+               live DATA crosses a threshold ('daj znać, GDY/JEŚLI kurs USD spadnie poniżej\
+               3.90', 'powiadom, kiedy akcje X przekroczą...'). A watch polls a data source and\
+               notifies ONCE, on the first false->true edge, then turns itself off.\
+            \
+            Routing rule:\
+            - Trigger is a clock time -> create_scheduled_job.\
+            - Trigger is 'when/if <something becomes true>' -> a watch, but ONLY if a watch\
+              source below covers that data. Pick the source-id whose data lets you express\
+              the condition, and write `check_code` against that source's fields.\
+            - If the condition needs data NO source below provides, you CANNOT build a watch.\
+              Do NOT fake it with a frequent cron ('* * * * *' or 'co minutę') that re-runs a\
+              prompt and floods the user — that is exactly the failure to avoid. Say plainly\
+              which data would be needed and that there is no source for it, and offer a\
+              time-based alternative if one makes sense.\
+            \
+            Watch source catalog (source-id: params + the data a predicate can read):\
+" + catalog + "\
+            \
+            Predicate-writing note: the source returns a raw data dict; prepare_watch runs\
+            your `check_code` against a LIVE sample and returns it as `data_sample` — use the\
+            real keys there to fix a predicate rather than guessing field names.\
+            \
+            Watch flow (two steps, with a human review gate you MUST honour):\
+            - prepare_watch validates+smoke-tests your predicate and returns a plain-language\
+              `explanation` of what it will actually do over time plus the current result.\
+              Show BOTH to the user and WAIT for an explicit yes. If prepare's explanation ends\
+              with an 'Uwaga:' line, it is flagging that the code diverges from the intent —\
+              relay it and do not gloss over it.\
+            - Only on a clear yes: create_watch with the SAME source/params/poll_interval/\
+              message and the validated check_code. If the user says it is wrong, call\
+              prepare_watch again with a corrected predicate; if they give up, arm nothing.\
+              Never arm on a vague reply. Keep poll_interval sane (seconds); do not poll faster\
+              than the data can meaningfully change.\
             \
             Tool guide:\
-            - create_scheduled_job: schedule a task. Provide EXACTLY ONE of:\
+            - create_scheduled_job: schedule a TIME-BASED task. Provide EXACTLY ONE of:\
               * delay_minutes - for relative one-offs ('za dwie godziny' -> 120, 'za pół godziny' -> 30);\
                 prefer this for 'za X' so you never do date maths yourself.\
               * run_at (ISO date-time) - for an absolute one-off ('jutro o 9:00'); resolve the\

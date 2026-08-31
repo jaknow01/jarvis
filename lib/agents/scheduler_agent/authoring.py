@@ -113,6 +113,80 @@ async def llm_repair(code: str, error: str, intent: str) -> str:
     return _extract_code(str(resp.message.content or ""))
 
 
+# The runtime semantics the explainer must convey but cannot read from the code alone.
+_WATCH_RUNTIME_FACTS = (
+    "How the watch runs (fixed by the runtime, NOT visible in the code): the predicate is "
+    "evaluated every `poll_interval` seconds against a freshly fetched data sample; the user "
+    "is notified EXACTLY ONCE, at the first moment the predicate flips from false to true, and "
+    "then the watch turns itself off. It does NOT keep firing while the condition stays true, "
+    "and it does NOT re-arm after firing."
+)
+
+
+def truncate_sample(data, *, max_chars: int = 1200):
+    """A size-bounded preview of fetched source data for grounding the model.
+
+    Returns the data unchanged if its JSON form is small; otherwise a shallow, truncated
+    view (top-level keys with truncated string reprs) so a big feed like fpl.live does not
+    blow up a prompt. Best-effort and never raises."""
+    import json
+
+    try:
+        s = json.dumps(data, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        return str(data)[:max_chars]
+    if len(s) <= max_chars:
+        return data
+    if isinstance(data, dict):
+        out = {}
+        for k, v in data.items():
+            r = str(v)
+            out[k] = r if len(r) <= 120 else r[:120] + "…"
+        return {"_truncated": True, **out}
+    return s[:max_chars] + "…"
+
+
+async def llm_explain(
+    code: str, intent: str, source: str, params: Optional[dict], poll_interval: int,
+    sample=None,
+) -> str:
+    """Ask the coder model to describe, in plain user-facing Polish, what the VALIDATED
+    predicate actually does over time — read from the code, not from the intent.
+
+    This is the human-review gate: the description lets the user catch a predicate whose
+    *logic* diverges from what they asked for (a semantic bug the compile-only validation
+    cannot see) before the watch is armed. The coder is given the original intent precisely
+    so it can flag a divergence between the code's behaviour and that intent.
+    """
+    llm = LLM_BY_AGENT[CODER_AGENT]()
+    system = (
+        "You explain a watch predicate to a non-technical user IN POLISH, so they can confirm "
+        "it does what they meant before it is armed. Describe what the code ACTUALLY does when "
+        "run against live data — the trigger condition, any thresholds/gates/time-windows it "
+        "reads, and how often it is checked. Base this on the CODE, which is the source of "
+        "truth; use the stated intent only to judge whether the code matches it. If the code's "
+        "behaviour diverges from the intent (e.g. it would fire far more often than the user "
+        "wants, or ignores a limit they asked for), say so plainly in a final sentence starting "
+        "with 'Uwaga:'. Be concrete and short (2-4 sentences). No code, no markdown.\n\n"
+        + _WATCH_RUNTIME_FACTS
+    )
+    sample_block = (
+        f"\nLive sample of the data the predicate runs against (real keys/values now):\n{sample}\n"
+        if sample is not None else ""
+    )
+    user = (
+        f"User's intent (what they asked for):\n{intent or '(not provided)'}\n\n"
+        f"Data source: {source}   params: {params or {}}   poll_interval: {poll_interval}s\n"
+        f"{sample_block}\n"
+        f"Validated predicate:\n{code}\n\n"
+        "Explain to the user what this watch will do, and flag any divergence from the intent."
+    )
+    resp = await llm.achat(
+        [ChatMessage(role="system", content=system), ChatMessage(role="user", content=user)]
+    )
+    return str(resp.message.content or "").strip()
+
+
 @dataclass
 class AuthoringResult:
     ok: bool
@@ -122,6 +196,8 @@ class AuthoringResult:
     smoke_state: Optional[str] = None    # "ok" | "unknown" (source read) — set after validation
     smoke_result: Optional[bool] = None  # predicate result on the sample (when smoke_state == ok)
     smoke_error: Optional[str] = None
+    explanation: Optional[str] = None    # plain-language description of the predicate (review gate)
+    sample: Optional[object] = None      # size-bounded preview of the fetched source data
 
 
 async def validate_and_repair(
@@ -152,14 +228,17 @@ async def validate_and_repair(
     return AuthoringResult(ok=ok, code=code, error=(None if ok else err), attempts=attempts)
 
 
-async def smoke_test(source: str, params: Optional[dict], code: str, evaluator) -> tuple[str, Optional[bool], Optional[str]]:
+async def smoke_test(
+    source: str, params: Optional[dict], code: str, evaluator
+) -> tuple[str, Optional[bool], Optional[str], Optional[object]]:
     """Fetch the source once and evaluate ``code`` against it. Returns
-    ``(state, result_or_None, error_or_None)`` where state is "ok" or "unknown"."""
+    ``(state, result_or_None, error_or_None, sample_or_None)`` where state is "ok"/"unknown".
+    The sample is a size-bounded preview of the fetched data (None when unavailable)."""
     state, data = await fetch_source(source, params)
     if state != "ok":
-        return "unknown", None, "source data is currently unavailable"
+        return "unknown", None, "source data is currently unavailable", None
     result, err = await evaluator.evaluate_checked(code, data or {})
-    return "ok", result, err
+    return "ok", result, err, truncate_sample(data or {})
 
 
 async def author_watch(
@@ -169,16 +248,30 @@ async def author_watch(
     params: Optional[dict],
     evaluator,
     *,
+    poll_interval: int = 0,
     repair: Callable[[str, str, str], Awaitable[str]] = llm_repair,
     attempts_cap: Optional[int] = None,
 ) -> AuthoringResult:
-    """Full authoring pass: validate+repair, then (if valid) smoke-test the sample."""
+    """Full authoring pass: validate+repair, smoke-test the sample, then (best-effort)
+    author a plain-language explanation of the predicate for the user-review gate."""
     res = await validate_and_repair(
         check_code, intent, evaluator, repair=repair, attempts_cap=attempts_cap
     )
     if not res.ok:
         return res
-    res.smoke_state, res.smoke_result, res.smoke_error = await smoke_test(
+    res.smoke_state, res.smoke_result, res.smoke_error, res.sample = await smoke_test(
         source, params, res.code, evaluator
     )
+    # Review gate: a plain-language description of the validated predicate for the user to
+    # confirm. Advisory only (unlike validation, which fails closed) — a failure here must
+    # never block a correctly-validated watch, so it degrades to no explanation. Called by
+    # module name so tests can monkeypatch it without a live model. The live data sample is
+    # passed so the explanation (and any 'Uwaga:' divergence flag) is grounded in real keys.
+    try:
+        res.explanation = await llm_explain(
+            res.code, intent, source, params, poll_interval, sample=res.sample
+        )
+    except Exception as e:  # noqa: BLE001 - explanation is best-effort, never fatal
+        logger.warning("watch predicate explanation failed: %s", e)
+        res.explanation = None
     return res

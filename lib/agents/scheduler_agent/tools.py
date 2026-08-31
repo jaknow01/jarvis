@@ -19,10 +19,13 @@ from lib.domain import (
     build_job,
     build_watch,
     public_view as scheduler_public_view,
-    WATCH_SOURCES,
 )
 from lib.agents.scheduler_agent.authoring import author_watch
 from lib.agents.scheduler_agent.watch_sandbox_client import resolve_evaluator
+from lib.agents.scheduler_agent.watch_sources import (
+    is_known as _source_is_known,
+    describe_sources as _describe_sources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,11 +141,11 @@ async def prepare_watch(
         The exact text to deliver when the condition first becomes true (user's language).
 
     source: str
-        Which data source to poll. One of the known source ids:
-          - finance.fx: exchange rate. params: {"foreign_currency": "USD",
-            "base_currency": "PLN" (optional)}. Data has the numeric "rate".
-          - finance.quote: stock/index quote. params: {"symbol": "AAPL" or "PKN.WA"}.
-            Data has the latest price.
+        Which data source to poll — one of the registered watch source ids. These mirror
+        the assistant's read-only data tools (FX, stock quotes, weather, live FPL/football,
+        news, routes, ...); the exact set and each source's params/data are listed in your
+        system prompt's watch-source catalog. If you pass an unknown id, the tool returns the
+        catalog in `known_sources` — pick from it.
 
     check_code: str
         The condition as `def check(data): return <bool>` in Starlark (a Python dialect:
@@ -160,20 +163,26 @@ async def prepare_watch(
         Parameters for the chosen source.
 
     Output:
-        On success: {"prepared": {..., "check_code": <validated>, "current_result": <bool>}}
-        — show `current_result` to the user and ask them to confirm before arming. If the
+        On success: {"prepared": {..., "check_code": <validated>, "current_result": <bool>,
+        "explanation": <plain-language description of what the watch will do over time>}}
+        — show BOTH `explanation` and `current_result` to the user and get an explicit yes
+        before arming (see the returned `note`). The explanation is written from the code and
+        may end with an "Uwaga:" line flagging a mismatch with the intent — surface it. If the
         code could not be validated or the data is unavailable, an {"Error": ...} object;
         relay it (ask the user to clarify the condition). NEVER treat prepare as armed.
     """
-    if source not in WATCH_SOURCES:
-        return {"Error": f"unknown source '{source}'", "known_sources": sorted(WATCH_SOURCES)}
+    if not _source_is_known(source):
+        return {"Error": f"unknown source '{source}'", "known_sources": _describe_sources()}
     try:
         if int(poll_interval) <= 0:
             return {"Error": "poll_interval must be a positive number of seconds"}
     except (TypeError, ValueError):
         return {"Error": "poll_interval must be an integer number of seconds"}
 
-    res = await author_watch(check_code, intent, source, params or {}, resolve_evaluator())
+    res = await author_watch(
+        check_code, intent, source, params or {}, resolve_evaluator(),
+        poll_interval=int(poll_interval),
+    )
     if not res.ok:
         return {
             "Error": "could not validate the condition code",
@@ -195,12 +204,17 @@ async def prepare_watch(
             "poll_interval": poll_interval,
             "check_code": res.code,          # validated (possibly repaired) code
             "current_result": res.smoke_result,
+            "explanation": res.explanation,  # plain-language behaviour of the predicate
+            "data_sample": res.sample,       # real keys/values the predicate ran against
             "repairs_used": res.attempts,
         },
         "note": (
-            "NOT armed. Tell the user what the condition currently returns (current_result) "
-            "and ask them to confirm. Only after they confirm, call create_watch with this "
-            "exact check_code."
+            "NOT armed — this is a review gate. Show the user the `explanation` (what the "
+            "watch will actually do over time) AND `current_result` (what it returns right "
+            "now), then WAIT for an explicit yes. Only on a clear yes call create_watch with "
+            "this exact check_code. If the user says it is wrong / wants a change, DO NOT arm: "
+            "call prepare_watch again with corrected check_code+intent. If the user gives up "
+            "('zostaw', 'nie trzeba'), stop and arm nothing. Never arm on an ambiguous reply."
         ),
     }
 
@@ -248,10 +262,10 @@ async def create_watch(
         raw delivery target or the predicate. On invalid input or code that fails
         re-validation, an {"Error": ...} object; relay it.
     """
-    if source not in WATCH_SOURCES:
+    if not _source_is_known(source):
         return {
             "Error": f"unknown source '{source}'",
-            "known_sources": sorted(WATCH_SOURCES),
+            "known_sources": _describe_sources(),
         }
     # Safety net: never arm a watch whose predicate does not validate.
     ok, verr = await resolve_evaluator().validate(check_code)

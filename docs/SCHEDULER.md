@@ -112,10 +112,19 @@ polling:     pętla schedulera, co tick dla due-watcha:
 - **Edge-trigger:** wysyłka tylko na `false→true` (porównanie z `last_result`), więc przy
   pollingu co minutę **nie zalewa** wiadomościami. Błąd dostawy **nie konsumuje krawędzi** —
   `last_result` zostaje, powiadomienie ponawia się przy następnym pollu.
-- **Źródła** (`lib/runtime/watch_sources.py`): cienki rejestr `source-id → fetch subagenta`
-  (zwraca `dict`). v1: `finance.fx`, `finance.quote`. Katalog id→opis żyje w
-  `lib/domain/scheduler.py` (`WATCH_SOURCES`), więc `create_watch` waliduje `source` bez
-  importu runtime. Fetch jest **deterministyczny** (bez LLM); `ctx` toolów jest dekoracyjny.
+- **Źródła** (`lib/agents/scheduler_agent/watch_sources.py`): rejestr `source-id → fetch
+  subagenta` (zwraca `dict`). Źródło to po prostu **read-only tool asystenta** użyty jako
+  odpytywalne dane — katalog ma być **tak szeroki jak narzędzia do zewn. API**, więc dodanie
+  źródła to **jeden wiersz** w `_WATCHABLE` (`(source-id, agent, tool, hint)`), a nie osobny
+  fetcher. Aktualnie: `finance.fx`, `finance.quote`, `weather.current`, `weather.forecast`,
+  `fpl.live` (mecze + żywe punkty zawodników), `fpl.player`, `fpl.fixtures`,
+  `fpl.league_standings`, `news.search`, `maps.route`. Narzędzia **mutujące** (IoT on/off,
+  zapisy pamięci, sam scheduler) są celowo **poza** katalogiem — watch tylko odpytuje.
+  Katalog id→opis jest **własnością warstwy agents** (dynamiczny, z zarejestrowanych toolów) i
+  jest jedynym źródłem prawdy dla walidacji `source` (`is_known`/`describe_sources`) oraz dla
+  listy wstrzykiwanej w prompt `scheduler_agent`. `build_watch` (domain) już nie waliduje
+  `source` względem katalogu — trzyma tylko wybrany string. Fetch jest **deterministyczny**
+  (bez LLM); `ctx` toolów jest dekoracyjny.
 - **Ewaluator** (`lib/runtime/watch_evaluator.py`): kontrakt `evaluate(code, data) -> bool`.
   W tym change to **in-process STUB** (wykonuje predykat jako Python; **NIE jest granicą
   bezpieczeństwa**, tylko dev/test). Produkcyjny, izolowany ewaluator (Starlark w kontenerze)
@@ -136,13 +145,32 @@ prepare_watch(message, source, check_code, poll_interval, intent, params)
    3. repair      przy błędzie: LLM_BY_AGENT["watch_coder"] dostaje kod+błąd+intencję+reguły
                   → iteracja z capem (WATCH_AUTHORING_MAX_REPAIRS, dflt 3) → fail-closed
    4. smoke-test  pobierz próbkę (rejestr źródeł) → evaluate(code, sample) → pokaż wynik
-   → zwraca {prepared: {check_code(zwalidowany), current_result}}  — NIE uzbraja
+   5. explain     LLM_BY_AGENT["watch_coder"] dostaje ZWALIDOWANY kod + intencję i pisze po
+                  ludzku (PL), CO watch realnie zrobi w czasie (kiedy odpali, jak często,
+                  jakie progi/bramki są w kodzie); jeśli kod rozjeżdża się z intencją, kończy
+                  linią „Uwaga: …". Best-effort — błąd tu NIE blokuje poprawnego watcha.
+   → zwraca {prepared: {check_code(zwalidowany), current_result, explanation, data_sample}}
+     — NIE uzbraja. `data_sample` to przycięta próbka realnych danych źródła (prawdziwe
+     klucze), którą LLM widzi, by poprawić predykat zamiast zgadywać nazwy pól; ta sama
+     próbka trafia do kroku `explain`, żeby opis był oparty o rzeczywistość.
 
-   ↓ (LLM pokazuje userowi current_result i prosi o potwierdzenie)
+   ↓ (bramka nadzoru: LLM pokazuje userowi explanation + current_result i CZEKA na wyraźne
+      „tak"; „popraw" → nowy prepare_watch; rezygnacja → nic nie uzbraja)
 
 create_watch(message, source, check_code, poll_interval, params)
    re-walidacja (safety net) → build_watch → store   — DOPIERO TU uzbrojenie
 ```
+
+**Krok `explain` to bramka nadzoru** — walidacja jest wyłącznie składniowa, więc semantycznie
+błędny predykat (np. „powiadom, gdy zawodnik zdobędzie punkt" zbudowany tak, że odpala co
+minutę przez cały mecz) przeszedłby bez niej. Coder po raz pierwszy dostaje kod *i* intencję,
+i tłumaczy zachowanie na ludzki język, żeby user wychwycił rozjazd zanim watch zostanie uzbrojony.
+
+**Routing cron vs watch** (system prompt `scheduler_agent`): wyzwalacz czasowy → `create_scheduled_job`;
+wyzwalacz „gdy/jeśli <stan stanie się prawdą>" → watch, ale **tylko** gdy istnieje źródło dla
+danej domeny (v1: `finance.fx`, `finance.quote`). Dla domeny bez źródła (mecz, FPL, pogoda)
+agent **nie fabrykuje crona co minutę** zalewającego usera — mówi wprost, że warunkowe watche
+pokrywają na razie tylko FX i kursy akcji.
 
 - **Fail-closed:** jeśli kod nie przejdzie walidacji w limicie prób — **nie uzbrajamy**,
   prosimy usera o doprecyzowanie. Tak samo gdy sandbox/źródło niedostępne.
