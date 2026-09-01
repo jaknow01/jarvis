@@ -66,6 +66,26 @@ SCHEMA_STATEMENTS = [
         fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    # Cached mini-league squad snapshots (one JSONB blob per league+gameweek). Scanning a
+    # league's ownership means fetching every manager's picks — dozens of API calls — which
+    # is the fpl_agent's biggest latency cost and is asked about repeatedly ("who else has
+    # X", "how many own Y"). Picks for a gameweek are frozen once its deadline passes, so a
+    # snapshot is safe to reuse; a fetch timestamp drives TTL-based refresh. `complete` marks
+    # whether the whole league was captured (vs capped at `max_managers`) so a later, larger
+    # scan knows whether the cache still suffices. National/global leagues are never warmed in
+    # the background (see lib/runtime/fpl_cache_runner.py); they only land here if queried.
+    """
+    CREATE TABLE IF NOT EXISTS fpl_league_squads (
+        league_id    BIGINT NOT NULL,
+        gameweek     INTEGER NOT NULL,
+        league_name  TEXT,
+        max_managers INTEGER NOT NULL,
+        complete     BOOLEAN NOT NULL DEFAULT FALSE,
+        data         JSONB NOT NULL,
+        fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (league_id, gameweek)
+    )
+    """,
     # Scheduled jobs written by the scheduler_agent: a natural-language prompt for
     # Jarvis, when to run it (one-shot run_at or a cron_expr), and where to deliver
     # the reply (channel + target). The runner fires due jobs out of band. `until` is
