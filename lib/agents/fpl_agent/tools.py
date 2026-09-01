@@ -6,12 +6,10 @@ Numeric team/player/gameweek ids are resolved to human-readable names server-sid
 the bootstrap-static reference data in fpl_api), so the model — and the user — only ever
 deal with names, not raw ids."""
 
-import asyncio
 import logging
 import os
 from typing import Optional
 
-import requests
 from llama_index.core.workflow import Context
 
 from lib.core import tool_ownership, function_tool, app_context
@@ -24,6 +22,8 @@ from lib.agents.fpl_agent.fpl_api import (
     describe_player,
     summarize_fixture_events,
     find_players_by_name,
+    load_league_squads,
+    _LEAGUE_SCAN_DEFAULT,
 )
 
 logger = logging.getLogger(__name__)
@@ -631,49 +631,6 @@ async def get_fpl_live(ctx: Context,
     return result
 
 
-# Cap on how many managers a league scan will fetch squads for, and how many of those
-# picks requests run at once (politeness to the unofficial API). A personal mini-league
-# fits well within the cap; huge public leagues are scanned from the top by rank.
-_LEAGUE_SCAN_DEFAULT = 50
-_LEAGUE_SCAN_CONCURRENCY = 8
-
-
-async def _fetch_league_squads(league_id: int, gw: int, max_managers: int):
-    """Fetch a league's managers (deduped by entry id, ordered by rank) and each one's
-    squad for gameweek `gw`. Returns (league_name, [(manager_row, picks|None)]). Picks
-    are None for a manager whose squad could not be fetched. Bounded concurrency."""
-    managers: dict = {}  # entry id -> row (dedupe: standings pages can overlap on ties)
-    league_name = None
-    page = 1
-    while len(managers) < max_managers:
-        data = await fetch_fpl(f"leagues-classic/{league_id}/standings/?page_standings={page}")
-        league_name = league_name or (data.get("league", {}) or {}).get("name")
-        standings = data.get("standings", {}) or {}
-        results = standings.get("results", []) or []
-        if not results:
-            break
-        for row in results:
-            managers.setdefault(row.get("entry"), row)
-        if not standings.get("has_next"):
-            break
-        page += 1
-
-    ordered = sorted(managers.values(), key=lambda r: r.get("rank") or 10**9)[:max_managers]
-
-    sem = asyncio.Semaphore(_LEAGUE_SCAN_CONCURRENCY)
-
-    async def _picks_for(row):
-        async with sem:
-            try:
-                pd = await fetch_fpl(f"entry/{row.get('entry')}/event/{gw}/picks/")
-                return row, pd.get("picks", [])
-            except Exception:
-                return row, None
-
-    pairs = await asyncio.gather(*(_picks_for(r) for r in ordered))
-    return league_name, pairs
-
-
 @tool_ownership("fpl_agent")
 @function_tool
 async def who_owns_player_in_league(ctx: Context,
@@ -747,7 +704,7 @@ async def who_owns_player_in_league(ctx: Context,
     target = matches[0]
     target_id = target["id"]
     try:
-        league_name, pairs = await _fetch_league_squads(lid, gw, max(1, max_managers))
+        league_name, pairs = await load_league_squads(lid, gw, max(1, max_managers))
     except Exception as e:
         logger.error("Error while fetching league squads", exc_info=True)
         return {"Message": "Error while fetching the league squads", "Error": str(e)}
@@ -833,7 +790,7 @@ async def get_league_ownership(ctx: Context,
         if gw is None:
             return {"Error": "Could not determine a gameweek (no events in the FPL calendar)."}
         teams_by_id, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
-        league_name, pairs = await _fetch_league_squads(lid, gw, max(1, max_managers))
+        league_name, pairs = await load_league_squads(lid, gw, max(1, max_managers))
     except Exception as e:
         logger.error("Error while aggregating league ownership", exc_info=True)
         return {"Message": "Error while aggregating league ownership", "Error": str(e)}

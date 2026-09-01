@@ -35,6 +35,8 @@ from lib.runtime import (
     verify_signature,
     run_scheduler_loop,
     scheduler_enabled,
+    run_fpl_cache_loop,
+    fpl_cache_refresh_enabled,
     setup_tracing,
 )
 
@@ -70,15 +72,25 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Scheduler disabled via SCHEDULER_ENABLED")
 
+    # Warm the owner's FPL mini-league squad cache periodically so league-ownership
+    # questions are served from Postgres instead of a slow live API scan.
+    fpl_cache_task = None
+    if fpl_cache_refresh_enabled():
+        fpl_cache_task = asyncio.create_task(run_fpl_cache_loop())
+        logger.info("FPL cache refresh loop task started")
+    else:
+        logger.info("FPL cache refresh disabled via FPL_CACHE_REFRESH_ENABLED")
+
     logger.info("Messenger webhook ready")
     yield
 
-    if scheduler_task:
-        scheduler_task.cancel()
-        try:
-            await scheduler_task
-        except asyncio.CancelledError:
-            pass
+    for task in (scheduler_task, fpl_cache_task):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)

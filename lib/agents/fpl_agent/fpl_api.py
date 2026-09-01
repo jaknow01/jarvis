@@ -108,6 +108,146 @@ async def fetch_fpl_bootstrap(force: bool = False) -> dict:
     return data
 
 
+# ------- Mini-league squad scan + Postgres cache -------
+#
+# Aggregating who-owns-what across a mini-league means fetching every manager's picks for
+# a gameweek — dozens of API calls — and it is the fpl_agent's biggest latency cost, asked
+# about repeatedly. Picks for a gameweek are frozen once its deadline passes, so a whole-
+# league scan is snapshotted per (league, gameweek) on two levels, exactly like the
+# bootstrap: an in-process L1 memo with a short TTL and, when a database is configured, a
+# persistent Postgres cache shared across processes/restarts. On a miss at both levels we
+# scan the API and write through to both caches.
+
+# Cap on how many managers a league scan will fetch squads for, and how many of those picks
+# requests run at once (politeness to the unofficial API). A personal mini-league fits well
+# within the cap; huge public leagues are scanned from the top by rank.
+_LEAGUE_SCAN_DEFAULT = 50
+_LEAGUE_SCAN_CONCURRENCY = 8
+
+_FPL_LEAGUE_CACHE: dict = {}  # (league_id, gw) -> {pairs, league_name, complete, max, fetched_at}
+_FPL_LEAGUE_L1_TTL = 300  # seconds; in-process memo
+
+
+def _fpl_league_db_ttl() -> int:
+    """Max age (seconds) the Postgres league-squad cache may reach before it is refreshed
+    from the API. Configurable via FPL_LEAGUE_CACHE_TTL_SECONDS; defaults to 3 hours."""
+    raw = os.getenv("FPL_LEAGUE_CACHE_TTL_SECONDS")
+    try:
+        return int(raw) if raw and raw.strip() else 10800
+    except ValueError:
+        return 10800
+
+
+async def _scan_league_squads(league_id: int, gw: int, max_managers: int):
+    """Fetch a league's managers (deduped by entry id, ordered by rank) and each one's squad
+    for gameweek ``gw`` straight from the API. Returns ``(league_name, pairs, complete)``:
+    ``pairs`` is a list of ``(manager_row, picks|None)`` (None when a squad could not be
+    fetched), and ``complete`` is True when the whole league was captured rather than being
+    cut off at ``max_managers``. Bounded concurrency."""
+    managers: dict = {}  # entry id -> row (dedupe: standings pages can overlap on ties)
+    league_name = None
+    page = 1
+    exhausted = False
+    while len(managers) < max_managers:
+        data = await fetch_fpl(f"leagues-classic/{league_id}/standings/?page_standings={page}")
+        league_name = league_name or (data.get("league", {}) or {}).get("name")
+        standings = data.get("standings", {}) or {}
+        results = standings.get("results", []) or []
+        if not results:
+            exhausted = True
+            break
+        for row in results:
+            managers.setdefault(row.get("entry"), row)
+        if not standings.get("has_next"):
+            exhausted = True
+            break
+        page += 1
+
+    # complete = we saw the entire league (ran out of pages) and it fit within the cap.
+    complete = exhausted and len(managers) <= max_managers
+    ordered = sorted(managers.values(), key=lambda r: r.get("rank") or 10**9)[:max_managers]
+
+    sem = asyncio.Semaphore(_LEAGUE_SCAN_CONCURRENCY)
+
+    async def _picks_for(row):
+        async with sem:
+            try:
+                pd = await fetch_fpl(f"entry/{row.get('entry')}/event/{gw}/picks/")
+                return row, pd.get("picks", [])
+            except Exception:
+                return row, None
+
+    pairs = list(await asyncio.gather(*(_picks_for(r) for r in ordered)))
+    return league_name, pairs, complete
+
+
+def _load_league_squads_from_db(league_id: int, gw: int, max_age: int, min_managers: int):
+    """Read a fresh-enough league-squad snapshot from Postgres, or None. Best-effort: any
+    error (no DB configured, connection/schema issue) falls back to the API."""
+    try:
+        from app.db import connection as dbconn
+        if not dbconn.is_configured():
+            return None
+        from app.db.fpl_league_repo import get_cached_league_squads
+        return get_cached_league_squads(league_id, gw, max_age, min_managers)
+    except Exception as e:  # pragma: no cover - defensive; DB is optional
+        logger.warning("FPL league squads DB cache read failed (%s); using API", e)
+        return None
+
+
+def _save_league_squads_to_db(league_id, gw, league_name, max_managers, complete, pairs):
+    """Write a fresh league-squad snapshot to Postgres. Best-effort (optional DB)."""
+    try:
+        from app.db import connection as dbconn
+        if not dbconn.is_configured():
+            return
+        from app.db.fpl_league_repo import save_league_squads
+        # Tuples aren't JSON; store each (row, picks) pair as a two-item list.
+        serializable = [[row, picks] for row, picks in pairs]
+        save_league_squads(league_id, gw, league_name, max_managers, complete, serializable)
+    except Exception as e:  # pragma: no cover - defensive; DB is optional
+        logger.warning("FPL league squads DB cache write failed (%s)", e)
+
+
+async def load_league_squads(
+    league_id: int, gw: int, max_managers: int = _LEAGUE_SCAN_DEFAULT, force: bool = False
+) -> tuple[Optional[str], list]:
+    """Return ``(league_name, pairs)`` for a league+gameweek squad scan, served from cache
+    when possible. ``pairs`` is a list of ``(manager_row, picks|None)``.
+
+    Resolution order: in-process L1 memo -> Postgres cache (if configured, fresh and covering
+    at least ``max_managers`` managers) -> live API scan (written through to both caches).
+    ``force=True`` bypasses both caches and rescans (used by the background refresher)."""
+    now = time.time()
+    key = (int(league_id), int(gw))
+    memo = _FPL_LEAGUE_CACHE.get(key)
+    if (not force and memo is not None
+            and now - memo["fetched_at"] < _FPL_LEAGUE_L1_TTL
+            and (memo["complete"] or memo["max"] >= max_managers)):
+        return memo["league_name"], memo["pairs"]
+
+    if not force:
+        cached = await asyncio.to_thread(
+            _load_league_squads_from_db, key[0], key[1], _fpl_league_db_ttl(), max_managers
+        )
+        if cached is not None:
+            _FPL_LEAGUE_CACHE[key] = {
+                "pairs": cached["pairs"], "league_name": cached["league_name"],
+                "complete": cached["complete"], "max": cached["max_managers"], "fetched_at": now,
+            }
+            return cached["league_name"], cached["pairs"]
+
+    league_name, pairs, complete = await _scan_league_squads(key[0], key[1], max_managers)
+    _FPL_LEAGUE_CACHE[key] = {
+        "pairs": pairs, "league_name": league_name,
+        "complete": complete, "max": max_managers, "fetched_at": now,
+    }
+    await asyncio.to_thread(
+        _save_league_squads_to_db, key[0], key[1], league_name, max_managers, complete, pairs
+    )
+    return league_name, pairs
+
+
 def index_bootstrap(bootstrap: dict) -> tuple[dict, dict, dict]:
     """Return (teams_by_id, elements_by_id, positions_by_id) lookups keyed by the
     numeric ids used throughout the FPL API."""

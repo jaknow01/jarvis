@@ -340,7 +340,17 @@ grow.
   `DATABASE_URL` is set (else the JSON file). The `fpl_agent` also caches its reference
   data (players/teams) in Postgres via `app/db/fpl_repo.py` (table `fpl_reference`, a
   JSONB snapshot of `bootstrap-static` with a `FPL_CACHE_TTL_SECONDS` freshness window),
-  falling back to an in-process memo + the live API when no DB is configured.
+  falling back to an in-process memo + the live API when no DB is configured. Its
+  **mini-league squad scan** — the biggest latency cost (a picks fetch per manager,
+  behind the "who else has player X / how many own a player from team Y" questions) — is
+  cached the same way: `app/db/fpl_league_repo.py` (table `fpl_league_squads`, one JSONB
+  snapshot per `(league_id, gameweek)`, `FPL_LEAGUE_CACHE_TTL_SECONDS` default 3h), read
+  through by `load_league_squads()` in `fpl_agent/fpl_api.py` (L1 memo → Postgres → live
+  scan, write-through; a query on a stale/missing snapshot rescans on demand). A background
+  loop (`lib/runtime/fpl_cache_runner.py`, started in the webhook `lifespan`;
+  `FPL_CACHE_REFRESH_ENABLED` / `FPL_CACHE_REFRESH_INTERVAL_SECONDS`) warms the owner's
+  configured `FPL_LEAGUE_ID` every few hours; national/global leagues are never warmed in
+  the background (only cached lazily if explicitly queried).
   The `scheduler_agent` likewise persists jobs to Postgres (table `scheduled_jobs`, via
   `app/db/scheduler_repo.py`) when `DATABASE_URL` is set, else to
   `data/scheduler_data/jobs.json` — same JSON/Postgres backend-selection pattern as memory.
