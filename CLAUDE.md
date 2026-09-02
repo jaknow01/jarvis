@@ -103,8 +103,14 @@ entry point (REPL and Messenger both call it):
    `lib.runtime.history_window.build_chat_history`: the last N user/assistant pairs
    verbatim (`HISTORY_WINDOW_PAIRS`, default 3), prefixed by an incrementally-maintained
    running summary (system message, Polish, ≤ `HISTORY_SUMMARY_MAX_SENTENCES` sentences,
-   default 5) of everything older. Each turn folds only the just-evicted exchange into
-   the stored summary with one small LLM call (model `history_compressor`). Set
+   default 5) of everything older. `build_chat_history` is **read-only and LLM-free** — it
+   assembles `[summary?] + everything since summary_upto` and returns immediately, so the
+   turn never waits on compression. The fold (one small LLM call, model `history_compressor`,
+   folding only the just-evicted exchange) runs **off the critical path**: the engine kicks it
+   off as a fire-and-forget background task (`schedule_summary_fold`) in step 6, after the
+   reply is recorded. Its output only matters for the *next* turn; if a fold hasn't finished
+   by then, that turn shows the not-yet-folded exchanges verbatim (bounded to window + one
+   turn's lag) and the next fold catches up. Folds are coalesced per conversation. Set
    `HISTORY_COMPRESSION_ENABLED` falsy to fall back to replaying the full history.
 3. It builds a fresh coordinator (`create_coordinator_agent()`) and runs it:
    `coordinator.run(user_msg=text, chat_history=history, ctx=Context(coordinator))`.
@@ -124,7 +130,10 @@ entry point (REPL and Messenger both call it):
    in Polish.
 5. It persists the turn (user message + assistant reply) via `conversations.record_turn`,
    stamping the assistant row with the MLflow trace id (`last_trace_id()`, empty when
-   tracing is off), and returns the reply.
+   tracing is off).
+6. It schedules the rolling-summary fold as a background task (`schedule_summary_fold`, see
+   step 2) — off the critical path, so the reply above was never blocked on the compressor
+   LLM call — and returns the reply.
 
 Conversation continuity is **ours** (Postgres/JSON), not the OpenAI Responses API's
 `previous_response_id` — that mechanism, along with `RunConfig`/`Runner` and the run

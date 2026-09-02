@@ -12,8 +12,10 @@ from lib.runtime.history_window import (
     WindowConfig,
     _format_exchange,
     build_chat_history,
+    fold_summary,
     load_config,
     plan_window,
+    schedule_summary_fold,
 )
 
 
@@ -83,86 +85,123 @@ def _pairs(n):
     return out
 
 
-def _run(store, calls, *, enabled=True, window_pairs=3, max_sentences=5):
+def _build(store, *, enabled=True, window_pairs=3, max_sentences=5):
+    """Assemble the (read-only, LLM-free) chat history for one turn."""
+    cfg = WindowConfig(enabled=enabled, window_pairs=window_pairs, max_sentences=max_sentences)
+    return asyncio.run(build_chat_history("repl", store=store, config=cfg))
+
+
+def _fold(store, calls, *, enabled=True, window_pairs=3, max_sentences=5):
+    """Run the background fold once against ``store`` with a fake compressor."""
     async def fake_compress(old, evicted, max_s):
         calls.append((old, [m["content"] for m in evicted], max_s))
         return f"SUM({old}|{'+'.join(m['content'] for m in evicted)})"
 
     cfg = WindowConfig(enabled=enabled, window_pairs=window_pairs, max_sentences=max_sentences)
     return asyncio.run(
-        build_chat_history("repl", store=store, config=cfg, compressor=fake_compress)
+        fold_summary("repl", store=store, config=cfg, compressor=fake_compress)
     )
 
 
-# -------------------------------------------------------------------- assembly tests
-def test_disabled_returns_full_history_verbatim():
+# ---------------------------------------------- assembly (build_chat_history) is LLM-free
+def test_build_disabled_returns_full_history_verbatim():
     store = FakeStore(_pairs(5), summary="ignored", summary_upto=4)
-    calls = []
-    msgs = _run(store, calls, enabled=False)
-    assert calls == [] and store.saved == []
+    msgs = _build(store, enabled=False)
     assert [m.content for m in msgs] == [m["content"] for m in _pairs(5)]
     assert all(m.role != "system" for m in msgs)
 
 
-def test_within_window_no_compression():
-    store = FakeStore(_pairs(3))  # exactly the window
-    calls = []
-    msgs = _run(store, calls)
-    assert calls == [] and store.saved == []
+def test_build_within_window_shows_all_verbatim():
+    store = FakeStore(_pairs(3))  # exactly the window, nothing summarised
+    msgs = _build(store)
+    assert store.saved == []  # build never writes
     assert [m.content for m in msgs] == ["u0", "a0", "u1", "a1", "u2", "a2"]
 
 
-def test_eviction_folds_oldest_pair_and_prepends_summary():
-    store = FakeStore(_pairs(4))  # 4 pairs, window 3 → oldest pair evicted
-    calls = []
-    msgs = _run(store, calls)
+def test_build_never_folds_shows_pending_eviction_verbatim():
+    # 4 pairs, window 3, nothing folded yet → build shows ALL 4 pairs verbatim, no summary,
+    # and crucially does NOT compress (that is the background fold's job now).
+    store = FakeStore(_pairs(4), summary="", summary_upto=0)
+    msgs = _build(store)
+    assert store.saved == []
+    assert all(m.role != "system" for m in msgs)
+    assert [m.content for m in msgs] == [m["content"] for m in _pairs(4)]
 
-    # compressor called once with the evicted oldest pair
-    assert calls == [("", ["u0", "a0"], 5)]
-    assert store.saved == [("SUM(|u0+a0)", 2)]
 
-    # first message is the summary (system role), then the last 3 pairs verbatim
-    assert msgs[0].role == "system"
-    assert "SUM(|u0+a0)" in msgs[0].content
+def test_build_prepends_summary_and_shows_tail_from_upto():
+    # summary already covers first 2 msgs → build shows summary + history[2:]
+    store = FakeStore(_pairs(4), summary="S0", summary_upto=2)
+    msgs = _build(store)
+    assert store.saved == []
+    assert msgs[0].role == "system" and "S0" in msgs[0].content
     assert [m.content for m in msgs[1:]] == ["u1", "a1", "u2", "a2", "u3", "a3"]
 
 
-def test_existing_summary_no_new_eviction_still_prepended():
-    # 3 pairs, already summarised 2 msgs (upto==boundary) → no fold, summary kept
-    store = FakeStore(_pairs(3), summary="wcześniej", summary_upto=0)
-    # force boundary==upto: window 3 with 3 pairs → boundary 0, upto 0, no fold
+# ------------------------------------------------------- background fold (fold_summary)
+def test_fold_folds_oldest_pair_and_saves():
+    store = FakeStore(_pairs(4))  # 4 pairs, window 3 → oldest pair evicted
     calls = []
-    msgs = _run(store, calls)
+    assert _fold(store, calls) is True
+    assert calls == [("", ["u0", "a0"], 5)]
+    assert store.saved == [("SUM(|u0+a0)", 2)]
+
+
+def test_fold_noop_within_window():
+    store = FakeStore(_pairs(3))
+    calls = []
+    assert _fold(store, calls) is False
     assert calls == [] and store.saved == []
-    assert msgs[0].role == "system" and "wcześniej" in msgs[0].content
-    assert [m.content for m in msgs[1:]] == ["u0", "a0", "u1", "a1", "u2", "a2"]
 
 
-def test_incremental_builds_on_prior_summary():
-    # 5 pairs, prior summary covered first 2 msgs → fold the next pair onto it
+def test_fold_incremental_builds_on_prior_summary():
     store = FakeStore(_pairs(5), summary="S0", summary_upto=2)
     calls = []
-    msgs = _run(store, calls)
+    assert _fold(store, calls) is True
     assert calls == [("S0", ["u1", "a1"], 5)]
     assert store.saved == [("SUM(S0|u1+a1)", 4)]
-    assert [m.content for m in msgs[1:]] == ["u2", "a2", "u3", "a3", "u4", "a4"]
 
 
-def test_compressor_failure_keeps_turn_and_shows_unfolded_verbatim():
+def test_fold_disabled_is_noop():
+    store = FakeStore(_pairs(4))
+    calls = []
+    assert _fold(store, calls, enabled=False) is False
+    assert calls == [] and store.saved == []
+
+
+def test_fold_failure_leaves_pointer_untouched():
     store = FakeStore(_pairs(4), summary="", summary_upto=0)
 
     async def boom(old, evicted, max_s):
         raise RuntimeError("llm down")
 
     cfg = WindowConfig(enabled=True, window_pairs=3, max_sentences=5)
-    msgs = asyncio.run(
-        build_chat_history("repl", store=store, config=cfg, compressor=boom)
-    )
-    # nothing persisted, pointer untouched
+    ok = asyncio.run(fold_summary("repl", store=store, config=cfg, compressor=boom))
+    assert ok is False
+    # nothing persisted, pointer untouched → build still shows everything verbatim next turn
     assert store.saved == [] and store.load_summary("repl") == ("", 0)
-    # no summary message (still empty); un-summarised messages shown verbatim from upto=0
-    assert all(m.role != "system" for m in msgs)
-    assert [m.content for m in msgs] == [m["content"] for m in _pairs(4)]
+
+
+def test_schedule_summary_fold_coalesces_per_conversation():
+    # Two schedules for the same channel while the first is still running must share one
+    # task (a running fold reads fresh history and covers everything).
+    store = FakeStore(_pairs(4))
+    gate = asyncio.Event()
+
+    async def slow_compress(old, evicted, max_s):
+        await gate.wait()
+        return "S"
+
+    cfg = WindowConfig(enabled=True, window_pairs=3, max_sentences=5)
+
+    async def scenario():
+        t1 = schedule_summary_fold("chanA", store=store, config=cfg, compressor=slow_compress)
+        t2 = schedule_summary_fold("chanA", store=store, config=cfg, compressor=slow_compress)
+        assert t1 is t2  # coalesced onto the same in-flight task
+        gate.set()
+        await t1
+
+    asyncio.run(scenario())
+    assert store.saved == [("S", 2)]  # exactly one fold ran
 
 
 # ------------------------------------------------------------------- config parsing
@@ -232,11 +271,14 @@ def test_format_exchange_labels_roles_in_polish():
 
 # ---------------------------------------------------- multi-turn end-to-end simulation
 def test_multi_turn_window_slides_and_summary_grows_incrementally(tmp_path):
-    """Drive real turns against the real JSON store with a fake compressor, asserting
-    the window slides and the running summary is folded one evicted pair at a time.
+    """Drive real turns against the real JSON store with a fake compressor, asserting the
+    window slides and the running summary is folded one evicted pair at a time.
 
-    Faithful to the engine's order per turn: build context from history-so-far, then
-    record the new pair (build_chat_history is called BEFORE the turn's reply is stored).
+    Faithful to the engine's NEW order per turn: build context (LLM-free) from history-so-far,
+    record the new pair, THEN fold off the critical path. Folding pair X at the END of turn X
+    leaves the same summary state entering turn X+1's build as folding it at the START of turn
+    X+1 did before — so the per-turn *display* is identical, the compressor call just no longer
+    blocks the reply. Here the fold is awaited synchronously to make the ordering assertable.
     """
     store = ConversationStore(path=tmp_path / "conversations.json")
     cfg = WindowConfig(enabled=True, window_pairs=2, max_sentences=5)
@@ -248,39 +290,39 @@ def test_multi_turn_window_slides_and_summary_grows_incrementally(tmp_path):
         return f"{old}>{folded}" if old else folded
 
     def turn(i):
-        msgs = asyncio.run(
-            build_chat_history("repl", store=store, config=cfg, compressor=fake_compress)
-        )
+        # 1) build context (no LLM), 2) record the turn, 3) fold in the background (awaited)
+        msgs = asyncio.run(build_chat_history("repl", store=store, config=cfg))
         store.record_turn("repl", f"u{i}", f"a{i}")
+        asyncio.run(fold_summary("repl", store=store, config=cfg, compressor=fake_compress))
         return msgs
 
-    # Turns 0,1: history fits in the 2-pair window → no compression yet.
+    # Turns 0,1: history fits in the 2-pair window → nothing folded yet.
     assert [m.content for m in turn(0)] == []
     assert [m.content for m in turn(1)] == ["u0", "a0"]
     assert calls == [] and store.load_summary("repl") == ("", 0)
 
-    # Turn 2: 2 pairs present, still within window → no fold, all verbatim.
+    # Turn 2: build (before its fold) still shows all verbatim; the fold at the END of
+    # turn 2 evicts the oldest pair (u0,a0) — the first compression happens here now.
     assert [m.content for m in turn(2)] == ["u0", "a0", "u1", "a1"]
-    assert calls == []
-
-    # Turn 3: 3 pairs present → oldest pair (u0,a0) folds into the summary.
-    m3 = turn(3)
     assert calls == [("", ["u0", "a0"])]
     assert store.load_summary("repl") == ("u0+a0", 2)
+
+    # Turn 3: build shows summary(u0+a0, folded at end of turn 2) + last 2 pairs.
+    m3 = turn(3)
+    assert store.load_summary("repl") == ("u0+a0>u1+a1", 4)  # end-of-turn-3 fold state
     assert m3[0].role == "system" and "u0+a0" in m3[0].content
     assert [m.content for m in m3[1:]] == ["u1", "a1", "u2", "a2"]  # last 2 pairs
 
-    # Turn 4: next pair (u1,a1) folds ONTO the existing summary (incremental).
+    # Turn 4: display identical to the old (synchronous) behaviour.
     m4 = turn(4)
-    assert calls[-1] == ("u0+a0", ["u1", "a1"])
-    assert store.load_summary("repl") == ("u0+a0>u1+a1", 4)
+    assert store.load_summary("repl") == ("u0+a0>u1+a1>u2+a2", 6)
     assert [m.content for m in m4[1:]] == ["u2", "a2", "u3", "a3"]
 
-    # Turn 5: one more eviction; exactly one compressor call per turn past the window.
+    # Turn 5: exactly one compressor call per turn past the window.
     m5 = turn(5)
-    assert calls[-1] == ("u0+a0>u1+a1", ["u2", "a2"])
-    assert store.load_summary("repl") == ("u0+a0>u1+a1>u2+a2", 6)
+    assert store.load_summary("repl") == ("u0+a0>u1+a1>u2+a2>u3+a3", 8)
     assert [m.content for m in m5[1:]] == ["u3", "a3", "u4", "a4"]
 
-    # Three evictions total (turns 3,4,5); window never exceeded 2 verbatim pairs.
-    assert len(calls) == 3
+    # One eviction folded per turn from turn 2 onward (turns 2,3,4,5); window never
+    # exceeded 2 verbatim pairs.
+    assert len(calls) == 4
