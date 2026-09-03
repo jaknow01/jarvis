@@ -186,7 +186,7 @@ REPL (`app/main.py`) działa dalej niezależnie — oba wejścia dzielą ten sam
 
 ### Wiadomość „chwila, jeszcze pracuję" (długie tury)
 
-Gdy koordynator mieli dłużej niż `PROGRESS_PING_AFTER_SECONDS` (domyślnie 7 s), webhook
+Gdy koordynator mieli dłużej niż `PROGRESS_PING_AFTER_SECONDS` (domyślnie 20 s), webhook
 wysyła **jedną** wiadomość pośrednią, np. *„Chwila, jeszcze nad tym pracuję — sprawdziłem
 już pogodę i trasę. Zaraz kończę…"*, żebyś wiedział, że bot nie zawisł. Treść składa się z
 szablonu (bez wywołania LLM, więc nie dokłada opóźnienia), a lista „sprawdziłem już…"

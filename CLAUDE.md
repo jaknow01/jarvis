@@ -119,7 +119,7 @@ entry point (REPL and Messenger both call it):
    `num_workers=4` per step). It **only gathers** — it never writes the user's reply.
    On a **live user turn** (`origin="user"`) with a transport `notify` callback, the
    coordinator is awaited via `_gather_with_progress_ping`, which watches its event
-   stream and — if the turn outlasts `PROGRESS_PING_AFTER_SECONDS` (default 7) — pushes
+   stream and — if the turn outlasts `PROGRESS_PING_AFTER_SECONDS` (default 20) — pushes
    **one** interim "still working" message naming the sub-agents already returned
    (templated Polish, no LLM; see `lib/runtime/progress.py`). Ordering is race-free: the
    final reply is only sent by the transport after `handle_message` returns, so the ping
@@ -293,7 +293,7 @@ tick interval in seconds, default 30; timezone for cron/`run_at`, default Europe
 Proactive delivery reuses `MESSENGER_PAGE_ACCESS_TOKEN`). See `docs/SCHEDULER.md`.
 `PROGRESS_PING_ENABLED` + `PROGRESS_PING_AFTER_SECONDS` (the interim "still working"
 ping on slow live turns: master switch — same falsy-parsing as `agent_enabled()`, default
-on; delay before the single ping fires in seconds, default 7. See `lib/runtime/progress.py`
+on; delay before the single ping fires in seconds, default 20. See `lib/runtime/progress.py`
 and the turn-flow note above).
 
 **Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
