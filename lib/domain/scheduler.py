@@ -238,6 +238,8 @@ def public_view(job: dict) -> dict:
     nor a watch's raw predicate/params (internal)."""
     return {
         "id": job["id"],
+        "kind": job.get("kind"),  # "once" | "cron" | "watch" — lets the agent tell a
+                                  # conditional watch apart from a reminder/brief when cancelling
         "prompt": job["prompt"],
         "schedule": describe_schedule(job),
         "next_run": job.get("next_run_at"),

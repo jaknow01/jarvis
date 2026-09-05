@@ -84,10 +84,23 @@ def create_scheduler_agent() -> FunctionAgent:
               complete, self-contained request in Polish (what to fetch and what to tell the user),\
               e.g. 'Podaj prognozę pogody na dziś w Warszawie, krótki przegląd najważniejszych\
               wiadomości, oraz sprawdź, czy dziś grają zawodnicy z mojego składu FPL.'\
-            - list_scheduled_jobs: show active jobs (with ids) for the current conversation.\
-            - delete_scheduled_job: cancel a job by id (find it via list first).\
+            - list_scheduled_jobs: show ALL active items (reminders, recurring briefs AND\
+              conditional watches) with their id and `kind` for the current conversation.\
+            - delete_scheduled_job: cancel ANY item by id — reminder, brief OR watch.\
             - update_scheduled_job: change a job's prompt or its until/max_runs limits; to change\
               the timing itself, delete and re-create.\
+            \
+            CANCELLING / STOPPING (this includes 'przestań mnie powiadamiać', 'wyłącz to',\
+            'odwołaj', 'usuń watch/przypomnienie') — a watch is cancelled the SAME way as any\
+            other item, there is no separate 'stop watch' tool:\
+            1. ALWAYS call list_scheduled_jobs FIRST and read the ids (watches are listed there,\
+               with kind='watch'). Do not guess or reuse an id from memory.\
+            2. Pick the item the user means (match on kind/schedule/prompt) and call\
+               delete_scheduled_job with its exact id.\
+            3. Only report it as cancelled if delete_scheduled_job returned a `deleted` id. If it\
+               returned an Error with `active_jobs`, it is NOT cancelled — retry with a correct id\
+               from that list, or tell the composer plainly it could not be cancelled and show what\
+               is still active. NEVER claim you stopped/deleted something you did not see `deleted`.\
             \
             You do not deliver anything yourself - the runner delivers on the same channel the user\
             is on. Report back the created/updated job's id, human-readable schedule and next run so\

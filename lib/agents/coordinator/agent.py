@@ -72,7 +72,13 @@ def create_coordinator_agent() -> FunctionAgent:
             "cron: turning a conditional alert into a per-minute cron floods the user and is a bug. Let "
             "the scheduler_agent pick the mechanism; for a watch it will confirm the condition with the "
             "user BEFORE arming, so pass its confirmation question/description straight back — do not "
-            "report the watch as already set up until the user has confirmed."
+            "report the watch as already set up until the user has confirmed.\n"
+            "- CANCELLING ('przestań mnie powiadamiać', 'wyłącz/odwołaj/usuń to przypomnienie lub "
+            "watch', 'nie wysyłaj mi już...'): ALSO delegate to the scheduler_agent — stopping a "
+            "conditional watch goes through it exactly like cancelling a reminder; do NOT handle it "
+            "yourself. Relay its ACTUAL result: only tell the user something was cancelled if the "
+            "scheduler_agent confirms it was deleted; if it could not find/cancel it, say so (with "
+            "what is still active) instead of claiming success."
         )
 
     if agent_enabled("memory_operator"):

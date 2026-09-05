@@ -290,16 +290,19 @@ async def create_watch(
 async def list_scheduled_jobs(ctx: Context) -> dict:
     """
     Description:
-        List the user's active scheduled jobs (reminders and recurring tasks) for the
-        current conversation, with their schedules and next run times. Use it to
-        answer "co mam zaplanowane", or before deleting/updating a job to find its id.
+        List ALL the user's active scheduled items for the current conversation — one-off
+        reminders, recurring briefs (cron) AND conditional watches — each with its id,
+        `kind` ("once"/"cron"/"watch"), schedule and next run time. Use it to answer "co mam
+        zaplanowane", and ALWAYS call it first before cancelling anything, to get the exact id
+        (watches are included here — a "przestań mnie powiadamiać" request is cancelled by
+        finding the matching watch and deleting it).
 
     Parameters:
     ctx : Context
         Context in which the tool operates.
 
     Output:
-        JSON with the list of active jobs (id, prompt, schedule, next run) and count.
+        JSON with the list of active items (id, kind, prompt, schedule, next run) and count.
     """
     _, _, conv = _channel_from_ctx(ctx)
     jobs = [scheduler_public_view(j) for j in scheduler_store.for_conversation(conv)]
@@ -311,21 +314,49 @@ async def list_scheduled_jobs(ctx: Context) -> dict:
 async def delete_scheduled_job(ctx: Context, job_id: str) -> dict:
     """
     Description:
-        Cancel a scheduled job by its id (from list_scheduled_jobs). Use it for
-        "odwołaj przypomnienie", "przestań mi wysyłać...", etc.
+        Cancel a scheduled item by its id — works for ANY kind: one-off reminders, recurring
+        briefs AND conditional watches. This is how you STOP a watch / "przestań mnie
+        powiadamiać", "odwołaj przypomnienie", "wyłącz to". Get the id from
+        list_scheduled_jobs first; a unique id-prefix also works.
 
     Parameters:
     ctx : Context
         Context in which the tool operates.
 
     job_id: str
-        The id of the job to cancel (e.g. 'job_1a2b3c4d').
+        The id of the item to cancel (e.g. 'job_1a2b3c4d'), or a unique prefix of it.
 
     Output:
-        JSON confirming deletion, or an error if the id was not found.
+        On success {"deleted": <id>, "remaining": <count active in this conversation>}. If the
+        id is not found or a prefix is ambiguous, {"Error": ..., "active_jobs": [...]} listing
+        what IS cancellable — retry with a correct id from that list. IMPORTANT: only treat the
+        item as cancelled when you get a "deleted" id back; never report success on an Error.
     """
-    logging.info(f"Deleting scheduled job {job_id}")
-    return {"deleted": job_id} if scheduler_store.delete(job_id) else {"Error": f"No scheduled job with id '{job_id}'"}
+    _, _, conv = _channel_from_ctx(ctx)
+    active = scheduler_store.for_conversation(conv)
+
+    # Resolve by exact id, else by a unique id-prefix within this conversation (the model
+    # sometimes passes a shortened id). Anything else is a miss we report honestly.
+    target = next((j for j in active if j.get("id") == job_id), None)
+    if target is None:
+        prefixed = [j for j in active if j.get("id", "").startswith(job_id)]
+        if len(prefixed) == 1:
+            target = prefixed[0]
+        elif len(prefixed) > 1:
+            return {
+                "Error": f"Ambiguous id prefix '{job_id}' — matches {len(prefixed)} items.",
+                "active_jobs": [scheduler_public_view(j) for j in active],
+            }
+
+    resolved_id = target["id"] if target else job_id
+    logging.info(f"Deleting scheduled job {resolved_id} (requested '{job_id}')")
+    if target is not None and scheduler_store.delete(resolved_id):
+        remaining = scheduler_store.for_conversation(conv)
+        return {"deleted": resolved_id, "remaining": len(remaining)}
+    return {
+        "Error": f"No active scheduled item with id '{job_id}' in this conversation.",
+        "active_jobs": [scheduler_public_view(j) for j in active],
+    }
 
 
 @tool_ownership("scheduler_agent")
