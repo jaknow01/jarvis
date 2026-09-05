@@ -116,13 +116,33 @@ def test_jobs_lists_timed_and_watch(monkeypatch):
         {"id": "abc12345ff", "kind": "cron", "cron_expr": "0 7 * * *",
          "prompt": "daj mi poranny brief", "status": "active", "next_run_at": None},
         {"id": "watch999aa", "kind": "watch", "source": "fpl", "poll_interval": 3600,
-         "prompt": "deadline!", "status": "active", "last_result": False, "next_run_at": None},
+         "prompt": "deadline!", "status": "active", "last_result": False, "next_run_at": None,
+         "repeating": True},
     ]
     monkeypatch.setattr(admin, "store", _FakeStore(jobs))
     out = _run("/jobs")
     assert "abc12345" in out and "watch999" in out
     assert "poranny brief" in out
-    assert "👁 Watche" in out
+    # kind is explicit per item (cron vs watch, repeating vs one-shot)
+    assert "🔁 cron" in out
+    assert "👁 watch (powtarzalny)" in out
+
+
+def test_jobs_all_shows_done_but_default_hides_it(monkeypatch):
+    jobs = [
+        {"id": "activewatch", "kind": "watch", "source": "fpl", "poll_interval": 60,
+         "prompt": "aktywny", "status": "active", "last_result": None, "next_run_at": None,
+         "repeating": False},
+        {"id": "doneonce111", "kind": "once", "prompt": "zakonczone", "status": "done",
+         "next_run_at": None},
+    ]
+    monkeypatch.setattr(admin, "store", _FakeStore(jobs))
+    default = _run("/jobs")
+    assert "activewatch"[:8] in default
+    assert "doneonce"[:8] not in default          # done hidden by default
+    all_out = _run("/jobs all")
+    assert "doneonce"[:8] in all_out               # shown with 'all'
+    assert "Zakończone" in all_out
 
 
 # ---- reset (fake conversations) --------------------------------------------------

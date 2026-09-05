@@ -151,7 +151,9 @@ Messages starting with `/` are intercepted **before** the agent stack — in
 `app/webhook.py` `_process` and the REPL loop — by `lib.runtime.admin.maybe_handle`, which
 returns a reply string (handled deterministically, no LLM) or `None` to fall through to
 the coordinator. This is a technical window into the running service from the phone
-(`/stop` to cancel the in-flight turn, `/status`, `/logs`, `/errors`, `/jobs`,
+(`/stop` to cancel the in-flight turn, `/status`, `/logs`, `/errors`, `/jobs [all]` (tags
+each item's kind — cron vs one-shot vs repeating/one-shot watch — for verification; `all`
+also shows completed/cancelled),
 `/fire <id>`, `/scheduler pause|resume`, `/collect [finance|fpl]` (run the daily observation
 collectors now), `/agents`, `/models`, `/env` with masked secrets,
 `/memory`, `/summary`, `/reset confirm`, `/last`, `/window`, `/version`, `/probe`, `/help`).
