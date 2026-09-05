@@ -15,6 +15,7 @@ from lib.agents.news_agent import create_news_agent
 from lib.agents.memory_operator import create_memory_agent
 from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
+from lib.agents.math_agent import create_math_agent
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ def create_coordinator_agent() -> FunctionAgent:
         ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
         ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
         ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders, recurring proactive briefs, AND conditional watches that poll live data and notify ONLY when a condition becomes true ('daj znać, gdy...', 'powiadom, kiedy...'); plus listing/cancelling them."),
+        ("math_agent", create_math_agent, "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."),
     ]
 
     if agent_enabled("scheduler_agent"):

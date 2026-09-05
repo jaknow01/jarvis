@@ -21,6 +21,7 @@ from lib.agents.maps_agent import create_maps_agent
 from lib.agents.memory_operator import create_memory_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
 from lib.agents.fpl_agent import create_fpl_agent
+from lib.agents.math_agent import create_math_agent
 from lib.agents.composer import create_composer_agent
 from lib.agents.coordinator import create_coordinator_agent
 
@@ -37,4 +38,5 @@ __all__ = [
     "create_memory_agent",
     "create_scheduler_agent",
     "create_fpl_agent",
+    "create_math_agent",
 ]

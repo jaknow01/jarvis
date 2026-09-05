@@ -65,6 +65,7 @@ lib/domain/            Shared stateful stores (used by agents AND runtime)
   memory.py            Long-term memory store (JSON or Postgres backend; see app/db)
   scheduler.py         Scheduled-jobs store (JSON or Postgres backend)
   conversation.py      Conversation-history store + rolling-window summary (JSON or Postgres)
+  observations.py      Daily time-series store for external readings (JSON or Postgres; see docs/OBSERVATIONS.md)
 
 lib/agents/            Coordinator + one feature subpackage per agent
   __init__.py          Aggregator: imports every subpackage (registration), public surface
@@ -75,7 +76,8 @@ lib/agents/            Coordinator + one feature subpackage per agent
   <agent>/<helper>.py  that agent's private helpers, e.g.
                          iot_operator/{device,tuya_link}.py (Tuya model + link),
                          maps_agent/directions.py, weather_agent/forecast.py,
-                         finance_agent/fx.py, fpl_agent/fpl_api.py
+                         finance_agent/{fx.py, history.py}, fpl_agent/fpl_api.py,
+                         math_agent/ (deterministic calc tools; no data source of its own)
 
 lib/runtime/           TOP layer — wires the network to a transport / runs jobs
   engine.py            transport-agnostic handle_message(conversation_id, text, ctx)
@@ -83,13 +85,18 @@ lib/runtime/           TOP layer — wires the network to a transport / runs job
   chatbot.py           REPL loop
   messenger.py         Messenger webhook adapter (signature, send)
   scheduler_runner.py  in-process loop that fires due jobs out of band
+  observations_runner.py daily time-series collectors (finance @23:00, FPL league @04:00)
   progress.py          interim "still working" ping helpers (labels + templated message)
   admin.py             owner-only "/" command surface (ops/diagnostics; bypasses agents)
   diag.py              leaf: in-memory diagnostic state (uptime, last-turn, inbound)
   tracing.py           MLflow tracing setup + last_trace_id()
 
 app/db/                Postgres access layer: connection, schema, repos, migration
-                         (incl. conversation_repo.py — conversations + messages)
+                         (incl. conversation_repo.py — conversations + messages;
+                         observations_repo.py — daily time-series;
+                         fpl_history_repo.py — permanent daily FPL league snapshots)
+scripts/               One-shot ops scripts: backfill_finance.py (year of daily finance history),
+                         backfill_fpl_history.py (per-gameweek FPL league history)
 data/                  JSON "databases" (devices, preferences, maps memory, memory)
 logs/                  Per-run log files
 ```
@@ -145,7 +152,8 @@ Messages starting with `/` are intercepted **before** the agent stack — in
 returns a reply string (handled deterministically, no LLM) or `None` to fall through to
 the coordinator. This is a technical window into the running service from the phone
 (`/stop` to cancel the in-flight turn, `/status`, `/logs`, `/errors`, `/jobs`,
-`/fire <id>`, `/scheduler pause|resume`, `/agents`, `/models`, `/env` with masked secrets,
+`/fire <id>`, `/scheduler pause|resume`, `/collect [finance|fpl]` (run the daily observation
+collectors now), `/agents`, `/models`, `/env` with masked secrets,
 `/memory`, `/summary`, `/reset confirm`, `/last`, `/window`, `/version`, `/probe`, `/help`).
 `/stop` works because the webhook runs each inbound message as its own task: a live turn
 registers its `asyncio.Task` in `diag`, and the concurrently-arriving `/stop` cancels it. Bypassing the agents is deliberate: the
@@ -213,6 +221,7 @@ place rather than removed.
 | `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools |
 | `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn (`memory.summary()`, cached with a short TTL — `MEMORY_SUMMARY_CACHE_TTL_SECONDS`, default 60s — and invalidated on writes, so it isn't a DB read on the hot path every turn). See `docs/MEMORY.md` |
 | `scheduler_agent` | Proactive cron jobs / reminders + conditional watches | JSON or Postgres store (`lib/domain/scheduler.py`): create/list/delete/update scheduled jobs; `create_watch` for conditional watches | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/runtime/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. **Conditional watches** (`kind="watch"`) poll a data source and notify once on a false→true edge — see below. See `docs/SCHEDULER.md` |
+| `math_agent` | Deterministic calculations over numbers | Pure Python (`statistics`/`math`): `calculate_statistics`, `percentage_change`, `linear_trend`, `correlation` | Working — general-purpose calculator (no data source of its own); the coordinator feeds it figures gathered from other agents (e.g. a finance/FPL time-series) so arithmetic/stats are exact, not LLM-guessed |
 
 ## Running it
 
@@ -295,6 +304,16 @@ Proactive delivery reuses `MESSENGER_PAGE_ACCESS_TOKEN`). See `docs/SCHEDULER.md
 ping on slow live turns: master switch — same falsy-parsing as `agent_enabled()`, default
 on; delay before the single ping fires in seconds, default 20. See `lib/runtime/progress.py`
 and the turn-flow note above).
+`OBSERVATIONS_ENABLED` + `OBSERVATIONS_FINANCE_HOUR` + `OBSERVATIONS_FPL_HOUR` +
+`OBSERVATIONS_TICK_SECONDS` + `OBSERVATIONS_FX`/`OBSERVATIONS_EQUITIES`/`OBSERVATIONS_METALS`
+(the daily time-series collectors: master switch — same falsy-parsing as `agent_enabled()`,
+default on; local hours each collector fires, default 23 and 4, in `SCHEDULER_TIMEZONE`; clock
+check interval, default 300s; the finance watchlist — FX vs PLN, equities/metals as Yahoo
+tickers, defaults `USD,EUR,GBP,CHF` / `^GSPC` / `GC=F,SI=F`, plus `OBSERVATIONS_SP500_ETF`
+(default `SP5.PA`) — a EUR cross-listing of the owner's Amundi S&P 500 **distributing** ETF
+from which `index:sp500_pln` = ETF(EUR) × EUR/PLN is derived (Yahoo has no GPW PLN listing;
+must be the dist class to match the owner's fund). The FPL collector uses `FPL_LEAGUE_ID`.
+See `docs/OBSERVATIONS.md`).
 
 **Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
 auto-tracing for the LlamaIndex runtime (`mlflow.llama_index.autolog()` in
@@ -372,6 +391,19 @@ grow.
   two `ADD COLUMN IF NOT EXISTS` columns on `conversations`. The per-turn hot-path read
   uses `load_history_and_summary()` — history + summary over a **single** connection —
   rather than two separate `load_history`/`load_summary` round-trips.
+  **Time-series ("observations")** follow the same pattern: `lib/domain/observations.py` +
+  `app/db/observations_repo.py` persist a generic daily series (table `observations`, PK
+  `(series, obs_date)`, idempotent upsert) to Postgres when `DATABASE_URL` is set, else
+  `data/observations_data/observations.json`. The **FPL daily league history** (table
+  `fpl_league_history`, one append-only JSONB snapshot per `(league_id, snapshot_date)` —
+  every manager's rank, points and squad; distinct from the TTL squad *cache* in
+  `fpl_league_squads`) is **Postgres-only** via `app/db/fpl_history_repo.py`. Both are
+  written daily by the deterministic collectors in `lib/runtime/observations_runner.py`
+  (finance @23:00, FPL @04:00; started in the webhook `lifespan`) and read back by the
+  history tools inside `finance_agent` / `fpl_agent`. Seed history with
+  `python -m scripts.backfill_finance` (a year of daily finance) and
+  `python -m scripts.backfill_fpl_history` (per-gameweek FPL league snapshots); both are also
+  runnable on demand from the admin `/collect` command. See `docs/OBSERVATIONS.md`.
   Migrate with `python -m app.db.migrate`.
   See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.

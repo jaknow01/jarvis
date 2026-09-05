@@ -1,8 +1,9 @@
 """finance_agent tools: FX rates (Frankfurter) and stock/index quotes (Yahoo Finance).
 Registered into TOOLS_BY_AGENT["finance_agent"] via @tool_ownership."""
 
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 import requests
 from requests import HTTPError
@@ -10,6 +11,8 @@ from llama_index.core.workflow import Context
 
 from lib.core import tool_ownership, function_tool, app_context
 from lib.agents.finance_agent.fx import validate_currency_code
+from lib.agents.finance_agent import history as _history
+from lib.domain import observations as _observations
 
 logger = logging.getLogger(__name__)
 
@@ -146,4 +149,92 @@ async def get_stock_quote(ctx: Context, symbol: str) -> dict:
         "exchange": meta.get("exchangeName"),
         "quote_time": datetime.fromtimestamp(quote_time).isoformat() if quote_time else None,
         "source": "Yahoo Finance",
+    }
+
+
+# Cap on how many daily points a history response returns verbatim; longer ranges are
+# evenly downsampled so the model gets the shape without a huge token bill (the exact
+# summary stats are always computed over the FULL range regardless).
+_HISTORY_POINT_CAP = 160
+
+
+@tool_ownership("finance_agent")
+@function_tool
+async def get_price_history(ctx: Context, instrument: str, period_days: int = 90) -> dict:
+    """
+    Description:
+        Returns the DAILY HISTORY (a time-series over time, not just the current value) of a
+        tracked financial instrument, read from Jarvis's own observations database. Use this
+        whenever the user asks about a change/trend over time ("jak zmienił się kurs...",
+        "ile urosło złoto w miesiąc", "S&P 500 przez ostatni rok") rather than the current
+        level (for the live current value use get_exchange_rate / get_stock_quote).
+
+        The database is populated daily at 23:00 and was backfilled one year back. The
+        response includes both a code-computed summary (first/last/min/max/mean/% change over
+        the requested window) and the underlying daily points (downsampled if very long).
+
+    Parameters:
+    ctx : Context
+        Context in which the tool operates.
+
+    instrument: str
+        Which series to read. Accepts a canonical series id or common free text:
+        - Currencies vs PLN: 'USD', 'EUR', 'GBP', 'CHF' (or 'USD/PLN', or 'fx:USD/PLN').
+        - The owner's Amundi S&P 500 ETF in PLN: 'sp500' (canonical 'index:sp500_pln';
+          the real fund's EUR price × EUR/PLN). Its raw EUR price: 'sp500_eur'
+          (canonical 'etf:amundi_sp500_eur').
+        - S&P 500 index in USD (price index): '^GSPC' (canonical 'index:^GSPC').
+        - Metals in USD: 'gold'/'złoto' ('metal:GC=F'), 'silver'/'srebro' ('metal:SI=F').
+
+    period_days: int = 90
+        How far back to look, in calendar days (e.g. 30, 90, 365). Defaults to 90.
+
+    Output:
+        JSON with the resolved series id + label, the period, a `summary` (count, first, last,
+        min, max, mean, change_pct) and `points` (list of {date, value}); or an error listing
+        the available series if the instrument could not be resolved.
+    """
+    series = _history.resolve_series_alias(instrument)
+    if series is None:
+        return {
+            "error": f"Nie rozpoznano instrumentu '{instrument}'.",
+            "available": _history.series_catalog(),
+        }
+
+    try:
+        period_days = max(1, int(period_days))
+    except (TypeError, ValueError):
+        period_days = 90
+    start = date.today() - timedelta(days=period_days)
+
+    def _read():
+        return _observations.read_series(series, start=start)
+
+    rows = await asyncio.to_thread(_read)
+    if not rows:
+        return {
+            "series": series,
+            "label": _history.series_catalog().get(series, series),
+            "message": "Brak danych historycznych dla tego instrumentu w bazie (być może "
+                       "kolektor jeszcze nie zebrał danych albo backfill nie został uruchomiony).",
+        }
+
+    summary = _history.summarize_series(rows)
+
+    points = rows
+    if len(rows) > _HISTORY_POINT_CAP:
+        stride = len(rows) // _HISTORY_POINT_CAP + 1
+        points = rows[::stride]
+        if points[-1] is not rows[-1]:
+            points.append(rows[-1])  # always keep the most recent point
+
+    return {
+        "series": series,
+        "label": _history.series_catalog().get(series, series),
+        "period_days": period_days,
+        "summary": summary,
+        "points": [{"date": r["date"], "value": r["value"]} for r in points],
+        "note": "Wartości dzienne z bazy Jarvisa. Metale w USD; index:sp500_pln = realny "
+                "Amundi S&P 500 UCITS ETF (klasa dystrybucyjna) w EUR × EUR/PLN; "
+                "index:^GSPC to goły indeks cenowy w USD.",
     }

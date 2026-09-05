@@ -174,6 +174,48 @@ SCHEMA_STATEMENTS = [
     """
     ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary_upto INTEGER NOT NULL DEFAULT 0
     """,
+    # Generic daily time-series of external readings (the "observations" store). Every row is
+    # one metric on one day: `series` is a stable key ('fx:USD/PLN', 'index:^GSPC',
+    # 'index:sp500_pln', 'metal:GC=F'), `obs_date` the calendar day of the reading (the
+    # source's own quote date, so weekends/holidays never create bogus rows), `value` the
+    # primary scalar (for cheap SQL MIN/MAX/AVG/window), and `payload` the fuller reading
+    # (OHLC, volume, currency…). PK (series, obs_date) makes daily collection and backfill
+    # idempotent (re-running upserts the same day). Written by the finance collector
+    # (lib/runtime/observations_runner.py) and scripts/backfill_finance.py; read by
+    # finance_agent's history tool. See docs/OBSERVATIONS.md.
+    """
+    CREATE TABLE IF NOT EXISTS observations (
+        series     TEXT NOT NULL,
+        obs_date   DATE NOT NULL,
+        value      DOUBLE PRECISION,
+        payload    JSONB,
+        source     TEXT,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (series, obs_date)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS observations_by_series
+        ON observations (series, obs_date)
+    """,
+    # Permanent daily FPL mini-league history (distinct from the TTL cache in
+    # fpl_league_squads, which is overwritten): one append-only snapshot per (league, day)
+    # capturing every manager's standing (rank + points) AND their squad (which footballers
+    # they had) for that day's current gameweek. `data` JSONB holds
+    # {gameweek, league_name, managers:[{entry, name, manager, rank, total, event_total,
+    # picks:[{element, name, position, multiplier, is_captain}]}]}. Written daily at 04:00 by
+    # the FPL collector (lib/runtime/observations_runner.py); read by fpl_agent's history tool.
+    """
+    CREATE TABLE IF NOT EXISTS fpl_league_history (
+        league_id     BIGINT NOT NULL,
+        snapshot_date DATE NOT NULL,
+        gameweek      INTEGER,
+        league_name   TEXT,
+        data          JSONB NOT NULL,
+        fetched_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (league_id, snapshot_date)
+    )
+    """,
 ]
 
 

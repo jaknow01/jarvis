@@ -19,6 +19,10 @@ from lib.domain.conversation import (
     conversations,
     ConversationStore,
 )
+from lib.domain.observations import (
+    observations,
+    ObservationsStore,
+)
 from lib.domain.scheduler import (
     store,
     build_job,
@@ -38,6 +42,8 @@ from lib.domain.scheduler import (
 __all__ = [
     "conversations",
     "ConversationStore",
+    "observations",
+    "ObservationsStore",
     "memory",
     "MemoryStore",
     "summarize",

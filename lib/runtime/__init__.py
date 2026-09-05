@@ -10,6 +10,7 @@ from lib.runtime.chatbot import Chatbot
 from lib.runtime.tracing import setup_tracing, last_trace_id
 from lib.runtime.scheduler_runner import run_scheduler_loop, scheduler_enabled
 from lib.runtime.fpl_cache_runner import run_fpl_cache_loop, fpl_cache_refresh_enabled
+from lib.runtime.observations_runner import run_observations_loop, observations_enabled
 from lib.runtime import admin, diag
 from lib.runtime.messenger import (
     iter_message_events,
@@ -27,6 +28,8 @@ __all__ = [
     "scheduler_enabled",
     "run_fpl_cache_loop",
     "fpl_cache_refresh_enabled",
+    "run_observations_loop",
+    "observations_enabled",
     "admin",
     "diag",
     "iter_message_events",

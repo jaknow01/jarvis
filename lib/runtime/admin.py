@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
 
 import lib.runtime.diag as diag
+import lib.runtime.observations_runner as observations_runner
 import lib.runtime.progress as progress
 import lib.runtime.scheduler_runner as scheduler_runner
 import lib.runtime.tracing as tracing
@@ -402,6 +403,25 @@ async def _cmd_scheduler(args, *, conversation_id, channel) -> str:
     return f"⚠️ Nieznany argument '{sub}'. Użyj: pause / resume."
 
 
+# ================================== collectors ====================================
+
+async def _cmd_collect(args, *, conversation_id, channel) -> str:
+    """Run the daily observation collectors NOW (finance and/or FPL), out of their schedule.
+    Useful to seed/refresh data on demand. Idempotent (upserts by date)."""
+    which = args[0].lower() if args else "all"
+    if which not in ("all", "finance", "fin", "fpl"):
+        return f"⚠️ Użycie: {PREFIX}collect [finance|fpl]  (bez argumentu = oba)"
+    lines = ["📥 KOLEKTORY (ręczne uruchomienie)", ""]
+    if which in ("all", "finance", "fin"):
+        n = await observations_runner.collect_finance_once()
+        lines.append(f"💹 finanse: zapisano {n} serii" if n else "💹 finanse: 0 (błąd/pusto — zob. /errors)")
+    if which in ("all", "fpl"):
+        ok = await observations_runner.collect_fpl_once()
+        lines.append("⚽ FPL: zapisano dzienny zrzut ligi" if ok else "⚽ FPL: pominięto (brak ligi/GW lub błąd)")
+    lines += ["", f"🕐 {_now_str()}"]
+    return "\n".join(lines)
+
+
 # ================================ configuration ===================================
 
 def _agent_names() -> list[str]:
@@ -550,6 +570,8 @@ _COMMANDS: dict[str, _Cmd] = {
     "fire": _Cmd(_cmd_fire, "Scheduler", "/fire <id>", "odpal zadanie TERAZ (bez zmiany harmonogramu)"),
     "watch": _Cmd(_cmd_watch, "Scheduler", "/watch <id>", "szczegóły watcha: źródło, wynik, następny poll"),
     "scheduler": _Cmd(_cmd_scheduler, "Scheduler", "/scheduler [pause|resume]", "wstrzymaj/wznów odpalanie zadań"),
+    # Kolektory
+    "collect": _Cmd(_cmd_collect, "Kolektory", "/collect [finance|fpl]", "ręcznie zbierz dzienne dane (obserwacje)"),
     # Konfiguracja
     "agents": _Cmd(_cmd_agents, "Konfiguracja", "/agents", "którzy subagenci włączeni/wyłączeni"),
     "models": _Cmd(_cmd_models, "Konfiguracja", "/models", "model + reasoning effort per agent"),
@@ -563,7 +585,7 @@ _COMMANDS: dict[str, _Cmd] = {
     "window": _Cmd(_cmd_window, "Diagnostyka", "/window", "szacunek okna 24h Messengera"),
 }
 
-_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
+_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Kolektory", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
 
 
 async def _cmd_help(args, *, conversation_id, channel) -> str:
