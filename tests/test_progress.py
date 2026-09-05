@@ -47,11 +47,11 @@ def test_ping_enabled_default_and_falsy(monkeypatch):
 
 def test_ping_after_seconds_default_and_override(monkeypatch):
     monkeypatch.delenv("PROGRESS_PING_AFTER_SECONDS", raising=False)
-    assert progress.ping_after_seconds() == 7.0
+    assert progress.ping_after_seconds() == 20.0
     monkeypatch.setenv("PROGRESS_PING_AFTER_SECONDS", "2.5")
     assert progress.ping_after_seconds() == 2.5
     monkeypatch.setenv("PROGRESS_PING_AFTER_SECONDS", "not-a-number")
-    assert progress.ping_after_seconds() == 7.0
+    assert progress.ping_after_seconds() == 20.0
 
 
 # ---- engine orchestration --------------------------------------------------------

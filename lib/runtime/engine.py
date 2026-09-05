@@ -28,7 +28,7 @@ from lib.agents import create_coordinator_agent, create_composer_agent
 from lib.core import Ctx, bind_app_context, reset_app_context
 from lib.domain import conversations
 from lib.runtime import diag, progress
-from lib.runtime.history_window import build_chat_history
+from lib.runtime.history_window import build_chat_history, schedule_summary_fold
 from lib.runtime.tracing import last_trace_id
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,9 @@ async def handle_message(
     try:
         # Bounded, context-engineered history: last N pairs verbatim, prefixed by an
         # incrementally-maintained running summary of everything older (see
-        # lib/runtime/history_window.py). Falls back to full history when disabled.
+        # lib/runtime/history_window.py). Read-only and LLM-free — the summary fold runs
+        # off the critical path (scheduled after the reply below). Falls back to full
+        # history when disabled.
         history = await build_chat_history(conversation_id)
         input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
 
@@ -168,6 +170,11 @@ async def handle_message(
         trace_id = last_trace_id()
         conversations.record_turn(conversation_id, text, reply, trace_id=trace_id)
         diag.record_turn_stats(conversation_id, time.monotonic() - started, trace_id)
+
+        # 4) Fold any freshly-evicted history into the running summary in the background,
+        #    now that this turn is recorded — off the critical path, so the reply above was
+        #    never blocked on the compressor LLM call. Coalesced per conversation.
+        schedule_summary_fold(conversation_id)
         return reply
     finally:
         reset_app_context(token)

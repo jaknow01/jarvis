@@ -96,6 +96,16 @@ class ConversationStore:
             return "", 0
         return conv.get("summary", "") or "", int(conv.get("summary_upto", 0) or 0)
 
+    def load_history_and_summary(self, channel_key: str) -> tuple[list[dict], str, int]:
+        """Return ``(history, summary, summary_upto)`` in a single load — the hot-path read
+        the engine does each turn (avoids two separate reads of the same conversation)."""
+        conv = self._load()["conversations"].get(channel_key)
+        if not conv:
+            return [], "", 0
+        msgs = sorted(conv.get("messages", []), key=lambda m: m.get("turn_index", 0))
+        history = [{"role": m["role"], "content": m["content"]} for m in msgs]
+        return history, (conv.get("summary", "") or ""), int(conv.get("summary_upto", 0) or 0)
+
     # -- writes ---------------------------------------------------------------
     def save_summary(self, channel_key: str, summary: str, summary_upto: int) -> None:
         """Persist the rolling summary and its coverage pointer for ``channel_key``."""
@@ -179,6 +189,9 @@ class _ConversationProxy:
 
     def load_summary(self, *args, **kwargs) -> tuple[str, int]:
         return self._store().load_summary(*args, **kwargs)
+
+    def load_history_and_summary(self, *args, **kwargs) -> tuple[list[dict], str, int]:
+        return self._store().load_history_and_summary(*args, **kwargs)
 
     def save_summary(self, *args, **kwargs) -> None:
         return self._store().save_summary(*args, **kwargs)

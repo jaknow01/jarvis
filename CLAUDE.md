@@ -103,8 +103,14 @@ entry point (REPL and Messenger both call it):
    `lib.runtime.history_window.build_chat_history`: the last N user/assistant pairs
    verbatim (`HISTORY_WINDOW_PAIRS`, default 3), prefixed by an incrementally-maintained
    running summary (system message, Polish, ≤ `HISTORY_SUMMARY_MAX_SENTENCES` sentences,
-   default 5) of everything older. Each turn folds only the just-evicted exchange into
-   the stored summary with one small LLM call (model `history_compressor`). Set
+   default 5) of everything older. `build_chat_history` is **read-only and LLM-free** — it
+   assembles `[summary?] + everything since summary_upto` and returns immediately, so the
+   turn never waits on compression. The fold (one small LLM call, model `history_compressor`,
+   folding only the just-evicted exchange) runs **off the critical path**: the engine kicks it
+   off as a fire-and-forget background task (`schedule_summary_fold`) in step 6, after the
+   reply is recorded. Its output only matters for the *next* turn; if a fold hasn't finished
+   by then, that turn shows the not-yet-folded exchanges verbatim (bounded to window + one
+   turn's lag) and the next fold catches up. Folds are coalesced per conversation. Set
    `HISTORY_COMPRESSION_ENABLED` falsy to fall back to replaying the full history.
 3. It builds a fresh coordinator (`create_coordinator_agent()`) and runs it:
    `coordinator.run(user_msg=text, chat_history=history, ctx=Context(coordinator))`.
@@ -113,7 +119,7 @@ entry point (REPL and Messenger both call it):
    `num_workers=4` per step). It **only gathers** — it never writes the user's reply.
    On a **live user turn** (`origin="user"`) with a transport `notify` callback, the
    coordinator is awaited via `_gather_with_progress_ping`, which watches its event
-   stream and — if the turn outlasts `PROGRESS_PING_AFTER_SECONDS` (default 7) — pushes
+   stream and — if the turn outlasts `PROGRESS_PING_AFTER_SECONDS` (default 20) — pushes
    **one** interim "still working" message naming the sub-agents already returned
    (templated Polish, no LLM; see `lib/runtime/progress.py`). Ordering is race-free: the
    final reply is only sent by the transport after `handle_message` returns, so the ping
@@ -124,7 +130,10 @@ entry point (REPL and Messenger both call it):
    in Polish.
 5. It persists the turn (user message + assistant reply) via `conversations.record_turn`,
    stamping the assistant row with the MLflow trace id (`last_trace_id()`, empty when
-   tracing is off), and returns the reply.
+   tracing is off).
+6. It schedules the rolling-summary fold as a background task (`schedule_summary_fold`, see
+   step 2) — off the critical path, so the reply above was never blocked on the compressor
+   LLM call — and returns the reply.
 
 Conversation continuity is **ours** (Postgres/JSON), not the OpenAI Responses API's
 `previous_response_id` — that mechanism, along with `RunConfig`/`Runner` and the run
@@ -202,7 +211,7 @@ place rather than removed.
 | `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
 | `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools |
-| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn. See `docs/MEMORY.md` |
+| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn (`memory.summary()`, cached with a short TTL — `MEMORY_SUMMARY_CACHE_TTL_SECONDS`, default 60s — and invalidated on writes, so it isn't a DB read on the hot path every turn). See `docs/MEMORY.md` |
 | `scheduler_agent` | Proactive cron jobs / reminders + conditional watches | JSON or Postgres store (`lib/domain/scheduler.py`): create/list/delete/update scheduled jobs; `create_watch` for conditional watches | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/runtime/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. **Conditional watches** (`kind="watch"`) poll a data source and notify once on a false→true edge — see below. See `docs/SCHEDULER.md` |
 
 ## Running it
@@ -284,7 +293,7 @@ tick interval in seconds, default 30; timezone for cron/`run_at`, default Europe
 Proactive delivery reuses `MESSENGER_PAGE_ACCESS_TOKEN`). See `docs/SCHEDULER.md`.
 `PROGRESS_PING_ENABLED` + `PROGRESS_PING_AFTER_SECONDS` (the interim "still working"
 ping on slow live turns: master switch — same falsy-parsing as `agent_enabled()`, default
-on; delay before the single ping fires in seconds, default 7. See `lib/runtime/progress.py`
+on; delay before the single ping fires in seconds, default 20. See `lib/runtime/progress.py`
 and the turn-flow note above).
 
 **Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
@@ -360,7 +369,9 @@ grow.
   to Postgres when `DATABASE_URL` is set, else `data/conversation_data/conversations.json`.
   Each conversation also carries the rolling-window `summary` + `summary_upto` coverage
   pointer (see the context-window note under "How a turn flows"); on Postgres these are
-  two `ADD COLUMN IF NOT EXISTS` columns on `conversations`.
+  two `ADD COLUMN IF NOT EXISTS` columns on `conversations`. The per-turn hot-path read
+  uses `load_history_and_summary()` — history + summary over a **single** connection —
+  rather than two separate `load_history`/`load_summary` round-trips.
   Migrate with `python -m app.db.migrate`.
   See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.

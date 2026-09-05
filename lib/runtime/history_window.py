@@ -13,6 +13,15 @@ LLM call (the model resolved via ``LLM_BY_AGENT["history_compressor"]`` — conf
 with ``AGENT_HISTORY_COMPRESSOR_MODEL`` / ``…_REASONING_EFFORT``, falling back to
 ``DEFAULT_MODEL``). We never recompute the whole summary from scratch.
 
+**The fold runs off the critical path.** ``build_chat_history`` is read-only and does
+**no** LLM call — it assembles ``[summary?] + everything since summary_upto`` and returns
+immediately, so the user's turn never waits on compression. The engine kicks off the fold
+as a fire-and-forget background task (``schedule_summary_fold``) *after* the reply is sent;
+its result only matters for the *next* turn's context. If a fold hasn't finished by the next
+turn, that turn simply shows the not-yet-folded exchanges verbatim (bounded: window + at
+most one turn's lag) and the next fold catches up. Folds are coalesced per conversation so
+overlapping turns never double-write the summary.
+
 State lives on the conversation (``summary`` + ``summary_upto``, the number of message
 rows already folded in), persisted by ``lib.domain.conversations`` across both the JSON
 and Postgres backends.
@@ -28,9 +37,11 @@ verbatim for this turn (nothing is lost from context), retrying the fold next tu
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from llama_index.core.llms import ChatMessage
 
@@ -166,40 +177,99 @@ async def build_chat_history(
     *,
     store=conversations,
     config: WindowConfig | None = None,
-    compressor=_llm_compress,
 ) -> list[ChatMessage]:
-    """Assemble the bounded ``chat_history`` for one turn (summary + verbatim window).
+    """Assemble the bounded ``chat_history`` for one turn — **read-only, no LLM call**.
 
-    Loads the channel's messages and running summary, folds any freshly-evicted
-    exchange into the summary (persisting it), and returns
-    ``[system: summary?] + last N pairs``. With compression disabled it returns the
-    full history verbatim (legacy behaviour). ``store`` and ``compressor`` are injectable
-    for testing.
+    Returns ``[system: summary?] + every message since summary_upto``: the running summary
+    (if any) followed verbatim by everything not yet folded into it (the last N pairs, plus
+    any exchanges that have aged out but whose background fold has not run yet — bounded to
+    window + one turn's lag in steady state). With compression disabled it returns the full
+    history verbatim (legacy behaviour). The actual folding is done off the critical path by
+    ``schedule_summary_fold`` after the reply is sent. ``store`` is injectable for testing.
     """
     cfg = config or load_config()
-    history = store.load_history(channel_key)
+    history, summary, summary_upto = store.load_history_and_summary(channel_key)
 
     if not cfg.enabled:
         return _to_chat_messages(history)
 
-    summary, summary_upto = store.load_summary(channel_key)
-    plan = plan_window(len(history), summary_upto, cfg.window_pairs)
-
-    verbatim_start = plan.verbatim_start
-    if plan.has_fold:
-        evicted = history[plan.fold_start:plan.fold_end]
-        try:
-            summary = await compressor(summary, evicted, cfg.max_sentences)
-            store.save_summary(channel_key, summary, plan.new_upto)
-        except Exception as e:  # noqa: BLE001 - compression must never break a turn
-            logger.error(
-                "history compression failed for %s (%s); showing un-summarised turns "
-                "verbatim this turn, will retry next turn", channel_key, e
-            )
-            verbatim_start = summary_upto  # keep evicted-but-unfolded msgs in context
+    start = min(max(0, summary_upto), len(history))
 
     messages: list[ChatMessage] = []
     if summary.strip():
         messages.append(ChatMessage(role="system", content=_SUMMARY_HEADER + summary.strip()))
-    messages.extend(_to_chat_messages(history[verbatim_start:]))
+    messages.extend(_to_chat_messages(history[start:]))
     return messages
+
+
+async def fold_summary(
+    channel_key: str,
+    *,
+    store=conversations,
+    config: WindowConfig | None = None,
+    compressor=_llm_compress,
+) -> bool:
+    """Fold any freshly-evicted exchange(s) into the running summary and persist it.
+
+    Reads the channel's current history + summary, and if anything has aged past the
+    verbatim window, compresses it onto the existing summary with one LLM call and saves the
+    new ``(summary, summary_upto)``. Returns True when a fold happened. Best-effort: a
+    compressor failure leaves the coverage pointer untouched (retried next turn) and returns
+    False — it must never surface to the caller. Injectable ``store``/``compressor`` for tests.
+    """
+    cfg = config or load_config()
+    if not cfg.enabled:
+        return False
+
+    history, summary, summary_upto = store.load_history_and_summary(channel_key)
+    plan = plan_window(len(history), summary_upto, cfg.window_pairs)
+    if not plan.has_fold:
+        return False
+
+    evicted = history[plan.fold_start:plan.fold_end]
+    try:
+        new_summary = await compressor(summary, evicted, cfg.max_sentences)
+    except Exception as e:  # noqa: BLE001 - compression must never break a turn
+        logger.error(
+            "history compression failed for %s (%s); leaving summary untouched, "
+            "will retry next turn", channel_key, e
+        )
+        return False
+    store.save_summary(channel_key, new_summary, plan.new_upto)
+    return True
+
+
+# Per-conversation in-flight fold tasks, so overlapping turns coalesce onto one fold
+# (a running fold reads fresh history and covers everything, so a second is redundant).
+_fold_tasks: dict[str, asyncio.Task] = {}
+
+
+def schedule_summary_fold(
+    channel_key: str,
+    *,
+    store=conversations,
+    config: WindowConfig | None = None,
+    compressor=_llm_compress,
+) -> Optional[asyncio.Task]:
+    """Kick off ``fold_summary`` as a fire-and-forget background task (keeps the compressor
+    LLM call off the turn's critical path). Coalesces per conversation: if a fold is already
+    running for ``channel_key``, returns it instead of starting another. Returns None when
+    compression is disabled. The engine calls this after the reply has been produced.
+    """
+    cfg = config or load_config()
+    if not cfg.enabled:
+        return None
+
+    existing = _fold_tasks.get(channel_key)
+    if existing is not None and not existing.done():
+        return existing
+
+    async def _run() -> None:
+        try:
+            await fold_summary(channel_key, store=store, config=cfg, compressor=compressor)
+        except Exception:  # noqa: BLE001 - background task must never crash the loop
+            logger.exception("Background summary fold failed for %s", channel_key)
+
+    task = asyncio.create_task(_run())
+    _fold_tasks[channel_key] = task
+    return task

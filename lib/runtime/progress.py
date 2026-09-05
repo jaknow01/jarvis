@@ -70,11 +70,11 @@ def ping_enabled() -> bool:
 
 
 def ping_after_seconds() -> float:
-    """Delay before the interim ping fires, ``PROGRESS_PING_AFTER_SECONDS`` (default 7)."""
+    """Delay before the interim ping fires, ``PROGRESS_PING_AFTER_SECONDS`` (default 20)."""
     raw = os.getenv("PROGRESS_PING_AFTER_SECONDS")
     if raw is None or raw.strip() == "":
-        return 7.0
+        return 20.0
     try:
         return float(raw)
     except ValueError:
-        return 7.0
+        return 20.0

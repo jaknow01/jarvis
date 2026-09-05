@@ -92,3 +92,20 @@ def test_backend_selection_defaults_to_json_without_database_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     from lib.domain.conversation import _select_backend, ConversationStore
     assert isinstance(_select_backend(), ConversationStore)
+
+
+def test_load_history_and_summary_matches_separate_reads(tmp_path):
+    s = _store(tmp_path)
+    s.record_turn("repl", "u0", "a0")
+    s.record_turn("repl", "u1", "a1")
+    s.save_summary("repl", "S", 2)
+    hist, summ, upto = s.load_history_and_summary("repl")
+    assert hist == s.load_history("repl")
+    assert (summ, upto) == s.load_summary("repl")
+    assert [m["content"] for m in hist] == ["u0", "a0", "u1", "a1"]
+    assert (summ, upto) == ("S", 2)
+
+
+def test_load_history_and_summary_absent_channel(tmp_path):
+    s = _store(tmp_path)
+    assert s.load_history_and_summary("nope") == ([], "", 0)

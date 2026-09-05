@@ -63,6 +63,27 @@ class PostgresConversationStore:
             return "", 0
         return (row[0] or ""), int(row[1] or 0)
 
+    def load_history_and_summary(self, channel_key: str) -> tuple[list[dict], str, int]:
+        """Return ``(history, summary, summary_upto)`` over a SINGLE connection — the
+        hot-path read the engine does each turn. Folds what used to be two separate
+        ``load_history`` + ``load_summary`` connections (each a connect/auth/close) into one:
+        one lookup for the conversation row (id + summary), one for its messages."""
+        with connection() as conn:
+            conv = conn.execute(
+                "SELECT id, summary, summary_upto FROM conversations WHERE channel_key = %s",
+                (channel_key,),
+            ).fetchone()
+            if not conv:
+                return [], "", 0
+            conv_id, summary, summary_upto = conv
+            rows = conn.execute(
+                "SELECT role, content FROM messages WHERE conversation_id = %s "
+                "ORDER BY turn_index, created_at",
+                (conv_id,),
+            ).fetchall()
+        history = [{"role": r[0], "content": r[1]} for r in rows]
+        return history, (summary or ""), int(summary_upto or 0)
+
     # -- writes ---------------------------------------------------------------
     def save_summary(self, channel_key: str, summary: str, summary_upto: int) -> None:
         """Persist the rolling summary + coverage pointer, creating the row if needed."""

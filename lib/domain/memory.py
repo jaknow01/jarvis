@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,20 @@ SUGGESTED_CATEGORIES = ["preferences", "facts", "habits", "interests", "routines
 VALID_SOURCES = ("user", "inferred")
 VALID_CONFIDENCE = ("high", "medium", "low")
 SUMMARY_CAP = 40
+
+
+def _summary_cache_ttl() -> float:
+    """TTL (seconds) for the coordinator's per-turn ``memory.summary()`` read, cached so it
+    isn't a Postgres round-trip on every turn's hot path. ``MEMORY_SUMMARY_CACHE_TTL_SECONDS``;
+    default 60. Set to 0 to disable caching (always read the store). Writes through this
+    process invalidate the cache immediately, so a just-saved fact still shows next turn."""
+    raw = os.getenv("MEMORY_SUMMARY_CACHE_TTL_SECONDS")
+    if raw is None or raw.strip() == "":
+        return 60.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 60.0
 
 
 def _now() -> str:
@@ -165,11 +181,17 @@ class _MemoryProxy:
 
     def __init__(self):
         self._impl = None
+        # Short-TTL cache of summary() (the coordinator reads it every turn to build its
+        # prompt). Keyed by cap -> (expiry_monotonic, text). Cleared on any write below.
+        self._summary_cache: dict[int, tuple[float, str]] = {}
 
     def _store(self):
         if self._impl is None:
             self._impl = _select_backend()
         return self._impl
+
+    def _invalidate_summary(self) -> None:
+        self._summary_cache.clear()
 
     def all(self) -> list[dict]:
         return self._store().all()
@@ -178,15 +200,29 @@ class _MemoryProxy:
         return self._store().by_category(category)
 
     def summary(self, cap: int = SUMMARY_CAP) -> str:
-        return self._store().summary(cap)
+        """Return the memory profile, served from a short-TTL cache to keep it off the
+        per-turn hot path (see ``_summary_cache_ttl``). Writes invalidate the cache."""
+        ttl = _summary_cache_ttl()
+        if ttl <= 0:
+            return self._store().summary(cap)
+        now = time.monotonic()
+        hit = self._summary_cache.get(cap)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+        val = self._store().summary(cap)
+        self._summary_cache[cap] = (now + ttl, val)
+        return val
 
     def add(self, *args, **kwargs) -> dict:
+        self._invalidate_summary()
         return self._store().add(*args, **kwargs)
 
     def update(self, *args, **kwargs):
+        self._invalidate_summary()
         return self._store().update(*args, **kwargs)
 
     def delete(self, *args, **kwargs) -> bool:
+        self._invalidate_summary()
         return self._store().delete(*args, **kwargs)
 
 
