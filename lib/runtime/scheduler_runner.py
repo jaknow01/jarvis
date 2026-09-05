@@ -161,13 +161,22 @@ async def _run_watch(store, evaluator: PredicateEvaluator, deliver, job: dict,
                      now: datetime) -> None:
     """Poll one conditional watch: fetch source -> evaluate predicate -> edge-trigger.
 
-    Delivers the watch's message (stored in ``prompt``) exactly once on the predicate's
-    false->true transition (compared to ``last_result``), then terminates the watch
-    (single-condition v1). A ``unknown`` read (unavailable source / evaluator failure)
-    delivers nothing, leaves ``last_result`` untouched, and re-arms for the next poll.
-    A delivery failure does NOT consume the edge — ``last_result`` stays put so the next
-    poll retries the notification."""
+    Delivers the watch's message (stored in ``prompt``) on the predicate's false->true
+    transition (compared to ``last_result``). Watch v2:
+
+    - Change detection: the previous poll's raw reading (``last_data``) is injected into the
+      predicate's input as ``data["_previous"]`` (None on the first poll), so a predicate can
+      compare current vs previous ("new points appeared" == current > previous). After each
+      successful poll the current reading is remembered as ``last_data`` for the next one.
+    - Repeating: when ``repeating`` is set the watch stays armed after firing (notifies on
+      every future edge); otherwise it completes after the first fire (backward-compatible).
+
+    An ``unknown`` read (unavailable source / evaluator failure) delivers nothing, leaves
+    ``last_result``/``last_data`` untouched, and re-arms. A delivery failure does NOT consume
+    the edge — neither ``last_result`` nor ``last_data`` is advanced, so the next poll retries
+    the notification against the same baseline."""
     interval = int(job.get("poll_interval") or 0) or 1
+    repeating = bool(job.get("repeating"))
 
     def _rearm() -> None:
         job["last_run_at"] = now.isoformat()
@@ -177,31 +186,44 @@ async def _run_watch(store, evaluator: PredicateEvaluator, deliver, job: dict,
     state, data = await fetch_source(job.get("source"), job.get("params"))
     result: Optional[bool] = None  # None == unknown
     if state == "ok":
+        # Inject the previous reading so the predicate can detect a change (v2). We copy so
+        # the stored `data` stays the raw source reading, not the augmented one.
+        eval_data = dict(data or {})
+        eval_data["_previous"] = job.get("last_data")
         try:
-            result = bool(await evaluator.evaluate(job["check_code"], data or {}))
+            result = bool(await evaluator.evaluate(job["check_code"], eval_data))
         except Exception:
             logger.exception("Watch %s: predicate evaluation failed (-> unknown)", job["id"])
             result = None
 
-    # Edge false->true: deliver once, then complete.
+    # Edge false->true: deliver.
     if result is True and job.get("last_result") is not True:
         try:
             await deliver(job, job["prompt"])
         except Exception:
+            # Edge NOT consumed and baseline NOT advanced — retry the notification next poll.
             logger.exception("Watch %s: delivery failed; will retry next poll", job["id"])
-            _rearm()  # edge NOT consumed — retry the notification next poll
+            _rearm()
             return
         job["last_result"] = True
-        job["status"] = "done"
-        job["next_run_at"] = None
-        job["last_run_at"] = now.isoformat()
-        logger.info("Watch %s fired and completed", job["id"])
-        store.save(job)
+        job["last_data"] = data  # remember this reading as the new baseline
+        if repeating:
+            logger.info("Watch %s fired (repeating; stays armed)", job["id"])
+            _rearm()
+        else:
+            job["status"] = "done"
+            job["next_run_at"] = None
+            job["last_run_at"] = now.isoformat()
+            logger.info("Watch %s fired and completed", job["id"])
+            store.save(job)
         return
 
-    # No fire: record a definite false; leave last_result untouched on unknown. Re-arm.
+    # No fire: record a definite false and advance the baseline; leave both untouched on
+    # unknown. Re-arm.
     if result is not None:
         job["last_result"] = result
+    if state == "ok":
+        job["last_data"] = data
     _rearm()
 
 

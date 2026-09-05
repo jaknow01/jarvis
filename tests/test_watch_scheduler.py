@@ -78,4 +78,4 @@ def test_public_view_hides_predicate_and_params():
 
 
 def test_describe_schedule_for_watch():
-    assert describe_schedule(_watch(poll_interval=30)) == "watch on 'finance.fx' every 30s"
+    assert describe_schedule(_watch(poll_interval=30)) == "watch on 'finance.fx' every 30s (one-shot)"

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _COLS = (
     "id, prompt, channel, target, conversation_id, kind, cron_expr, run_at, "
     "next_run_at, until_spec, max_runs, run_count, last_run_at, status, created_at, "
-    "source, params, check_code, poll_interval, last_result"
+    "source, params, check_code, poll_interval, last_result, last_data, repeating"
 )
 
 # Time fields stored as TIMESTAMPTZ (converted to/from ISO strings at the boundary).
@@ -57,6 +57,8 @@ def _row(r) -> dict:
         "check_code": r[17],
         "poll_interval": r[18],
         "last_result": r[19],
+        "last_data": r[20],
+        "repeating": r[21],
     }
 
 
@@ -67,6 +69,7 @@ def _to_ts(value):
 
 def _params(job: dict) -> tuple:
     watch_params = job.get("params")
+    last_data = job.get("last_data")
     return (
         job["id"], job["prompt"], job["channel"], job.get("target"),
         job["conversation_id"], job["kind"], job.get("cron_expr"),
@@ -75,6 +78,7 @@ def _params(job: dict) -> tuple:
         job.get("status", "active"), _to_ts(job.get("created_at")),
         job.get("source"), Json(watch_params) if watch_params is not None else None,
         job.get("check_code"), job.get("poll_interval"), job.get("last_result"),
+        Json(last_data) if last_data is not None else None, bool(job.get("repeating", False)),
     )
 
 
@@ -127,7 +131,7 @@ class PostgresJobStore:
             conn.execute(
                 f"INSERT INTO scheduled_jobs ({_COLS}) VALUES "
                 "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s, %s, %s, %s, %s)",
+                "%s, %s, %s, %s, %s, %s, %s)",
                 _params(job),
             )
         return job
@@ -138,7 +142,7 @@ class PostgresJobStore:
             conn.execute(
                 f"INSERT INTO scheduled_jobs ({_COLS}) VALUES "
                 "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s, %s, %s, %s, %s) "
+                "%s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (id) DO UPDATE SET "
                 "prompt = EXCLUDED.prompt, channel = EXCLUDED.channel, "
                 "target = EXCLUDED.target, conversation_id = EXCLUDED.conversation_id, "
@@ -148,7 +152,8 @@ class PostgresJobStore:
                 "run_count = EXCLUDED.run_count, last_run_at = EXCLUDED.last_run_at, "
                 "status = EXCLUDED.status, source = EXCLUDED.source, "
                 "params = EXCLUDED.params, check_code = EXCLUDED.check_code, "
-                "poll_interval = EXCLUDED.poll_interval, last_result = EXCLUDED.last_result",
+                "poll_interval = EXCLUDED.poll_interval, last_result = EXCLUDED.last_result, "
+                "last_data = EXCLUDED.last_data, repeating = EXCLUDED.repeating",
                 _params(job),
             )
         return job

@@ -123,6 +123,7 @@ async def prepare_watch(
     poll_interval: int,
     intent: str,
     params: Optional[dict] = None,
+    repeat: bool = False,
 ) -> dict:
     """
     Description:
@@ -151,6 +152,10 @@ async def prepare_watch(
         The condition as `def check(data): return <bool>` in Starlark (a Python dialect:
         no import / try-except / f-strings / while). Use `get(data, "a.b", default)` for
         safe access. Example: `def check(data):\n    return data["rate"] < 3.9`.
+        CHANGE DETECTION: to fire when a value CHANGED / a NEW thing appeared (e.g. "daj znać,
+        gdy przybędą punkty"), compare against the PREVIOUS reading, available as
+        `data["_previous"]` (the last poll's data, or None on the very first poll). Guard the
+        None: `def check(data):\n    prev = get(data, "_previous")\n    if prev == None:\n        return False\n    return get(data,"points",0) > get(prev,"points",0)`.
 
     poll_interval: int
         How often to check, in seconds (positive).
@@ -161,6 +166,12 @@ async def prepare_watch(
 
     params: Optional[dict]
         Parameters for the chosen source.
+
+    repeat: bool = False
+        False (default): notify ONCE on the first false->true edge, then the watch turns
+        itself off. True: keep the watch armed and notify EVERY time the condition becomes
+        true again — required for ongoing "notify whenever X changes / new points appear"
+        requests (pair it with a change-detecting check_code using `_previous`).
 
     Output:
         On success: {"prepared": {..., "check_code": <validated>, "current_result": <bool>,
@@ -181,7 +192,7 @@ async def prepare_watch(
 
     res = await author_watch(
         check_code, intent, source, params or {}, resolve_evaluator(),
-        poll_interval=int(poll_interval),
+        poll_interval=int(poll_interval), repeat=bool(repeat),
     )
     if not res.ok:
         return {
@@ -202,10 +213,11 @@ async def prepare_watch(
             "source": source,
             "params": params or {},
             "poll_interval": poll_interval,
+            "repeat": bool(repeat),          # pass this same value to create_watch
             "check_code": res.code,          # validated (possibly repaired) code
             "current_result": res.smoke_result,
             "explanation": res.explanation,  # plain-language behaviour of the predicate
-            "data_sample": res.sample,       # real keys/values the predicate ran against
+            "data_sample": res.sample,       # real keys/values (incl. _previous) the predicate ran against
             "repairs_used": res.attempts,
         },
         "note": (
@@ -228,6 +240,7 @@ async def create_watch(
     check_code: str,
     poll_interval: int,
     params: Optional[dict] = None,
+    repeat: bool = False,
 ) -> dict:
     """
     Description:
@@ -257,6 +270,11 @@ async def create_watch(
     params: Optional[dict]
         Parameters for the chosen source (same as in `prepare_watch`).
 
+    repeat: bool = False
+        Pass the SAME value returned by prepare_watch. False = notify once then stop;
+        True = stay armed and notify on every future false->true edge (for ongoing
+        "notify whenever X changes / new points appear" watches).
+
     Output:
         JSON with the armed watch (id, human-readable schedule, next check time) — never the
         raw delivery target or the predicate. On invalid input or code that fails
@@ -276,7 +294,7 @@ async def create_watch(
         job = build_watch(
             message=message, source=source, params=params or {}, check_code=check_code,
             poll_interval=poll_interval, channel=channel, target=target,
-            conversation_id=conv,
+            conversation_id=conv, repeat=bool(repeat),
         )
     except ValueError as e:
         return {"Error": str(e)}

@@ -133,6 +133,16 @@ SCHEMA_STATEMENTS = [
     """
     ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS last_result BOOLEAN
     """,
+    # Watch v2: change-detection + repeating. `last_data` remembers the previous poll's raw
+    # source reading so a predicate can compare against it (injected as data["_previous"]),
+    # enabling "notify when X changed / new points appeared". `repeating` keeps the watch armed
+    # after it fires (notify on every future edge) instead of completing after the first.
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS last_data JSONB
+    """,
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS repeating BOOLEAN NOT NULL DEFAULT FALSE
+    """,
     # Conversation history (owned by us now that previous_response_id / the Responses
     # API continuity is gone). A conversation is identified by a stable per-channel
     # key (e.g. 'repl', 'messenger:{psid}') so channels/users never share history.

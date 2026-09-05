@@ -97,13 +97,16 @@ utworzenie:  Ty ──► coordinator ──► scheduler_agent.create_watch(
                         message, source, check_code, poll_interval, params)
                                           ▼
                                      store (kind="watch": source, params, check_code,
-                                            poll_interval, last_result)
+                                            poll_interval, last_result, last_data, repeating)
 
 polling:     pętla schedulera, co tick dla due-watcha:
    1. FETCH   watch_sources.fetch_source(source, params) → ("ok", data) | ("unknown", None)
-   2. EVAL    evaluator.evaluate(check_code, data) → bool           (kontrakt {code,data}->bool)
+   2. EVAL    evaluator.evaluate(check_code, {**data, "_previous": last_data}) → bool
+              (kontrakt {code,data}->bool; poprzedni odczyt wstrzyknięty jako data["_previous"])
    3. EDGE    dostawa message TYLKO na przejściu last_result: false→true
-   4. KONIEC  po wyzwoleniu status="done" (v1 jednowarunkowy); inaczej re-arm o poll_interval
+   4. STAN    po udanym pollu zapamiętaj bieżący odczyt jako last_data (baseline zmian)
+   5. KONIEC  repeating=False → po wyzwoleniu status="done"; repeating=True → zostaje aktywny
+              (powiadamia na KAŻDEJ kolejnej krawędzi false→true); inaczej re-arm o poll_interval
 ```
 
 - **Trzy stany odczytu:** `true` / `false` / **`unknown`** (źródło niedostępne lub zwróciło
@@ -129,8 +132,18 @@ polling:     pętla schedulera, co tick dla due-watcha:
   W tym change to **in-process STUB** (wykonuje predykat jako Python; **NIE jest granicą
   bezpieczeństwa**, tylko dev/test). Produkcyjny, izolowany ewaluator (Starlark w kontenerze)
   dostarcza osobny change `watch-sandbox`; generowanie/walidacja `check_code` — `watch-authoring`.
-- **Zakres v1:** watche **jednowarunkowe** (jeden warunek → jedna wiadomość → koniec).
-  Sekwencje/FSM (np. „koniec 1. połowy, potem 2.") — kolejna iteracja.
+- **Wykrywanie zmian + powtarzanie (v2):** poprzedni odczyt jest wstrzykiwany do predykatu
+  jako `data["_previous"]` (None przy pierwszym pollu), więc predykat może wykryć **zmianę**
+  („przybyły punkty" == `get(data,"points",0) > get(get(data,"_previous"),"points",0)`).
+  Flaga `repeating=True` (na `prepare_watch`/`create_watch`) utrzymuje watch **uzbrojony** po
+  wyzwoleniu — powiadamia na każdej kolejnej krawędzi (a nie raz-i-koniec). To jest właściwy
+  mechanizm dla „sprawdzaj co X min i daj znać, gdy coś się zmieni". `repeating=False`
+  (domyślnie) = watch jednorazowy, jak w v1. Baseline (`last_data`) i błąd dostawy: krawędź
+  **nie** jest konsumowana, dopóki wiadomość nie dojdzie — baseline też się nie przesuwa.
+- **Routing (ważne):** „co X minut, ale TYLKO gdy…" to **watch** (`poll_interval=X`), nie cron.
+  Cron dostarcza co tik bezwarunkowo i zalewa użytkownika — nigdy nie zamieniaj żądania
+  warunkowego na częsty cron tylko dlatego, że padł okres.
+- Sekwencje/FSM (np. „koniec 1. połowy, potem 2.") — kolejna iteracja.
 
 ### Authoring predykatu (dwa kroki, potwierdzenie przed uzbrojeniem)
 

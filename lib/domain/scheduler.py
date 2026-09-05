@@ -110,7 +110,8 @@ def is_expired(job: dict, candidate: Optional[datetime]) -> bool:
 def describe_schedule(job: dict) -> str:
     """Human-readable one-liner for a job's schedule (internal / for the composer)."""
     if job.get("kind") == "watch":
-        return f"watch on '{job.get('source')}' every {job.get('poll_interval')}s"
+        base = f"watch on '{job.get('source')}' every {job.get('poll_interval')}s"
+        return base + (" (repeating)" if job.get("repeating") else " (one-shot)")
     if job.get("kind") == "cron":
         base = f"cron '{job['cron_expr']}' ({os.getenv('SCHEDULER_TIMEZONE') or DEFAULT_TIMEZONE})"
         extras = []
@@ -177,15 +178,19 @@ def build_job(prompt: str, channel: str, target: Optional[str], conversation_id:
 
 def build_watch(message: str, source: str, params: dict, check_code: str,
                 poll_interval: int, channel: str, target: Optional[str],
-                conversation_id: str) -> dict:
+                conversation_id: str, repeat: bool = False) -> dict:
     """Validate inputs and assemble a conditional-watch job (kind="watch").
 
     A watch polls ``source`` every ``poll_interval`` seconds, evaluates ``check_code``
-    against the fetched data, and delivers ``message`` once on the predicate's false→true
-    transition (edge-trigger via ``last_result``). ``check_code`` is stored **verbatim**;
-    its generation/validation belong to the ``watch-authoring`` change. The delivery text
-    reuses the ``prompt`` column so both storage backends share one shape. Raises
-    ``ValueError`` on invalid input."""
+    against the fetched data, and delivers ``message`` on the predicate's false→true
+    transition (edge-trigger via ``last_result``). ``check_code`` is stored **verbatim**.
+
+    Watch v2: the previous poll's raw reading is remembered in ``last_data`` and injected into
+    the predicate as ``data["_previous"]`` (None on the first poll), so a predicate can detect
+    a CHANGE ("new points appeared" == current > previous). ``repeat`` keeps the watch armed
+    after it fires — notifying on every future edge — instead of completing after the first
+    (the default, backward-compatible one-shot). The delivery text reuses the ``prompt``
+    column so both storage backends share one shape. Raises ``ValueError`` on invalid input."""
     message = (message or "").strip()
     source = (source or "").strip()
     check_code = (check_code or "").strip()
@@ -230,6 +235,8 @@ def build_watch(message: str, source: str, params: dict, check_code: str,
         "check_code": check_code,
         "poll_interval": poll_interval,
         "last_result": None,  # tri-state: None=unknown, False, True
+        "last_data": None,    # previous poll's raw reading (for change detection via _previous)
+        "repeating": bool(repeat),  # keep armed after firing (notify on every future edge)
     }
 
 
