@@ -71,6 +71,9 @@ class FakeStore:
     def load_summary(self, _key):
         return self._summary, self._upto
 
+    def load_history_and_summary(self, _key):
+        return list(self._history), self._summary, self._upto
+
     def save_summary(self, _key, summary, upto):
         self._summary, self._upto = summary, upto
         self.saved.append((summary, upto))

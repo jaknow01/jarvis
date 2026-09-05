@@ -88,3 +88,59 @@ def test_summary_groups_by_category_and_tags_inferred(tmp_path):
     assert "[habits]" in summary
     assert "Prefers transit" in summary
     assert "(inferred)" in summary
+
+
+# -- summary() TTL cache on the proxy (keeps it off the per-turn hot path) ------------
+class _CountingBackend:
+    """Fake backend counting summary() reads; add/update/delete return trivially."""
+    def __init__(self):
+        self.summary_calls = 0
+        self._value = "V0"
+
+    def summary(self, cap=40):
+        self.summary_calls += 1
+        return self._value
+
+    def add(self, *a, **k):
+        self._value = "V1"
+        return {}
+
+    def update(self, *a, **k):
+        return {}
+
+    def delete(self, *a, **k):
+        return True
+
+
+def _proxy_with(backend, monkeypatch):
+    from lib.domain.memory import _MemoryProxy
+    p = _MemoryProxy()
+    p._impl = backend  # bypass lazy backend selection
+    return p
+
+
+def test_summary_cache_serves_from_cache_within_ttl(monkeypatch):
+    monkeypatch.setenv("MEMORY_SUMMARY_CACHE_TTL_SECONDS", "60")
+    be = _CountingBackend()
+    p = _proxy_with(be, monkeypatch)
+    assert p.summary() == "V0"
+    assert p.summary() == "V0"
+    assert be.summary_calls == 1  # second read served from cache
+
+
+def test_summary_cache_invalidated_on_write(monkeypatch):
+    monkeypatch.setenv("MEMORY_SUMMARY_CACHE_TTL_SECONDS", "60")
+    be = _CountingBackend()
+    p = _proxy_with(be, monkeypatch)
+    assert p.summary() == "V0"
+    p.add("something new")           # write must invalidate the cache
+    assert p.summary() == "V1"       # fresh read reflects the write
+    assert be.summary_calls == 2
+
+
+def test_summary_cache_disabled_with_zero_ttl(monkeypatch):
+    monkeypatch.setenv("MEMORY_SUMMARY_CACHE_TTL_SECONDS", "0")
+    be = _CountingBackend()
+    p = _proxy_with(be, monkeypatch)
+    p.summary(); p.summary()
+    assert be.summary_calls == 2  # no caching → every call hits the store

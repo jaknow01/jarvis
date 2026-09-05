@@ -188,12 +188,11 @@ async def build_chat_history(
     ``schedule_summary_fold`` after the reply is sent. ``store`` is injectable for testing.
     """
     cfg = config or load_config()
-    history = store.load_history(channel_key)
+    history, summary, summary_upto = store.load_history_and_summary(channel_key)
 
     if not cfg.enabled:
         return _to_chat_messages(history)
 
-    summary, summary_upto = store.load_summary(channel_key)
     start = min(max(0, summary_upto), len(history))
 
     messages: list[ChatMessage] = []
@@ -222,8 +221,7 @@ async def fold_summary(
     if not cfg.enabled:
         return False
 
-    history = store.load_history(channel_key)
-    summary, summary_upto = store.load_summary(channel_key)
+    history, summary, summary_upto = store.load_history_and_summary(channel_key)
     plan = plan_window(len(history), summary_upto, cfg.window_pairs)
     if not plan.has_fold:
         return False

@@ -211,7 +211,7 @@ place rather than removed.
 | `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
 | `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools |
-| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn. See `docs/MEMORY.md` |
+| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn (`memory.summary()`, cached with a short TTL — `MEMORY_SUMMARY_CACHE_TTL_SECONDS`, default 60s — and invalidated on writes, so it isn't a DB read on the hot path every turn). See `docs/MEMORY.md` |
 | `scheduler_agent` | Proactive cron jobs / reminders + conditional watches | JSON or Postgres store (`lib/domain/scheduler.py`): create/list/delete/update scheduled jobs; `create_watch` for conditional watches | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/runtime/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. **Conditional watches** (`kind="watch"`) poll a data source and notify once on a false→true edge — see below. See `docs/SCHEDULER.md` |
 
 ## Running it
@@ -369,7 +369,9 @@ grow.
   to Postgres when `DATABASE_URL` is set, else `data/conversation_data/conversations.json`.
   Each conversation also carries the rolling-window `summary` + `summary_upto` coverage
   pointer (see the context-window note under "How a turn flows"); on Postgres these are
-  two `ADD COLUMN IF NOT EXISTS` columns on `conversations`.
+  two `ADD COLUMN IF NOT EXISTS` columns on `conversations`. The per-turn hot-path read
+  uses `load_history_and_summary()` — history + summary over a **single** connection —
+  rather than two separate `load_history`/`load_summary` round-trips.
   Migrate with `python -m app.db.migrate`.
   See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
   Real device keys / preferences live there and are not committed.
