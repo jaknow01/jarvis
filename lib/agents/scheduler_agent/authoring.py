@@ -45,6 +45,10 @@ STARLARK_RULES = (
     "nested access, and standard functions (len, min, max, sorted, any, all, ...).\n"
     "NOT allowed (Starlark lacks them): import, try/except, f-strings, while loops, "
     "recursion, classes, generators, or any I/O. `data` is the fetched source dict.\n"
+    "CHANGE DETECTION: `data[\"_previous\"]` holds the PREVIOUS poll's data (or None on the "
+    "first poll). To fire on a change/increase, compare current vs previous and guard the "
+    "None, e.g. prev = get(data, \"_previous\"); if prev == None: return False; then compare "
+    "get(data, \"x\", 0) to get(prev, \"x\", 0).\n"
     "Output ONLY the Starlark code for `def check(data)`, no prose, no markdown fences."
 )
 
@@ -114,13 +118,24 @@ async def llm_repair(code: str, error: str, intent: str) -> str:
 
 
 # The runtime semantics the explainer must convey but cannot read from the code alone.
-_WATCH_RUNTIME_FACTS = (
-    "How the watch runs (fixed by the runtime, NOT visible in the code): the predicate is "
-    "evaluated every `poll_interval` seconds against a freshly fetched data sample; the user "
-    "is notified EXACTLY ONCE, at the first moment the predicate flips from false to true, and "
-    "then the watch turns itself off. It does NOT keep firing while the condition stays true, "
-    "and it does NOT re-arm after firing."
-)
+def _watch_runtime_facts(repeat: bool = False) -> str:
+    common = (
+        "How the watch runs (fixed by the runtime, NOT visible in the code): the predicate is "
+        "evaluated every `poll_interval` seconds against a freshly fetched data sample; the user "
+        "is notified at the moment the predicate flips from false to true. The previous poll's "
+        "reading is available to the predicate as data[\"_previous\"] (None on the first poll), "
+        "so it can detect changes. "
+    )
+    if repeat:
+        return common + (
+            "This is a REPEATING watch: it stays armed after firing and notifies AGAIN on every "
+            "future false->true edge (it does not notify while the condition stays continuously "
+            "true — only on each fresh transition)."
+        )
+    return common + (
+        "The user is notified EXACTLY ONCE, at the first false->true transition, and then the "
+        "watch turns itself off (it does NOT keep firing and does NOT re-arm)."
+    )
 
 
 def truncate_sample(data, *, max_chars: int = 1200):
@@ -148,7 +163,7 @@ def truncate_sample(data, *, max_chars: int = 1200):
 
 async def llm_explain(
     code: str, intent: str, source: str, params: Optional[dict], poll_interval: int,
-    sample=None,
+    sample=None, repeat: bool = False,
 ) -> str:
     """Ask the coder model to describe, in plain user-facing Polish, what the VALIDATED
     predicate actually does over time — read from the code, not from the intent.
@@ -168,7 +183,7 @@ async def llm_explain(
         "behaviour diverges from the intent (e.g. it would fire far more often than the user "
         "wants, or ignores a limit they asked for), say so plainly in a final sentence starting "
         "with 'Uwaga:'. Be concrete and short (2-4 sentences). No code, no markdown.\n\n"
-        + _WATCH_RUNTIME_FACTS
+        + _watch_runtime_facts(repeat)
     )
     sample_block = (
         f"\nLive sample of the data the predicate runs against (real keys/values now):\n{sample}\n"
@@ -237,8 +252,11 @@ async def smoke_test(
     state, data = await fetch_source(source, params)
     if state != "ok":
         return "unknown", None, "source data is currently unavailable", None
-    result, err = await evaluator.evaluate_checked(code, data or {})
-    return "ok", result, err, truncate_sample(data or {})
+    # Inject the change-detection baseline key the runtime will provide (None on first poll),
+    # so predicates that read data["_previous"] validate/smoke-run and the model sees the key.
+    sample_data = {**(data or {}), "_previous": None}
+    result, err = await evaluator.evaluate_checked(code, sample_data)
+    return "ok", result, err, truncate_sample(sample_data)
 
 
 async def author_watch(
@@ -249,6 +267,7 @@ async def author_watch(
     evaluator,
     *,
     poll_interval: int = 0,
+    repeat: bool = False,
     repair: Callable[[str, str, str], Awaitable[str]] = llm_repair,
     attempts_cap: Optional[int] = None,
 ) -> AuthoringResult:
@@ -269,7 +288,7 @@ async def author_watch(
     # passed so the explanation (and any 'Uwaga:' divergence flag) is grounded in real keys.
     try:
         res.explanation = await llm_explain(
-            res.code, intent, source, params, poll_interval, sample=res.sample
+            res.code, intent, source, params, poll_interval, sample=res.sample, repeat=repeat
         )
     except Exception as e:  # noqa: BLE001 - explanation is best-effort, never fatal
         logger.warning("watch predicate explanation failed: %s", e)

@@ -37,6 +37,8 @@ from lib.runtime import (
     scheduler_enabled,
     run_fpl_cache_loop,
     fpl_cache_refresh_enabled,
+    run_observations_loop,
+    observations_enabled,
     setup_tracing,
 )
 
@@ -81,10 +83,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("FPL cache refresh disabled via FPL_CACHE_REFRESH_ENABLED")
 
+    # Daily time-series collectors (finance @23:00, FPL league snapshot @04:00) that populate
+    # the observations store so the assistant can analyze data over time, not just snapshots.
+    observations_task = None
+    if observations_enabled():
+        observations_task = asyncio.create_task(run_observations_loop())
+        logger.info("Observations collector loop task started")
+    else:
+        logger.info("Observations collectors disabled via OBSERVATIONS_ENABLED")
+
     logger.info("Messenger webhook ready")
     yield
 
-    for task in (scheduler_task, fpl_cache_task):
+    for task in (scheduler_task, fpl_cache_task, observations_task):
         if task:
             task.cancel()
             try:

@@ -123,6 +123,7 @@ async def prepare_watch(
     poll_interval: int,
     intent: str,
     params: Optional[dict] = None,
+    repeat: bool = False,
 ) -> dict:
     """
     Description:
@@ -151,6 +152,10 @@ async def prepare_watch(
         The condition as `def check(data): return <bool>` in Starlark (a Python dialect:
         no import / try-except / f-strings / while). Use `get(data, "a.b", default)` for
         safe access. Example: `def check(data):\n    return data["rate"] < 3.9`.
+        CHANGE DETECTION: to fire when a value CHANGED / a NEW thing appeared (e.g. "daj znać,
+        gdy przybędą punkty"), compare against the PREVIOUS reading, available as
+        `data["_previous"]` (the last poll's data, or None on the very first poll). Guard the
+        None: `def check(data):\n    prev = get(data, "_previous")\n    if prev == None:\n        return False\n    return get(data,"points",0) > get(prev,"points",0)`.
 
     poll_interval: int
         How often to check, in seconds (positive).
@@ -161,6 +166,12 @@ async def prepare_watch(
 
     params: Optional[dict]
         Parameters for the chosen source.
+
+    repeat: bool = False
+        False (default): notify ONCE on the first false->true edge, then the watch turns
+        itself off. True: keep the watch armed and notify EVERY time the condition becomes
+        true again — required for ongoing "notify whenever X changes / new points appear"
+        requests (pair it with a change-detecting check_code using `_previous`).
 
     Output:
         On success: {"prepared": {..., "check_code": <validated>, "current_result": <bool>,
@@ -181,7 +192,7 @@ async def prepare_watch(
 
     res = await author_watch(
         check_code, intent, source, params or {}, resolve_evaluator(),
-        poll_interval=int(poll_interval),
+        poll_interval=int(poll_interval), repeat=bool(repeat),
     )
     if not res.ok:
         return {
@@ -202,10 +213,11 @@ async def prepare_watch(
             "source": source,
             "params": params or {},
             "poll_interval": poll_interval,
+            "repeat": bool(repeat),          # pass this same value to create_watch
             "check_code": res.code,          # validated (possibly repaired) code
             "current_result": res.smoke_result,
             "explanation": res.explanation,  # plain-language behaviour of the predicate
-            "data_sample": res.sample,       # real keys/values the predicate ran against
+            "data_sample": res.sample,       # real keys/values (incl. _previous) the predicate ran against
             "repairs_used": res.attempts,
         },
         "note": (
@@ -228,6 +240,7 @@ async def create_watch(
     check_code: str,
     poll_interval: int,
     params: Optional[dict] = None,
+    repeat: bool = False,
 ) -> dict:
     """
     Description:
@@ -257,6 +270,11 @@ async def create_watch(
     params: Optional[dict]
         Parameters for the chosen source (same as in `prepare_watch`).
 
+    repeat: bool = False
+        Pass the SAME value returned by prepare_watch. False = notify once then stop;
+        True = stay armed and notify on every future false->true edge (for ongoing
+        "notify whenever X changes / new points appear" watches).
+
     Output:
         JSON with the armed watch (id, human-readable schedule, next check time) — never the
         raw delivery target or the predicate. On invalid input or code that fails
@@ -276,7 +294,7 @@ async def create_watch(
         job = build_watch(
             message=message, source=source, params=params or {}, check_code=check_code,
             poll_interval=poll_interval, channel=channel, target=target,
-            conversation_id=conv,
+            conversation_id=conv, repeat=bool(repeat),
         )
     except ValueError as e:
         return {"Error": str(e)}
@@ -290,16 +308,19 @@ async def create_watch(
 async def list_scheduled_jobs(ctx: Context) -> dict:
     """
     Description:
-        List the user's active scheduled jobs (reminders and recurring tasks) for the
-        current conversation, with their schedules and next run times. Use it to
-        answer "co mam zaplanowane", or before deleting/updating a job to find its id.
+        List ALL the user's active scheduled items for the current conversation — one-off
+        reminders, recurring briefs (cron) AND conditional watches — each with its id,
+        `kind` ("once"/"cron"/"watch"), schedule and next run time. Use it to answer "co mam
+        zaplanowane", and ALWAYS call it first before cancelling anything, to get the exact id
+        (watches are included here — a "przestań mnie powiadamiać" request is cancelled by
+        finding the matching watch and deleting it).
 
     Parameters:
     ctx : Context
         Context in which the tool operates.
 
     Output:
-        JSON with the list of active jobs (id, prompt, schedule, next run) and count.
+        JSON with the list of active items (id, kind, prompt, schedule, next run) and count.
     """
     _, _, conv = _channel_from_ctx(ctx)
     jobs = [scheduler_public_view(j) for j in scheduler_store.for_conversation(conv)]
@@ -311,21 +332,49 @@ async def list_scheduled_jobs(ctx: Context) -> dict:
 async def delete_scheduled_job(ctx: Context, job_id: str) -> dict:
     """
     Description:
-        Cancel a scheduled job by its id (from list_scheduled_jobs). Use it for
-        "odwołaj przypomnienie", "przestań mi wysyłać...", etc.
+        Cancel a scheduled item by its id — works for ANY kind: one-off reminders, recurring
+        briefs AND conditional watches. This is how you STOP a watch / "przestań mnie
+        powiadamiać", "odwołaj przypomnienie", "wyłącz to". Get the id from
+        list_scheduled_jobs first; a unique id-prefix also works.
 
     Parameters:
     ctx : Context
         Context in which the tool operates.
 
     job_id: str
-        The id of the job to cancel (e.g. 'job_1a2b3c4d').
+        The id of the item to cancel (e.g. 'job_1a2b3c4d'), or a unique prefix of it.
 
     Output:
-        JSON confirming deletion, or an error if the id was not found.
+        On success {"deleted": <id>, "remaining": <count active in this conversation>}. If the
+        id is not found or a prefix is ambiguous, {"Error": ..., "active_jobs": [...]} listing
+        what IS cancellable — retry with a correct id from that list. IMPORTANT: only treat the
+        item as cancelled when you get a "deleted" id back; never report success on an Error.
     """
-    logging.info(f"Deleting scheduled job {job_id}")
-    return {"deleted": job_id} if scheduler_store.delete(job_id) else {"Error": f"No scheduled job with id '{job_id}'"}
+    _, _, conv = _channel_from_ctx(ctx)
+    active = scheduler_store.for_conversation(conv)
+
+    # Resolve by exact id, else by a unique id-prefix within this conversation (the model
+    # sometimes passes a shortened id). Anything else is a miss we report honestly.
+    target = next((j for j in active if j.get("id") == job_id), None)
+    if target is None:
+        prefixed = [j for j in active if j.get("id", "").startswith(job_id)]
+        if len(prefixed) == 1:
+            target = prefixed[0]
+        elif len(prefixed) > 1:
+            return {
+                "Error": f"Ambiguous id prefix '{job_id}' — matches {len(prefixed)} items.",
+                "active_jobs": [scheduler_public_view(j) for j in active],
+            }
+
+    resolved_id = target["id"] if target else job_id
+    logging.info(f"Deleting scheduled job {resolved_id} (requested '{job_id}')")
+    if target is not None and scheduler_store.delete(resolved_id):
+        remaining = scheduler_store.for_conversation(conv)
+        return {"deleted": resolved_id, "remaining": len(remaining)}
+    return {
+        "Error": f"No active scheduled item with id '{job_id}' in this conversation.",
+        "active_jobs": [scheduler_public_view(j) for j in active],
+    }
 
 
 @tool_ownership("scheduler_agent")

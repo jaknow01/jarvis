@@ -36,7 +36,7 @@ Wpisz `/help`, żeby dostać tę listę na telefonie. Skrót:
 | Logi | `/logs [N]` | ostatnie N linii bieżącego pliku logu (domyślnie 20) |
 | | `/errors [N]` | ostatnie N linii z błędami/tracebackami (domyślnie 10) |
 | | `/loglevel [poziom]` | pokaż/ustaw poziom logowania w locie (debug/info/…) |
-| Scheduler | `/jobs` | aktywne zadania i watche z terminami i podglądem promptu |
+| Scheduler | `/jobs [all]` | zadania i watche z jawnym rodzajem (🔁 cron / ⏰ jednorazowe / 👁 watch powtarzalny\|jednorazowy), stanem warunku i terminami; `all` dopisuje zakończone/wyłączone (anulowane znikają całkiem — nieobecność = anulowane) |
 | | `/fire <id>` | odpal zadanie **teraz** (bez zmiany harmonogramu) i dostarcz |
 | | `/watch <id>` | szczegóły watcha: źródło, ostatni wynik, następny poll |
 | | `/scheduler [pause\|resume]` | wstrzymaj/wznów odpalanie zadań (bez restartu kontenera) |

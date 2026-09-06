@@ -15,6 +15,7 @@ from lib.agents.news_agent import create_news_agent
 from lib.agents.memory_operator import create_memory_agent
 from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
+from lib.agents.math_agent import create_math_agent
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ def create_coordinator_agent() -> FunctionAgent:
         ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
         ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
         ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders, recurring proactive briefs, AND conditional watches that poll live data and notify ONLY when a condition becomes true ('daj znać, gdy...', 'powiadom, kiedy...'); plus listing/cancelling them."),
+        ("math_agent", create_math_agent, "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."),
     ]
 
     if agent_enabled("scheduler_agent"):
@@ -70,7 +72,13 @@ def create_coordinator_agent() -> FunctionAgent:
             "cron: turning a conditional alert into a per-minute cron floods the user and is a bug. Let "
             "the scheduler_agent pick the mechanism; for a watch it will confirm the condition with the "
             "user BEFORE arming, so pass its confirmation question/description straight back — do not "
-            "report the watch as already set up until the user has confirmed."
+            "report the watch as already set up until the user has confirmed.\n"
+            "- CANCELLING ('przestań mnie powiadamiać', 'wyłącz/odwołaj/usuń to przypomnienie lub "
+            "watch', 'nie wysyłaj mi już...'): ALSO delegate to the scheduler_agent — stopping a "
+            "conditional watch goes through it exactly like cancelling a reminder; do NOT handle it "
+            "yourself. Relay its ACTUAL result: only tell the user something was cancelled if the "
+            "scheduler_agent confirms it was deleted; if it could not find/cancel it, say so (with "
+            "what is still active) instead of claiming success."
         )
 
     if agent_enabled("memory_operator"):

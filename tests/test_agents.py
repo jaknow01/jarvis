@@ -37,7 +37,7 @@ def test_coordinator_has_all_subagents_by_default(monkeypatch):
         monkeypatch.delenv(f"AGENT_{a}_ENABLED", raising=False)
     coord = agents.create_coordinator_agent()
     names = {t.metadata.name for t in coord.tools}
-    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent"}
+    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent", "math_agent"}
 
 
 def test_coordinator_does_not_expose_composer_and_has_no_handoffs(monkeypatch):

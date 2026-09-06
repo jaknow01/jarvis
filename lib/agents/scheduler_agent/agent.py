@@ -41,10 +41,16 @@ def create_scheduler_agent() -> FunctionAgent:
                notifies ONCE, on the first false->true edge, then turns itself off.\
             \
             Routing rule:\
-            - Trigger is a clock time -> create_scheduled_job.\
+            - Trigger is a clock time and the message is sent UNCONDITIONALLY at that time\
+              ('codziennie o 8 wyślij mi brief') -> create_scheduled_job.\
             - Trigger is 'when/if <something becomes true>' -> a watch, but ONLY if a watch\
               source below covers that data. Pick the source-id whose data lets you express\
               the condition, and write `check_code` against that source's fields.\
+            - CRUCIAL: 'sprawdzaj co X minut i daj znać TYLKO gdy...' / 'co godzinę, ale wyślij\
+              jak coś się zmieni/przybędzie' is a WATCH, NOT a cron. The 'co X' is the watch's\
+              poll_interval (how often to CHECK), and the 'tylko gdy' is the condition. A cron\
+              would deliver EVERY tick regardless of the condition and flood the user — never do\
+              that for a conditional request just because a period was mentioned.\
             - If the condition needs data NO source below provides, you CANNOT build a watch.\
               Do NOT fake it with a frequent cron ('* * * * *' or 'co minutę') that re-runs a\
               prompt and floods the user — that is exactly the failure to avoid. Say plainly\
@@ -58,6 +64,18 @@ def create_scheduler_agent() -> FunctionAgent:
             your `check_code` against a LIVE sample and returns it as `data_sample` — use the\
             real keys there to fix a predicate rather than guessing field names.\
             \
+            CHANGE / 'NEW' conditions and repeating (IMPORTANT — this is the common 'daj znać,\
+            gdy przybędą punkty / gdy się zmieni' case):\
+            - A predicate that must detect a CHANGE cannot look at current data alone. The\
+              previous poll's reading is provided as `data[\"_previous\"]` (None on the first\
+              poll). Compare current vs previous and GUARD the None, e.g.\
+              `def check(data):\n    prev = get(data, \"_previous\")\n    if prev == None:\n        return False\n    return get(data, \"points\", 0) > get(prev, \"points\", 0)`.\
+            - Set `repeat=True` (on BOTH prepare_watch and create_watch) whenever the user wants\
+              to be told EVERY time it happens ('za każdym razem', 'gdy przybędą', 'kiedy się\
+              zmieni'). With repeat=False the watch notifies once and stops — correct only for a\
+              one-off threshold ('gdy PIERWSZY raz spadnie poniżej X'). If unsure which the user\
+              means, ask.\
+            \
             Watch flow (two steps, with a human review gate you MUST honour):\
             - prepare_watch validates+smoke-tests your predicate and returns a plain-language\
               `explanation` of what it will actually do over time plus the current result.\
@@ -65,7 +83,7 @@ def create_scheduler_agent() -> FunctionAgent:
               with an 'Uwaga:' line, it is flagging that the code diverges from the intent —\
               relay it and do not gloss over it.\
             - Only on a clear yes: create_watch with the SAME source/params/poll_interval/\
-              message and the validated check_code. If the user says it is wrong, call\
+              message/repeat and the validated check_code. If the user says it is wrong, call\
               prepare_watch again with a corrected predicate; if they give up, arm nothing.\
               Never arm on a vague reply. Keep poll_interval sane (seconds); do not poll faster\
               than the data can meaningfully change.\
@@ -84,10 +102,23 @@ def create_scheduler_agent() -> FunctionAgent:
               complete, self-contained request in Polish (what to fetch and what to tell the user),\
               e.g. 'Podaj prognozę pogody na dziś w Warszawie, krótki przegląd najważniejszych\
               wiadomości, oraz sprawdź, czy dziś grają zawodnicy z mojego składu FPL.'\
-            - list_scheduled_jobs: show active jobs (with ids) for the current conversation.\
-            - delete_scheduled_job: cancel a job by id (find it via list first).\
+            - list_scheduled_jobs: show ALL active items (reminders, recurring briefs AND\
+              conditional watches) with their id and `kind` for the current conversation.\
+            - delete_scheduled_job: cancel ANY item by id — reminder, brief OR watch.\
             - update_scheduled_job: change a job's prompt or its until/max_runs limits; to change\
               the timing itself, delete and re-create.\
+            \
+            CANCELLING / STOPPING (this includes 'przestań mnie powiadamiać', 'wyłącz to',\
+            'odwołaj', 'usuń watch/przypomnienie') — a watch is cancelled the SAME way as any\
+            other item, there is no separate 'stop watch' tool:\
+            1. ALWAYS call list_scheduled_jobs FIRST and read the ids (watches are listed there,\
+               with kind='watch'). Do not guess or reuse an id from memory.\
+            2. Pick the item the user means (match on kind/schedule/prompt) and call\
+               delete_scheduled_job with its exact id.\
+            3. Only report it as cancelled if delete_scheduled_job returned a `deleted` id. If it\
+               returned an Error with `active_jobs`, it is NOT cancelled — retry with a correct id\
+               from that list, or tell the composer plainly it could not be cancelled and show what\
+               is still active. NEVER claim you stopped/deleted something you did not see `deleted`.\
             \
             You do not deliver anything yourself - the runner delivers on the same channel the user\
             is on. Report back the created/updated job's id, human-readable schedule and next run so\

@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
 
 import lib.runtime.diag as diag
+import lib.runtime.observations_runner as observations_runner
 import lib.runtime.progress as progress
 import lib.runtime.scheduler_runner as scheduler_runner
 import lib.runtime.tracing as tracing
@@ -39,7 +40,6 @@ from lib.domain import (
     describe_schedule,
     memory,
     now_tz,
-    public_view,
     store,
     tz,
 )
@@ -313,30 +313,54 @@ def _resolve_job(job_id: str) -> Optional[dict]:
     return matches[0] if len(matches) == 1 else None
 
 
+def _job_kind_tag(j: dict) -> str:
+    """Explicit, plain-language kind marker so a cron is unmistakable from a watch."""
+    kind = j.get("kind")
+    if kind == "watch":
+        return "👁 watch " + ("(powtarzalny)" if j.get("repeating") else "(jednorazowy)")
+    if kind == "cron":
+        return "🔁 cron (cykliczny)"
+    return "⏰ jednorazowe"
+
+
+def _render_job(j: dict) -> list[str]:
+    out = [f"• {j['id'][:8]} — {_job_kind_tag(j)}", f"  {describe_schedule(j)}"]
+    if j.get("kind") == "watch":
+        lr = j.get("last_result")
+        lr_s = "nieznany" if lr is None else ("spełniony ✅" if lr else "niespełniony")
+        out.append(f"  warunek: {lr_s} · ⏭ {_when(j.get('next_run_at'))} · {j.get('status')}")
+    else:
+        out.append(f"  ⏭ {_when(j.get('next_run_at'))} · {j.get('status')}")
+    out.append(f"  „{_preview(j.get('prompt', ''))}”")
+    return out
+
+
 async def _cmd_jobs(args, *, conversation_id, channel) -> str:
+    show_all = bool(args) and args[0].lower() in ("all", "wszystkie", "-a")
     try:
-        active = store.active()
+        every = store.all()
     except Exception as e:
         return f"⚠️ Nie mogę odczytać zadań: {type(e).__name__}"
+    active = [j for j in every if j.get("status") == "active"]
+    inactive = [j for j in every if j.get("status") != "active"]
+
+    if not active and not (show_all and inactive):
+        return "📭 Brak aktywnych zadań." + ("" if show_all else f"\n(„{PREFIX}jobs all" + "” pokaże też zakończone)")
+
+    lines = ["🗓 ZADANIA" + (" (wszystkie)" if show_all else " (aktywne)"), ""]
+    lines.append(f"🟢 Aktywne ({len(active)}):")
+    for j in active:
+        lines += _render_job(j)
     if not active:
-        return "📭 Brak aktywnych zadań."
-    timed = [j for j in active if j.get("kind") != "watch"]
-    watches = [j for j in active if j.get("kind") == "watch"]
-    lines = ["🗓 ZADANIA (aktywne)"]
-    if timed:
-        lines += ["", "🔔 Jednorazowe / cykliczne:"]
-        for j in timed:
-            pv = public_view(j)
-            lines.append(f"• {j['id'][:8]} — {pv['schedule']}")
-            lines.append(f"  ⏭ {_when(pv['next_run'])} · {pv['status']}")
-            lines.append(f"  „{_preview(pv['prompt'])}”")
-    if watches:
-        lines += ["", "👁 Watche:"]
-        for j in watches:
-            lines.append(f"• {j['id'][:8]} — {describe_schedule(j)}")
-            lr = j.get("last_result")
-            lr_s = "nieznany" if lr is None else ("true" if lr else "false")
-            lines.append(f"  ostatni wynik: {lr_s} · ⏭ {_when(j.get('next_run_at'))}")
+        lines.append("  (brak)")
+    if show_all:
+        lines += ["", f"⚪ Zakończone/wyłączone ({len(inactive)}):"]
+        for j in inactive:
+            lines += _render_job(j)
+        if not inactive:
+            lines.append("  (brak)")
+        lines += ["", "ℹ️ Anulowane zadania są usuwane — nieobecność = anulowane. "
+                      "status „done” = zadanie samo dobiegło końca (np. watch jednorazowy się wyzwolił)."]
     return "\n".join(lines)
 
 
@@ -400,6 +424,25 @@ async def _cmd_scheduler(args, *, conversation_id, channel) -> str:
         scheduler_runner.resume()
         return "▶️ Scheduler wznowiony."
     return f"⚠️ Nieznany argument '{sub}'. Użyj: pause / resume."
+
+
+# ================================== collectors ====================================
+
+async def _cmd_collect(args, *, conversation_id, channel) -> str:
+    """Run the daily observation collectors NOW (finance and/or FPL), out of their schedule.
+    Useful to seed/refresh data on demand. Idempotent (upserts by date)."""
+    which = args[0].lower() if args else "all"
+    if which not in ("all", "finance", "fin", "fpl"):
+        return f"⚠️ Użycie: {PREFIX}collect [finance|fpl]  (bez argumentu = oba)"
+    lines = ["📥 KOLEKTORY (ręczne uruchomienie)", ""]
+    if which in ("all", "finance", "fin"):
+        n = await observations_runner.collect_finance_once()
+        lines.append(f"💹 finanse: zapisano {n} serii" if n else "💹 finanse: 0 (błąd/pusto — zob. /errors)")
+    if which in ("all", "fpl"):
+        ok = await observations_runner.collect_fpl_once()
+        lines.append("⚽ FPL: zapisano dzienny zrzut ligi" if ok else "⚽ FPL: pominięto (brak ligi/GW lub błąd)")
+    lines += ["", f"🕐 {_now_str()}"]
+    return "\n".join(lines)
 
 
 # ================================ configuration ===================================
@@ -546,10 +589,12 @@ _COMMANDS: dict[str, _Cmd] = {
     "errors": _Cmd(_cmd_errors, "Logi", "/errors [N]", "ostatnie N błędów/tracebacków (domyślnie 10)"),
     "loglevel": _Cmd(_cmd_loglevel, "Logi", "/loglevel [poziom]", "pokaż/ustaw poziom logowania w locie"),
     # Scheduler
-    "jobs": _Cmd(_cmd_jobs, "Scheduler", "/jobs", "aktywne zadania i watche z terminami"),
+    "jobs": _Cmd(_cmd_jobs, "Scheduler", "/jobs [all]", "zadania i watche z rodzajem (cron/watch) i terminami; 'all' pokaże też zakończone"),
     "fire": _Cmd(_cmd_fire, "Scheduler", "/fire <id>", "odpal zadanie TERAZ (bez zmiany harmonogramu)"),
     "watch": _Cmd(_cmd_watch, "Scheduler", "/watch <id>", "szczegóły watcha: źródło, wynik, następny poll"),
     "scheduler": _Cmd(_cmd_scheduler, "Scheduler", "/scheduler [pause|resume]", "wstrzymaj/wznów odpalanie zadań"),
+    # Kolektory
+    "collect": _Cmd(_cmd_collect, "Kolektory", "/collect [finance|fpl]", "ręcznie zbierz dzienne dane (obserwacje)"),
     # Konfiguracja
     "agents": _Cmd(_cmd_agents, "Konfiguracja", "/agents", "którzy subagenci włączeni/wyłączeni"),
     "models": _Cmd(_cmd_models, "Konfiguracja", "/models", "model + reasoning effort per agent"),
@@ -563,7 +608,7 @@ _COMMANDS: dict[str, _Cmd] = {
     "window": _Cmd(_cmd_window, "Diagnostyka", "/window", "szacunek okna 24h Messengera"),
 }
 
-_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
+_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Kolektory", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
 
 
 async def _cmd_help(args, *, conversation_id, channel) -> str:

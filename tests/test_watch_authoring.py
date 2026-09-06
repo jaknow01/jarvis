@@ -100,7 +100,7 @@ def test_smoke_ok(monkeypatch):
         smoke_test("finance.fx", {}, "def check(data):\n    return data['rate'] < 3.9", StubEvaluator())
     )
     assert state == "ok" and result is True and err is None
-    assert sample == {"rate": 3.5}
+    assert sample == {"rate": 3.5, "_previous": None}
 
 
 def test_smoke_unknown_source(monkeypatch):
@@ -116,7 +116,7 @@ def test_author_watch_ok(monkeypatch):
     async def fake_fetch(source, params):
         return "ok", {"rate": 4.2}
 
-    async def fake_explain(code, intent, source, params, poll_interval, sample=None):
+    async def fake_explain(code, intent, source, params, poll_interval, sample=None, repeat=False):
         return "Powiadomię Cię, gdy kurs USD/PLN spadnie poniżej 3.90."
     monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
     monkeypatch.setattr(authoring, "llm_explain", fake_explain)
@@ -133,7 +133,7 @@ def test_author_watch_explanation_is_best_effort(monkeypatch):
     async def fake_fetch(source, params):
         return "ok", {"rate": 4.2}
 
-    async def boom_explain(code, intent, source, params, poll_interval, sample=None):
+    async def boom_explain(code, intent, source, params, poll_interval, sample=None, repeat=False):
         raise RuntimeError("model down")
     monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
     monkeypatch.setattr(authoring, "llm_explain", boom_explain)
@@ -159,7 +159,7 @@ def test_prepare_watch_happy_path(monkeypatch):
     async def fake_fetch(source, params):
         return "ok", {"rate": 3.5}
 
-    async def fake_explain(code, intent, source, params, poll_interval, sample=None):
+    async def fake_explain(code, intent, source, params, poll_interval, sample=None, repeat=False):
         return "Sprawdzam kurs co 300 s; dam znać raz, gdy spadnie poniżej 3.90."
     monkeypatch.setattr(authoring, "fetch_source", fake_fetch)
     monkeypatch.setattr(authoring, "llm_explain", fake_explain)

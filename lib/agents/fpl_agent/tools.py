@@ -6,9 +6,11 @@ Numeric team/player/gameweek ids are resolved to human-readable names server-sid
 the bootstrap-static reference data in fpl_api), so the model — and the user — only ever
 deal with names, not raw ids."""
 
+import asyncio
 import logging
 import os
-from typing import Optional
+from datetime import date, timedelta
+from typing import Literal, Optional
 
 from llama_index.core.workflow import Context
 
@@ -23,6 +25,7 @@ from lib.agents.fpl_agent.fpl_api import (
     summarize_fixture_events,
     find_players_by_name,
     load_league_squads,
+    load_league_history,
     _LEAGUE_SCAN_DEFAULT,
 )
 
@@ -417,6 +420,158 @@ async def get_fpl_league_standings(ctx: Context,
         "entries_shown": len(table),
         "standings": table,
     }
+
+
+def _manager_matches(entry_row: dict, query: str) -> bool:
+    """Case-insensitive match of a free-text manager query against a snapshot manager's
+    name or team name."""
+    q = (query or "").strip().lower()
+    if not q:
+        return True
+    return q in (entry_row.get("manager") or "").lower() or q in (entry_row.get("team") or "").lower()
+
+
+@tool_ownership("fpl_agent")
+@function_tool
+async def get_league_history(ctx: Context,
+                             view: Literal["standings", "squads"] = "standings",
+                             days: int = 30,
+                             manager: Optional[str] = None,
+                             league_id: Optional[int] = None) -> dict:
+    """
+    Description:
+        Returns the mini-league's HISTORY OVER TIME from Jarvis's own database (a daily
+        snapshot is recorded at 04:00 for every manager: their rank, points, and full squad).
+        Use this for change-over-time questions the live standings tool cannot answer:
+        "kto najbardziej awansował w tabeli", "jak zmieniły się moje punkty w miesiąc",
+        "kogo miał w składzie X dwa tygodnie temu", "kto wpadł/wypadł ze składu".
+        For the CURRENT table use get_fpl_league_standings; for CURRENT ownership use
+        get_league_ownership / who_owns_player_in_league.
+
+    Parameters:
+    ctx : Context
+        Context in which the tool operates.
+
+    view: "standings" | "squads" = "standings"
+        - "standings": rank + points movement. Without `manager`: every manager's rank and
+          total at the start vs end of the window, with deltas (who climbed/fell, who gained
+          most points). With `manager`: that manager's full daily series (rank, total, GW pts).
+        - "squads": which footballers managers had, grouped by gameweek. With `manager`: that
+          manager's squad per gameweek in the window. Without `manager`: the most recent
+          snapshot's squads for all managers.
+
+    days: int = 30
+        How far back to look, in calendar days. Defaults to 30.
+
+    manager: Optional[str] = None
+        Free-text filter on a manager's name or team name (e.g. 'Kuba', 'Wombat FC'). Omit
+        for the whole league.
+
+    league_id: Optional[int] = None
+        The classic league id. If omitted, the owner's default FPL_LEAGUE_ID is used.
+
+    Output:
+        JSON with the resolved league/window and the requested view; or a message when no
+        history has been recorded yet (the collector needs a configured database and at least
+        one daily run, or a backfill).
+    """
+    lid = _fpl_league_id(league_id)
+    if lid is None:
+        return {
+            "Error": "No FPL league id is configured.",
+            "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
+        }
+    try:
+        days = max(1, int(days))
+    except (TypeError, ValueError):
+        days = 30
+    start = date.today() - timedelta(days=days)
+    logger.info(f"Reading FPL league {lid} history (view={view}, days={days}, manager={manager!r})")
+
+    snapshots = await asyncio.to_thread(load_league_history, lid, start, None)
+    if not snapshots:
+        return {
+            "league_id": lid,
+            "message": "Brak zapisanej historii ligi w tym oknie. Historia zbierana jest "
+                       "codziennie o 4:00 i wymaga skonfigurowanej bazy (DATABASE_URL); jeśli "
+                       "dopiero co ją włączono, dane pojawią się po pierwszym zbiorze.",
+        }
+
+    first, last = snapshots[0], snapshots[-1]
+    league_name = last["data"].get("league_name")
+    window = {"from": first["date"], "to": last["date"], "snapshots": len(snapshots)}
+
+    if view == "standings":
+        if manager:
+            series = []
+            for snap in snapshots:
+                row = next((m for m in snap["data"].get("managers", []) if _manager_matches(m, manager)), None)
+                if row:
+                    series.append({
+                        "date": snap["date"], "gameweek": snap["gameweek"],
+                        "rank": row.get("rank"), "total": row.get("total"),
+                        "gameweek_points": row.get("event_total"),
+                    })
+            if not series:
+                return {"league_id": lid, "league_name": league_name,
+                        "message": f"Nie znaleziono menedżera pasującego do '{manager}' w historii."}
+            return {"league_id": lid, "league_name": league_name, "manager_query": manager,
+                    "window": window, "series": series}
+
+        # League-wide: compare each manager between the first and last snapshot in the window.
+        first_by_entry = {m.get("entry"): m for m in first["data"].get("managers", [])}
+        movement = []
+        for m in last["data"].get("managers", []):
+            e = m.get("entry")
+            prev = first_by_entry.get(e, {})
+            movement.append({
+                "manager": m.get("manager"), "team": m.get("team"),
+                "rank": m.get("rank"), "rank_start": prev.get("rank"),
+                "rank_delta": (prev.get("rank") - m.get("rank"))
+                    if prev.get("rank") is not None and m.get("rank") is not None else None,
+                "total": m.get("total"), "total_start": prev.get("total"),
+                "points_gained": (m.get("total") - prev.get("total"))
+                    if prev.get("total") is not None and m.get("total") is not None else None,
+            })
+        movement.sort(key=lambda x: x.get("rank") or 10**9)
+        return {"league_id": lid, "league_name": league_name, "window": window,
+                "note": "rank_delta > 0 = awans (spadek numeru miejsca); points_gained = punkty zdobyte w oknie.",
+                "standings_movement": movement}
+
+    # view == "squads"
+    if manager:
+        by_gw: dict = {}
+        for snap in snapshots:  # later snapshots overwrite earlier for the same GW (squads are GW-stable)
+            row = next((m for m in snap["data"].get("managers", []) if _manager_matches(m, manager)), None)
+            if row and row.get("picks"):
+                by_gw[snap["gameweek"]] = {
+                    "gameweek": snap["gameweek"], "manager": row.get("manager"), "team": row.get("team"),
+                    "squad": [
+                        {"name": p.get("name"), "position": p.get("position"),
+                         "is_captain": p.get("is_captain"), "on_bench": (p.get("pick_position") or 0) > 11}
+                        for p in row["picks"]
+                    ],
+                }
+        if not by_gw:
+            return {"league_id": lid, "league_name": league_name,
+                    "message": f"Brak zapisanych składów dla menedżera '{manager}' w tym oknie."}
+        return {"league_id": lid, "league_name": league_name, "manager_query": manager,
+                "window": window, "squads_by_gameweek": [by_gw[g] for g in sorted(by_gw)]}
+
+    # squads, whole league: latest snapshot only (bounded output)
+    latest = last["data"]
+    squads = []
+    for m in latest.get("managers", [])[:40]:
+        if not m.get("picks"):
+            continue
+        squads.append({
+            "manager": m.get("manager"), "team": m.get("team"), "rank": m.get("rank"),
+            "squad": [{"name": p.get("name"), "is_captain": p.get("is_captain")} for p in m["picks"]],
+        })
+    return {"league_id": lid, "league_name": league_name, "gameweek": last["gameweek"],
+            "as_of": last["date"], "managers": len(squads),
+            "note": "Najświeższy zapisany zrzut składów całej ligi (dla trendu w czasie podaj konkretnego menedżera).",
+            "squads": squads}
 
 
 def _player_match_status(team_state: dict, team_id) -> str:

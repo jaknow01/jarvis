@@ -138,12 +138,10 @@ def _fpl_league_db_ttl() -> int:
         return 10800
 
 
-async def _scan_league_squads(league_id: int, gw: int, max_managers: int):
-    """Fetch a league's managers (deduped by entry id, ordered by rank) and each one's squad
-    for gameweek ``gw`` straight from the API. Returns ``(league_name, pairs, complete)``:
-    ``pairs`` is a list of ``(manager_row, picks|None)`` (None when a squad could not be
-    fetched), and ``complete`` is True when the whole league was captured rather than being
-    cut off at ``max_managers``. Bounded concurrency."""
+async def list_league_managers(league_id: int, max_managers: int):
+    """Page a classic league's standings and return ``(league_name, ordered_rows, complete)``:
+    the manager rows (deduped by entry id, ordered by rank, capped at ``max_managers``) and
+    whether the whole league was captured. No squad fetching — just the table."""
     managers: dict = {}  # entry id -> row (dedupe: standings pages can overlap on ties)
     league_name = None
     page = 1
@@ -166,6 +164,16 @@ async def _scan_league_squads(league_id: int, gw: int, max_managers: int):
     # complete = we saw the entire league (ran out of pages) and it fit within the cap.
     complete = exhausted and len(managers) <= max_managers
     ordered = sorted(managers.values(), key=lambda r: r.get("rank") or 10**9)[:max_managers]
+    return league_name, ordered, complete
+
+
+async def _scan_league_squads(league_id: int, gw: int, max_managers: int):
+    """Fetch a league's managers (deduped by entry id, ordered by rank) and each one's squad
+    for gameweek ``gw`` straight from the API. Returns ``(league_name, pairs, complete)``:
+    ``pairs`` is a list of ``(manager_row, picks|None)`` (None when a squad could not be
+    fetched), and ``complete`` is True when the whole league was captured rather than being
+    cut off at ``max_managers``. Bounded concurrency."""
+    league_name, ordered, complete = await list_league_managers(league_id, max_managers)
 
     sem = asyncio.Semaphore(_LEAGUE_SCAN_CONCURRENCY)
 
@@ -246,6 +254,179 @@ async def load_league_squads(
         _save_league_squads_to_db, key[0], key[1], league_name, max_managers, complete, pairs
     )
     return league_name, pairs
+
+
+# ------- Permanent daily league history (positions + points + squads over time) -------
+#
+# Distinct from the squad *cache* above (fpl_league_squads, TTL, overwritten): this is
+# append-only history written once a day by the collector (lib/runtime/observations_runner),
+# so the fpl_agent can answer "how did my league's table / points / squads change over
+# time". Postgres-only (no live-API fallback — it IS our accumulated record); best-effort so
+# a missing DB never crashes a turn, it just yields no history.
+
+# Cap on managers captured in a daily league-history snapshot. A friendly league fits easily;
+# kept generous but bounded (politeness to the unofficial API).
+_LEAGUE_HISTORY_MAX_MANAGERS = 100
+
+
+def _resolve_squad(picks, elements_by_id: dict, positions_by_id: dict):
+    """Turn a raw picks list into name-resolved squad entries; None passes through as None."""
+    if picks is None:
+        return None
+    squad = []
+    for p in picks:
+        element = elements_by_id.get(p.get("element"), {})
+        squad.append({
+            "element": p.get("element"),
+            "name": element.get("web_name"),
+            "position": positions_by_id.get(element.get("element_type"), {}).get("singular_name_short"),
+            "pick_position": p.get("position"),
+            "multiplier": p.get("multiplier"),
+            "is_captain": p.get("is_captain", False),
+            "is_vice_captain": p.get("is_vice_captain", False),
+        })
+    return squad
+
+
+async def build_league_history_snapshot(league_id: int, gw: int, bootstrap: dict) -> dict:
+    """Scan a league's managers + squads for gameweek ``gw`` and build a JSON-serializable
+    daily snapshot: every manager's standing (rank + points) AND their squad (which players
+    they had), with element ids resolved to names. Forces a fresh scan (bypasses caches)."""
+    _teams, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
+    league_name, pairs, _complete = await _scan_league_squads(
+        league_id, gw, _LEAGUE_HISTORY_MAX_MANAGERS
+    )
+    managers = []
+    for row, picks in pairs:
+        managers.append({
+            "entry": row.get("entry"),
+            "manager": row.get("player_name"),
+            "team": row.get("entry_name"),
+            "rank": row.get("rank"),
+            "last_rank": row.get("last_rank"),
+            "total": row.get("total"),          # cumulative points
+            "event_total": row.get("event_total"),  # this gameweek's points
+            "picks": _resolve_squad(picks, elements_by_id, positions_by_id),
+        })
+    return {"gameweek": gw, "league_name": league_name, "managers": managers}
+
+
+async def backfill_league_history(league_id: int, from_gw: int = 1) -> dict:
+    """Reconstruct and persist one league-history snapshot per PAST gameweek, from ``from_gw``
+    up to the current gameweek. For each manager we pull their season history (per-GW event/
+    cumulative points from ``entry/{id}/history/``) once and their squad for each gameweek
+    (``entry/{id}/event/{g}/picks/``); the in-league rank per gameweek is reconstructed by
+    ordering managers on cumulative points at that gameweek. Each snapshot is dated at that
+    gameweek's deadline. Postgres-only; returns a per-gameweek summary. Best-effort per call."""
+    from datetime import date, datetime as _dt
+    from app.db import connection as dbconn
+    if not dbconn.is_configured():
+        return {"error": "no DATABASE_URL configured"}
+    from app.db.fpl_history_repo import save_snapshot
+
+    bootstrap = await fetch_fpl_bootstrap()
+    _teams, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
+    events = {e["id"]: e for e in bootstrap.get("events", [])}
+    current_gw = resolve_gameweek(bootstrap, None, prefer="current")
+    if current_gw is None:
+        return {"error": "no current gameweek"}
+
+    league_name, managers, _complete = await list_league_managers(league_id, _LEAGUE_HISTORY_MAX_MANAGERS)
+    gws = list(range(max(1, from_gw), current_gw + 1))
+    sem = asyncio.Semaphore(_LEAGUE_SCAN_CONCURRENCY)
+
+    async def _history(row):
+        async with sem:
+            try:
+                h = await fetch_fpl(f"entry/{row.get('entry')}/history/")
+                return row, {e.get("event"): e for e in (h.get("current") or [])}
+            except Exception:
+                return row, {}
+
+    hist_pairs = await asyncio.gather(*(_history(r) for r in managers))
+
+    async def _picks(entry, g):
+        async with sem:
+            try:
+                pd = await fetch_fpl(f"entry/{entry}/event/{g}/picks/")
+                return (entry, g), pd.get("picks", [])
+            except Exception:
+                return (entry, g), None
+
+    picks_map = dict(await asyncio.gather(
+        *(_picks(row.get("entry"), g) for row, _h in hist_pairs for g in gws)
+    ))
+
+    saved = []
+    for g in gws:
+        mgr_list = []
+        for row, hist in hist_pairs:
+            ev = hist.get(g)
+            if ev is None:
+                continue  # manager has no entry for this gameweek (joined later)
+            mgr_list.append({
+                "entry": row.get("entry"),
+                "manager": row.get("player_name"),
+                "team": row.get("entry_name"),
+                "total": ev.get("total_points"),       # cumulative through g
+                "event_total": ev.get("points"),       # this gameweek's points
+                "overall_rank": ev.get("overall_rank"),
+                "picks": _resolve_squad(picks_map.get((row.get("entry"), g)), elements_by_id, positions_by_id),
+            })
+        # Reconstruct in-league rank at gameweek g by cumulative points (desc).
+        mgr_list.sort(key=lambda m: (m["total"] if m["total"] is not None else -1), reverse=True)
+        for i, m in enumerate(mgr_list, start=1):
+            m["rank"] = i
+        # Date the snapshot at the gameweek's deadline.
+        dl = (events.get(g) or {}).get("deadline_time")
+        snap_date = _dt.fromisoformat(dl.replace("Z", "+00:00")).date() if dl else date.today()
+        snapshot = {"gameweek": g, "league_name": league_name, "managers": mgr_list}
+        await asyncio.to_thread(save_snapshot, int(league_id), snap_date, g, league_name, snapshot)
+        saved.append({"gameweek": g, "date": snap_date.isoformat(), "managers": len(mgr_list)})
+
+    return {"league_id": league_id, "league_name": league_name, "gameweeks": saved}
+
+
+async def collect_league_history(league_id: int, snapshot_date=None) -> bool:
+    """Build and persist today's league-history snapshot for ``league_id``. Returns True when
+    a snapshot was saved, False when skipped (no DB, no gameweek). Best-effort: exceptions are
+    logged and swallowed (returns False)."""
+    from datetime import date as _date
+    try:
+        from app.db import connection as dbconn
+        if not dbconn.is_configured():
+            logger.info("FPL history collect skipped: no DATABASE_URL configured")
+            return False
+        from app.db.fpl_history_repo import save_snapshot
+        bootstrap = await fetch_fpl_bootstrap()
+        gw = resolve_gameweek(bootstrap, None, prefer="current")
+        if gw is None:
+            logger.info("FPL history collect skipped: no current gameweek")
+            return False
+        snapshot = await build_league_history_snapshot(league_id, gw, bootstrap)
+        day = snapshot_date or _date.today()
+        await asyncio.to_thread(
+            save_snapshot, int(league_id), day, gw, snapshot.get("league_name"), snapshot
+        )
+        return True
+    except Exception:
+        logger.exception("FPL history collect failed for league %s", league_id)
+        return False
+
+
+def load_league_history(league_id: int, start=None, end=None) -> list:
+    """Read stored daily snapshots for ``league_id`` between ``start`` and ``end`` (dates),
+    oldest first, as ``{date, gameweek, data}`` dicts. Best-effort: returns [] when no DB is
+    configured or on any error."""
+    try:
+        from app.db import connection as dbconn
+        if not dbconn.is_configured():
+            return []
+        from app.db.fpl_history_repo import read_snapshots
+        return read_snapshots(int(league_id), start, end)
+    except Exception as e:  # pragma: no cover - defensive; DB is optional
+        logger.warning("FPL history read failed (%s)", e)
+        return []
 
 
 def index_bootstrap(bootstrap: dict) -> tuple[dict, dict, dict]:
