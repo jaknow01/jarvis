@@ -45,6 +45,7 @@ from lib.domain import (
     principals,
     agent_config,
     resolve_profile,
+    is_admin,
     new_user_id,
     new_group_id,
     DEFAULT_GROUP_ID,
@@ -625,6 +626,30 @@ async def _cmd_group(args, *, conversation_id, channel) -> str:
     return f"⚠️ Nieznana podkomenda '{sub}'. Użyj: list | add | priority | agents"
 
 
+async def _cmd_whoami(args, *, conversation_id, channel) -> str:
+    """Tell the caller their Messenger PSID + resolved user_id — the one command a
+    non-admin (even a not-yet-whitelisted sender) may use, so anyone can self-service the
+    id the owner needs for `/user add`."""
+    psid = conversation_id.split(":", 1)[1] if conversation_id.startswith("messenger:") else None
+    lines = ["🪪 KIM JESTEŚ", ""]
+    if psid:
+        lines.append(f"Twój Messenger ID (PSID): {psid}")
+    else:
+        lines.append(f"Kanał: {channel} (poza Messengerem — brak PSID)")
+    uid = principals.resolve_user("messenger", psid) if psid else None
+    if uid:
+        user = principals.get_user(uid) or {}
+        lines.append(f"user_id: {uid}" + (f" („{user.get('display_name')}”)" if user.get("display_name") else ""))
+        grps = [g["name"] for g in principals.groups_for_user(uid)]
+        lines.append(f"grupy: {', '.join(grps) or '—'}")
+        lines.append(f"admin: {'tak' if is_admin(uid) else 'nie'}")
+    else:
+        lines.append("")
+        lines.append("Nie jesteś jeszcze dodany. Podaj powyższy PSID właścicielowi —")
+        lines.append("doda Cię komendą: /user add <PSID> <imię>")
+    return "\n".join(lines)
+
+
 async def _cmd_reload(args, *, conversation_id, channel) -> str:
     """Re-apply the declarative principals config file (config/principals.yaml) now."""
     from lib.domain import apply_config_file, config_path
@@ -735,6 +760,7 @@ class _Cmd:
     group: str
     usage: str
     summary: str
+    public: bool = False  # available to non-admins (and not-yet-whitelisted senders)
 
 
 _COMMANDS: dict[str, _Cmd] = {
@@ -761,6 +787,7 @@ _COMMANDS: dict[str, _Cmd] = {
     "group": _Cmd(_cmd_group, "Użytkownicy", "/group [list|add|priority|agents]", "grupy: priorytet i konfiguracja rostera agentów"),
     "profile": _Cmd(_cmd_profile, "Użytkownicy", "/profile <user_id>", "rozwiązany roster + model per agent (z warstwą-źródłem)"),
     "reload": _Cmd(_cmd_reload, "Użytkownicy", "/reload", "wczytaj ponownie plik config/principals.yaml (deklaratywny)"),
+    "whoami": _Cmd(_cmd_whoami, "Użytkownicy", "/whoami", "pokaż swój Messenger PSID i user_id (dostępne dla każdego)", public=True),
     # Konfiguracja
     "agents": _Cmd(_cmd_agents, "Konfiguracja", "/agents", "którzy subagenci włączeni/wyłączeni"),
     "models": _Cmd(_cmd_models, "Konfiguracja", "/models", "model + reasoning effort per agent"),
@@ -794,21 +821,31 @@ _COMMANDS["help"] = _Cmd(_cmd_help, "", "/help", "ta lista komend")
 
 # ==================================== router ======================================
 
-async def maybe_handle(text: str, *, conversation_id: str, channel: str = "messenger") -> Optional[str]:
-    """If ``text`` is an admin command (starts with ``/``), run it and return the reply.
+async def maybe_handle(text: str, *, conversation_id: str, channel: str = "messenger",
+                       is_admin: bool = True) -> Optional[str]:
+    """If ``text`` is a command (starts with ``/``), run it and return the reply.
 
     Returns None when ``text`` is a normal message, so the caller falls through to the
     regular agent pipeline. Never raises: a handler error is caught and reported inline.
+
+    ``is_admin`` gates the surface: admins get every command; a non-admin may run only
+    ``public`` commands (currently just ``/whoami``) — any other ``/command`` returns None
+    and falls through to the agent. Defaults to True so the local REPL (owner) and existing
+    callers are unaffected.
     """
     if not text or not text.strip().startswith(PREFIX):
         return None
     parts = text.strip()[len(PREFIX):].split()
     if not parts:
-        return await _cmd_help([], conversation_id=conversation_id, channel=channel)
+        return await _cmd_help([], conversation_id=conversation_id, channel=channel) if is_admin else None
     name, args = parts[0].lower(), parts[1:]
     cmd = _COMMANDS.get(name)
     if not cmd:
-        return f"❓ Nieznana komenda: {PREFIX}{name}\nWpisz {PREFIX}help, żeby zobaczyć listę."
+        # Don't leak the command catalog to non-admins; just fall through.
+        return (f"❓ Nieznana komenda: {PREFIX}{name}\nWpisz {PREFIX}help, żeby zobaczyć listę."
+                if is_admin else None)
+    if not is_admin and not cmd.public:
+        return None  # non-admins may only use public commands; others fall through
     try:
         return await cmd.fn(args, conversation_id=conversation_id, channel=channel)
     except Exception as e:

@@ -143,6 +143,12 @@ carries no roster of its own.
 - `/profile <user_id>` — the resolved roster and, per agent field, the winning layer.
 - `/reload` — re-apply the declarative config file.
 
+`/whoami` is the one **public** command (the only one a non-admin may use): it replies
+with the caller's Messenger PSID and resolved `user_id`. It works even for a
+**not-yet-whitelisted** sender, so a new person can message the bot, read their PSID, and
+send it to the owner for `/user add`. Every other `/command` from a non-admin falls
+through to the normal agent pipeline.
+
 ### What `priority` does
 
 Groups are a **config layer**, and a user can be in several. During profile resolution the

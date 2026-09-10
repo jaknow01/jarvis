@@ -145,6 +145,24 @@ async def verify(request: Request) -> Response:
     return Response(content=challenge, media_type="text/plain")
 
 
+async def _process_public(ctx: Ctx, sender_id: str, text: str) -> None:
+    """Handle a message from a NON-whitelisted sender: run only public commands (/whoami)
+    so they can read their PSID; ignore everything else (no agent run, nothing stored)."""
+    conversation_id = f"messenger:{sender_id}"
+    try:
+        reply = await admin.maybe_handle(
+            text, conversation_id=conversation_id, channel="messenger", is_admin=False
+        )
+    except Exception:
+        logger.exception("Public command router failed for %s", sender_id)
+        return
+    if reply is not None:
+        logger.conversation(f"[PUBLIC -> {sender_id}] {reply}")
+        await send_message(PAGE_ACCESS_TOKEN, sender_id, reply)
+    else:
+        logger.info("Ignoring message from non-whitelisted sender %s", sender_id)
+
+
 async def _process(ctx: Ctx, sender_id: str, text: str, user_id: str) -> None:
     """Run the coordinator for one inbound message and send the reply back."""
     logger.conversation(f"[MESSENGER {sender_id} → {user_id}] {text}")
@@ -152,16 +170,17 @@ async def _process(ctx: Ctx, sender_id: str, text: str, user_id: str) -> None:
 
     # Note the inbound for the /window estimate, then let the admin surface intercept
     # technical commands (/status, /logs, …) BEFORE the agent stack — so they still work
-    # even when the coordinator/LLM is the thing that's broken, and cost no tokens. The
-    # admin surface is restricted to admins (owner + members of the `admins` group).
+    # even when the coordinator/LLM is the thing that's broken, and cost no tokens. Admins
+    # (owner + `admins` group) get the full surface; a non-admin gets only public commands
+    # (/whoami). Non-command messages and a non-admin's other /commands fall through.
     diag.record_inbound(conversation_id)
-    admin_reply = None
-    if is_admin(user_id):
-        try:
-            admin_reply = await admin.maybe_handle(text, conversation_id=conversation_id, channel="messenger")
-        except Exception:
-            logger.exception("Admin router failed for %s", sender_id)
-            admin_reply = None
+    try:
+        admin_reply = await admin.maybe_handle(
+            text, conversation_id=conversation_id, channel="messenger", is_admin=is_admin(user_id)
+        )
+    except Exception:
+        logger.exception("Admin router failed for %s", sender_id)
+        admin_reply = None
     if admin_reply is not None:
         logger.conversation(f"[ADMIN -> {sender_id}] {admin_reply}")
         await send_message(PAGE_ACCESS_TOKEN, sender_id, admin_reply)
@@ -206,11 +225,12 @@ async def receive(request: Request, background: BackgroundTasks) -> Response:
 
     for sender_id, text in iter_message_events(body):
         # Whitelist gate: an inbound sender must resolve to a known user via
-        # user_identities. Unknown senders are ignored (no auto-provisioning). This
-        # replaces the single MESSENGER_ALLOWED_SENDER_ID allowlist.
+        # user_identities. This replaces the single MESSENGER_ALLOWED_SENDER_ID allowlist.
         user_id = principals.resolve_user("messenger", sender_id)
         if user_id is None:
-            logger.info("Ignoring message from non-whitelisted sender %s", sender_id)
+            # Not whitelisted — ignored, EXCEPT public commands (/whoami) so a new person
+            # can self-service the PSID the owner needs for /user add.
+            background.add_task(_process_public, ctx, sender_id, text)
             continue
         background.add_task(_process, ctx, sender_id, text, user_id)
 
