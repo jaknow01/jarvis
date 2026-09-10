@@ -1,5 +1,10 @@
 # Scheduler — proaktywne joby (przypomnienia i cykliczne briefy)
 
+> **Multi-user:** każdy job niesie `user_id` (właściciela). Gdy się odpala, tura
+> `origin="system"` biegnie w profilu/kontekście właściciela i tam trafia dostawa; joby
+> bez właściciela (sprzed migracji) domyślnie należą do właściciela. Zobacz
+> [MULTI_USER.md](MULTI_USER.md).
+
 Ten moduł daje Jarvisowi **własną, alternatywną drogę wejścia**: zamiast czekać na
 Twoją wiadomość, potrafi sam odpalić zadanie o wyznaczonym czasie i **napisać do Ciebie**
 z wynikiem. Dwa scenariusze docelowe:

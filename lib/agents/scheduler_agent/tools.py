@@ -100,11 +100,12 @@ async def create_scheduled_job(
         so the user can correct the request.
     """
     channel, target, conv = _channel_from_ctx(ctx)
+    uid = getattr(app_context(ctx), "user_id", None)
     try:
         job = build_job(
             prompt=prompt, channel=channel, target=target, conversation_id=conv,
             cron_expr=cron_expr, run_at=run_at, delay_minutes=delay_minutes,
-            until=until, max_runs=max_runs,
+            until=until, max_runs=max_runs, user_id=uid,
         )
     except ValueError as e:
         return {"Error": str(e)}
@@ -290,11 +291,12 @@ async def create_watch(
     if not ok:
         return {"Error": f"check_code did not validate: {verr}", "hint": "run prepare_watch first"}
     channel, target, conv = _channel_from_ctx(ctx)
+    uid = getattr(app_context(ctx), "user_id", None)
     try:
         job = build_watch(
             message=message, source=source, params=params or {}, check_code=check_code,
             poll_interval=poll_interval, channel=channel, target=target,
-            conversation_id=conv, repeat=bool(repeat),
+            conversation_id=conv, repeat=bool(repeat), user_id=uid,
         )
     except ValueError as e:
         return {"Error": str(e)}

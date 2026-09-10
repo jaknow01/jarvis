@@ -97,7 +97,7 @@ class _CountingBackend:
         self.summary_calls = 0
         self._value = "V0"
 
-    def summary(self, cap=40):
+    def summary(self, cap=40, user_id=None):
         self.summary_calls += 1
         return self._value
 

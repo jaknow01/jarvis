@@ -24,9 +24,23 @@ from typing import Awaitable, Callable
 from llama_index.core.agent.workflow import ToolCallResult
 from llama_index.core.workflow import Context
 
-from lib.agents import create_coordinator_agent, create_composer_agent
-from lib.core import Ctx, bind_app_context, reset_app_context
-from lib.domain import conversations
+from lib.agents import create_coordinator_agent, create_composer_agent, subagent_names
+from lib.core import (
+    Ctx,
+    bind_app_context,
+    reset_app_context,
+    bind_model_overrides,
+    reset_model_overrides,
+    group_scope_for,
+)
+from lib.domain import (
+    conversations,
+    principals,
+    resolve_profile,
+    agent_config,
+    GROUP_SCOPE,
+    DEFAULT_GROUP_ID,
+)
 from lib.runtime import diag, progress
 from lib.runtime.history_window import build_chat_history, schedule_summary_fold
 from lib.runtime.tracing import last_trace_id
@@ -99,12 +113,40 @@ async def _gather_with_progress_ping(handler, notify, want_ping):
                 task.cancel()
 
 
+def ensure_default_group_roster() -> None:
+    """Seed the ``default`` group's roster with every subagent enabled, so the migrated
+    single-user owner (member of ``default``) gets a full roster without per-agent config —
+    preserving the pre-multi-user behavior under the new opt-in model. Seeds **once**: if the
+    default group already has any agent_config rows (from a prior seed, admin edit, or the
+    declarative config file), it is left untouched. Called at startup, before the config
+    file is applied. Lives here (runtime) because it needs the subagent catalog (agents)."""
+    if agent_config.get_layer(GROUP_SCOPE, DEFAULT_GROUP_ID):
+        return
+    for name in subagent_names():
+        agent_config.set(GROUP_SCOPE, DEFAULT_GROUP_ID, name, enabled=True)
+    logger.info("Seeded default group roster (all subagents enabled) for the owner")
+
+
+def _resource_group_id(user_id: str | None) -> str | None:
+    """The group whose shared physical resources (devices/maps) back this turn's Ctx.
+
+    A user may belong to several groups (a config-layering concern); household resources
+    belong to one group, so we use the user's **highest-priority** group. ``groups_for_user``
+    returns groups ascending by priority, so the last one is highest. None when the user has
+    no group (falls back to an uncached, empty group scope)."""
+    if not user_id:
+        return None
+    groups = principals.groups_for_user(user_id)
+    return groups[-1]["id"] if groups else None
+
+
 async def handle_message(
     conversation_id: str,
     text: str,
     ctx: Ctx,
     origin: str = "user",
     notify: Callable[[str], Awaitable[None]] | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Run one turn for `conversation_id` and return the composer's Polish reply.
 
@@ -127,10 +169,26 @@ async def handle_message(
     Returns:
         The composer's final natural-language reply (Polish).
     """
-    # Let tools (e.g. the scheduler) know which channel/target this turn belongs to,
-    # and make the shared Ctx reachable from every tool for the duration of the turn.
-    ctx.conversation_id = conversation_id
-    token = bind_app_context(ctx)
+    # Resolve the acting principal's profile (roster + per-agent model/reasoning) and
+    # compose a per-turn Ctx scoped to that principal: a cached group scope for shared
+    # physical resources + fresh per-user state. The group scope is keyed by the user's
+    # highest-priority group so a household reuses one device inventory.
+    group_id = _resource_group_id(user_id)
+    profile = resolve_profile(user_id, subagent_names())
+    overrides = {
+        name: {"model": profile.model(name), "reasoning": profile.reasoning(name)}
+        for name in profile.agents
+    }
+    turn_ctx = Ctx(
+        cache=ctx.cache,
+        group_scope=group_scope_for(group_id),
+        user_id=user_id,
+        group_id=group_id,
+        conversation_id=conversation_id,
+        profile=profile,
+    )
+    token = bind_app_context(turn_ctx)
+    override_token = bind_model_overrides(overrides)
     started = time.monotonic()
     try:
         # Bounded, context-engineered history: last N pairs verbatim, prefixed by an
@@ -146,7 +204,7 @@ async def handle_message(
         #    slow turn pushes one interim "still working" ping (naming the subagents
         #    already done). Ordering is race-free: the transport sends the final reply
         #    only after this function returns, so any ping necessarily precedes it.
-        coordinator = create_coordinator_agent()
+        coordinator = create_coordinator_agent(profile)
         handler = coordinator.run(
             user_msg=input_text, chat_history=history, ctx=Context(coordinator)
         )
@@ -178,3 +236,4 @@ async def handle_message(
         return reply
     finally:
         reset_app_context(token)
+        reset_model_overrides(override_token)

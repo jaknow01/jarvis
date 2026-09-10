@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Optional
 
 from lib.core import Cache, Ctx
+from lib.domain import OWNER_USER_ID
 from lib.runtime.engine import handle_message
 from lib.runtime.messenger import send_message
 from lib.agents.scheduler_agent import (
@@ -98,8 +99,11 @@ def _make_default_invoke(cache: Cache) -> Callable[[dict], Awaitable[str]]:
 
     async def _invoke(job: dict) -> str:
         ctx = Ctx(cache=cache)
+        # Run the job under its owning user's profile/context. Legacy jobs with no owner
+        # (pre-migration JSON rows) default to the owner for continuity.
         return await handle_message(
-            job["conversation_id"], job["prompt"], ctx, origin="system"
+            job["conversation_id"], job["prompt"], ctx, origin="system",
+            user_id=job.get("user_id") or OWNER_USER_ID,
         )
 
     return _invoke

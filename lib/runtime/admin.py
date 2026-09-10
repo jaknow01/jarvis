@@ -42,6 +42,16 @@ from lib.domain import (
     now_tz,
     store,
     tz,
+    principals,
+    agent_config,
+    resolve_profile,
+    is_admin,
+    new_user_id,
+    new_group_id,
+    DEFAULT_GROUP_ID,
+    DEFAULT_GROUP_NAME,
+    GROUP_SCOPE,
+    USER_SCOPE,
 )
 
 logger = logging.getLogger(__name__)
@@ -452,7 +462,7 @@ def _agent_names() -> list[str]:
 
 
 async def _cmd_agents(args, *, conversation_id, channel) -> str:
-    lines = ["🤖 SUBAGENCI", ""]
+    lines = ["🤖 SUBAGENCI", "(nazwy do użycia w config/principals.yaml → agents:)", ""]
     for name in _agent_names():
         dot = "🟢" if agent_enabled(name) else "🔴"
         lines.append(f"{dot} {name}")
@@ -498,6 +508,182 @@ async def _cmd_env(args, *, conversation_id, channel) -> str:
     lines = ["⚙️ ENV (istotne, sekrety zamaskowane)", ""]
     for k in sorted(items):
         lines.append(f"{k}={_mask(k, items[k])}")
+    return "\n".join(lines)
+
+
+# ============================== users / groups (owner-only) =======================
+
+async def _cmd_user(args, *, conversation_id, channel) -> str:
+    """Manage users + the identity whitelist: list / add / assign to groups."""
+    sub = args[0].lower() if args else "list"
+    if sub == "list":
+        users = principals.list_users()
+        if not users:
+            return "👥 Brak użytkowników."
+        lines = ["👥 UŻYTKOWNICY", ""]
+        for u in users:
+            ids = principals.identities_for(u["id"])
+            grps = [g["name"] for g in principals.groups_for_user(u["id"])]
+            id_s = ", ".join(f"{i['channel']}:{i['external_id']}" for i in ids) or "—"
+            lines.append(f"• {u['id']} „{u.get('display_name') or ''}” [{u.get('status')}]")
+            lines.append(f"    tożsamości: {id_s}")
+            lines.append(f"    grupy: {', '.join(grps) or '—'}")
+        return "\n".join(lines)
+    if sub == "add":
+        # /user add <external_id> [display name...]  (channel defaults to messenger)
+        if len(args) < 2:
+            return f"➕ Użycie: {PREFIX}user add <external_id> [nazwa]"
+        external_id = args[1]
+        display = " ".join(args[2:]) or None
+        if principals.resolve_user("messenger", external_id) is not None:
+            return f"ℹ️ Ta tożsamość (messenger:{external_id}) jest już przypisana."
+        uid = new_user_id()
+        principals.add_user(uid, display)
+        principals.add_identity(uid, "messenger", external_id)
+        # Opt-in model: a new user starts with NO groups (empty roster). Assign them to
+        # groups that enable the agents they should have. (The `default` group is the
+        # owner's full-access group and is intentionally not auto-assigned.)
+        return (f"✅ Dodano użytkownika {uid} „{display or ''}”\n"
+                f"   tożsamość: messenger:{external_id}\n"
+                f"   grupy: (brak — roster jest pusty do czasu przypisania)\n"
+                f"   ➡️ przypisz do grup: {PREFIX}user assign {uid} <grupa,...>")
+    if sub == "assign":
+        # /user assign <user_id> <group_name>[,group_name...]
+        if len(args) < 3:
+            return f"🔗 Użycie: {PREFIX}user assign <user_id> <grupa[,grupa]>"
+        uid = args[1]
+        if principals.get_user(uid) is None:
+            return f"❓ Nie znam użytkownika „{uid}”."
+        names = [n.strip() for n in args[2].split(",") if n.strip()]
+        done, missing = [], []
+        for name in names:
+            g = principals.get_group_by_name(name)
+            if not g:
+                missing.append(name)
+                continue
+            principals.add_membership(uid, g["id"])
+            done.append(name)
+        out = [f"✅ Przypisano {uid} do: {', '.join(done)}" if done else "ℹ️ Nic nie przypisano."]
+        if missing:
+            out.append(f"⚠️ Nie ma takich grup: {', '.join(missing)} (utwórz: {PREFIX}group add <nazwa>)")
+        return "\n".join(out)
+    return f"⚠️ Nieznany podkomenda '{sub}'. Użyj: list | add | assign"
+
+
+async def _cmd_group(args, *, conversation_id, channel) -> str:
+    """Manage groups: list / add / priority / agents (per-group roster config)."""
+    sub = args[0].lower() if args else "list"
+    if sub == "list":
+        groups = principals.list_groups()
+        if not groups:
+            return "🏘 Brak grup."
+        lines = ["🏘 GRUPY (wg priorytetu)", ""]
+        for g in groups:
+            members = principals.members_of(g["id"])
+            cfg = agent_config.get_layer(GROUP_SCOPE, g["id"])
+            cfg_s = ", ".join(sorted(cfg)) or "—"
+            lines.append(f"• {g['name']} (priorytet {g['priority']}, {len(members)} os.)")
+            lines.append(f"    konfiguracja agentów: {cfg_s}")
+        return "\n".join(lines)
+    if sub == "add":
+        if len(args) < 2:
+            return f"➕ Użycie: {PREFIX}group add <nazwa> [priorytet]"
+        name = args[1]
+        priority = int(args[2]) if len(args) > 2 and args[2].lstrip("-").isdigit() else 0
+        g = principals.add_group(new_group_id(), name, priority)
+        return f"✅ Grupa „{name}” (priorytet {g['priority']})."
+    if sub == "priority":
+        if len(args) < 3 or not args[2].lstrip("-").isdigit():
+            return f"🔢 Użycie: {PREFIX}group priority <nazwa> <liczba>"
+        g = principals.get_group_by_name(args[1])
+        if not g:
+            return f"❓ Nie ma grupy „{args[1]}”."
+        principals.set_priority(g["id"], int(args[2]))
+        return f"✅ Priorytet grupy „{args[1]}” = {int(args[2])}."
+    if sub == "agents":
+        # /group agents <nazwa> +news_agent -iot_operator finance_agent=anthropic/claude
+        if len(args) < 3:
+            return (f"🤖 Użycie: {PREFIX}group agents <nazwa> +agent -agent agent=provider/model\n"
+                    f"  +nazwa = włącz, -nazwa = wyłącz, nazwa=model = ustaw model")
+        g = principals.get_group_by_name(args[1])
+        if not g:
+            return f"❓ Nie ma grupy „{args[1]}”."
+        changed = []
+        for tok in args[2:]:
+            if tok.startswith("+"):
+                agent_config.set(GROUP_SCOPE, g["id"], tok[1:], enabled=True)
+                changed.append(f"+{tok[1:]}")
+            elif tok.startswith("-"):
+                agent_config.set(GROUP_SCOPE, g["id"], tok[1:], enabled=False)
+                changed.append(f"-{tok[1:]}")
+            elif "=" in tok:
+                agent, model = tok.split("=", 1)
+                agent_config.set(GROUP_SCOPE, g["id"], agent, model=model)
+                changed.append(f"{agent}={model}")
+            else:
+                changed.append(f"?{tok}(zignorowano)")
+        return f"✅ Grupa „{args[1]}”: {', '.join(changed)}"
+    return f"⚠️ Nieznana podkomenda '{sub}'. Użyj: list | add | priority | agents"
+
+
+async def _cmd_whoami(args, *, conversation_id, channel) -> str:
+    """Tell the caller their Messenger PSID + resolved user_id — the one command a
+    non-admin (even a not-yet-whitelisted sender) may use, so anyone can self-service the
+    id the owner needs for `/user add`."""
+    psid = conversation_id.split(":", 1)[1] if conversation_id.startswith("messenger:") else None
+    lines = ["🪪 KIM JESTEŚ", ""]
+    if psid:
+        lines.append(f"Twój Messenger ID (PSID): {psid}")
+    else:
+        lines.append(f"Kanał: {channel} (poza Messengerem — brak PSID)")
+    uid = principals.resolve_user("messenger", psid) if psid else None
+    if uid:
+        user = principals.get_user(uid) or {}
+        lines.append(f"user_id: {uid}" + (f" („{user.get('display_name')}”)" if user.get("display_name") else ""))
+        grps = [g["name"] for g in principals.groups_for_user(uid)]
+        lines.append(f"grupy: {', '.join(grps) or '—'}")
+        lines.append(f"admin: {'tak' if is_admin(uid) else 'nie'}")
+    else:
+        lines.append("")
+        lines.append("Nie jesteś jeszcze dodany. Podaj powyższy PSID właścicielowi —")
+        lines.append("doda Cię komendą: /user add <PSID> <imię>")
+    return "\n".join(lines)
+
+
+async def _cmd_reload(args, *, conversation_id, channel) -> str:
+    """Re-apply the declarative principals config file (config/principals.yaml) now."""
+    from lib.domain import apply_config_file, config_path
+    summary = apply_config_file()
+    if summary is None:
+        return (f"ℹ️ Brak pliku configu ({config_path()}).\n"
+                f"Utwórz go (patrz config/principals.example.yaml), aby konfigurować deklaratywnie.")
+    lines = ["♻️ RELOAD principals config", "",
+             f"grupy: {summary['groups']} · użytkownicy: {summary['users']} · nowe tożsamości: {summary['identities']}"]
+    if summary["warnings"]:
+        lines += ["", "⚠️ Ostrzeżenia:"] + [f"• {w}" for w in summary["warnings"][:15]]
+    return "\n".join(lines)
+
+
+async def _cmd_profile(args, *, conversation_id, channel) -> str:
+    """Show a user's resolved roster + per-agent model/reasoning with the winning layer."""
+    from lib.agents import subagent_names  # runtime→agents; imported lazily to avoid cost
+    if not args:
+        return f"🪪 Użycie: {PREFIX}profile <user_id>"
+    uid = args[0]
+    if principals.get_user(uid) is None:
+        return f"❓ Nie znam użytkownika „{uid}”."
+    prof = resolve_profile(uid, subagent_names())
+    grps = [f"{g['name']}({g['priority']})" for g in principals.groups_for_user(uid)]
+    lines = [f"🪪 PROFIL {uid}", f"grupy: {', '.join(grps) or '—'}", "",
+             f"roster ({len(prof.roster())}): {', '.join(prof.roster()) or '—'}", ""]
+    for name in prof.agents:
+        ap = prof.agents[name]
+        dot = "🟢" if ap.enabled.value else "🔴"
+        model = ap.model.value or "(env)"
+        lines.append(f"{dot} {name}")
+        lines.append(f"    enabled={ap.enabled.value} ⟵ {ap.enabled.source}")
+        lines.append(f"    model={model} ⟵ {ap.model.source}"
+                     + (f" · effort={ap.reasoning.value} ⟵ {ap.reasoning.source}" if ap.reasoning.value else ""))
     return "\n".join(lines)
 
 
@@ -574,6 +760,7 @@ class _Cmd:
     group: str
     usage: str
     summary: str
+    public: bool = False  # available to non-admins (and not-yet-whitelisted senders)
 
 
 _COMMANDS: dict[str, _Cmd] = {
@@ -595,6 +782,12 @@ _COMMANDS: dict[str, _Cmd] = {
     "scheduler": _Cmd(_cmd_scheduler, "Scheduler", "/scheduler [pause|resume]", "wstrzymaj/wznów odpalanie zadań"),
     # Kolektory
     "collect": _Cmd(_cmd_collect, "Kolektory", "/collect [finance|fpl]", "ręcznie zbierz dzienne dane (obserwacje)"),
+    # Użytkownicy (multi-user)
+    "user": _Cmd(_cmd_user, "Użytkownicy", "/user [list|add|assign]", "użytkownicy + whitelista tożsamości i przypisania do grup"),
+    "group": _Cmd(_cmd_group, "Użytkownicy", "/group [list|add|priority|agents]", "grupy: priorytet i konfiguracja rostera agentów"),
+    "profile": _Cmd(_cmd_profile, "Użytkownicy", "/profile <user_id>", "rozwiązany roster + model per agent (z warstwą-źródłem)"),
+    "reload": _Cmd(_cmd_reload, "Użytkownicy", "/reload", "wczytaj ponownie plik config/principals.yaml (deklaratywny)"),
+    "whoami": _Cmd(_cmd_whoami, "Użytkownicy", "/whoami", "pokaż swój Messenger PSID i user_id (dostępne dla każdego)", public=True),
     # Konfiguracja
     "agents": _Cmd(_cmd_agents, "Konfiguracja", "/agents", "którzy subagenci włączeni/wyłączeni"),
     "models": _Cmd(_cmd_models, "Konfiguracja", "/models", "model + reasoning effort per agent"),
@@ -608,7 +801,7 @@ _COMMANDS: dict[str, _Cmd] = {
     "window": _Cmd(_cmd_window, "Diagnostyka", "/window", "szacunek okna 24h Messengera"),
 }
 
-_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Kolektory", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
+_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Kolektory", "Użytkownicy", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
 
 
 async def _cmd_help(args, *, conversation_id, channel) -> str:
@@ -628,21 +821,31 @@ _COMMANDS["help"] = _Cmd(_cmd_help, "", "/help", "ta lista komend")
 
 # ==================================== router ======================================
 
-async def maybe_handle(text: str, *, conversation_id: str, channel: str = "messenger") -> Optional[str]:
-    """If ``text`` is an admin command (starts with ``/``), run it and return the reply.
+async def maybe_handle(text: str, *, conversation_id: str, channel: str = "messenger",
+                       is_admin: bool = True) -> Optional[str]:
+    """If ``text`` is a command (starts with ``/``), run it and return the reply.
 
     Returns None when ``text`` is a normal message, so the caller falls through to the
     regular agent pipeline. Never raises: a handler error is caught and reported inline.
+
+    ``is_admin`` gates the surface: admins get every command; a non-admin may run only
+    ``public`` commands (currently just ``/whoami``) — any other ``/command`` returns None
+    and falls through to the agent. Defaults to True so the local REPL (owner) and existing
+    callers are unaffected.
     """
     if not text or not text.strip().startswith(PREFIX):
         return None
     parts = text.strip()[len(PREFIX):].split()
     if not parts:
-        return await _cmd_help([], conversation_id=conversation_id, channel=channel)
+        return await _cmd_help([], conversation_id=conversation_id, channel=channel) if is_admin else None
     name, args = parts[0].lower(), parts[1:]
     cmd = _COMMANDS.get(name)
     if not cmd:
-        return f"❓ Nieznana komenda: {PREFIX}{name}\nWpisz {PREFIX}help, żeby zobaczyć listę."
+        # Don't leak the command catalog to non-admins; just fall through.
+        return (f"❓ Nieznana komenda: {PREFIX}{name}\nWpisz {PREFIX}help, żeby zobaczyć listę."
+                if is_admin else None)
+    if not is_admin and not cmd.public:
+        return None  # non-admins may only use public commands; others fall through
     try:
         return await cmd.fn(args, conversation_id=conversation_id, channel=channel)
     except Exception as e:

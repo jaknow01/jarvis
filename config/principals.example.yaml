@@ -1,0 +1,68 @@
+# Declarative principals config — the source of truth for users, groups and rosters.
+#
+# Copy this to config/principals.yaml (gitignored — it holds Messenger PSIDs) and edit it.
+# It is reconciled into the store on every startup and on the admin `/reload` command.
+#
+# Authoritative for CONFIG (priorities, memberships, per-group/per-user rosters): the file
+# replaces those on each apply. Non-destructive for ACCOUNTS: users/groups/identities/
+# memories absent from the file are NOT deleted (remove them explicitly). See
+# docs/MULTI_USER.md and lib/domain/principals_config.py.
+#
+# An agent value may be:
+#   finance_agent: false                 # shorthand → enabled: false
+#   news_agent: openai/gpt-5-mini        # shorthand → model: <this>
+#   iot_operator: { enabled: true, model: anthropic/claude-sonnet-4-20250514, reasoning: low }
+#
+# A user's YAML key IS its user_id. Use `owner` for yourself so it reconciles the
+# migrated owner (whose Messenger id was seeded from MESSENGER_ALLOWED_SENDER_ID).
+#
+# ── Agent names you can use under `agents:` (also shown by the /agents command) ──
+#   iot_operator     – smart lighting control
+#   weather_agent    – current weather + forecast
+#   finance_agent    – FX rates, stock/index quotes
+#   maps_agent       – routes & navigation
+#   news_agent       – news & market-news search
+#   memory_operator  – long-term memory (preferences/facts)
+#   fpl_agent        – Fantasy Premier League
+#   scheduler_agent  – reminders / recurring briefs / conditional watches
+#   math_agent       – exact calculations over gathered figures
+#
+# ── Admin access ──
+# The admin `/` command surface (in Messenger) is available to the owner and to any
+# member of the `admins` group. Grant it by adding a user to `admins` (see `ala` below).
+# The `admins` group always exists (auto-seeded); it carries no roster of its own.
+
+# Roster is OPT-IN: agents are OFF until a layer enables them. List the agents you
+# want ON for each group (enabled: true, or the shorthand `true`). `false` explicitly
+# removes one that another layer enabled. A bare `provider/model` sets the model only.
+# (The `default` group — the owner's — is auto-seeded with everything enabled.)
+groups:
+  dom:
+    priority: 10
+    agents:                          # turn ON what this group should have
+      weather_agent: true
+      finance_agent: true
+      maps_agent: true
+      news_agent: true
+      iot_operator: true
+      memory_operator: true
+      scheduler_agent: true
+  dzieci:
+    priority: 5
+    agents:                          # kids: a small, explicit allowlist
+      weather_agent: true
+      fpl_agent: true
+      news_agent: openai/gpt-5-mini  # on, with a cheaper model
+
+users:
+  owner:
+    name: Kuba
+    messenger: "PUT-YOUR-PSID-HERE"
+    groups: [dom]
+
+  ala:
+    name: Ala
+    messenger: ["PUT-ALA-PSID-HERE"]   # one id or a list
+    groups: [dom, dzieci, admins]      # `admins` → may use the /commands in Messenger
+    agents:                            # optional per-user overrides (win over groups)
+      scheduler_agent: false

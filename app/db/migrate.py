@@ -163,6 +163,51 @@ def migrate_conversations(conn) -> int:
     return n
 
 
+def seed_owner_and_backfill(conn) -> tuple[int, int]:
+    """Seed the owner user + default group (from MESSENGER_ALLOWED_SENDER_ID) and backfill
+    existing memory/scheduled-job rows with the owner ``user_id``. Idempotent.
+
+    Returns ``(memory_rows_backfilled, job_rows_backfilled)``. Uses the SAME stable ids
+    the runtime resolves the owner to (``OWNER_USER_ID`` / ``DEFAULT_GROUP_*``), so
+    backfilled rows line up with live per-user scoping.
+    """
+    import os
+    from lib.domain.principals import (
+        OWNER_USER_ID, DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME,
+    )
+
+    conn.execute(
+        "INSERT INTO groups (id, name, priority) VALUES (%s, %s, 0) "
+        "ON CONFLICT (name) DO NOTHING",
+        (DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME),
+    )
+    conn.execute(
+        "INSERT INTO users (id, display_name, status) VALUES (%s, %s, 'active') "
+        "ON CONFLICT (id) DO NOTHING",
+        (OWNER_USER_ID, "Owner"),
+    )
+    conn.execute(
+        "INSERT INTO user_groups (user_id, group_id) VALUES (%s, %s) "
+        "ON CONFLICT DO NOTHING",
+        (OWNER_USER_ID, DEFAULT_GROUP_ID),
+    )
+    allowed = (os.getenv("MESSENGER_ALLOWED_SENDER_ID") or "").strip()
+    if allowed:
+        conn.execute(
+            "INSERT INTO user_identities (user_id, channel, external_id) VALUES (%s, 'messenger', %s) "
+            "ON CONFLICT (channel, external_id) DO NOTHING",
+            (OWNER_USER_ID, allowed),
+        )
+
+    mem = conn.execute(
+        "UPDATE memory_entries SET user_id = %s WHERE user_id IS NULL", (OWNER_USER_ID,)
+    ).rowcount
+    jobs = conn.execute(
+        "UPDATE scheduled_jobs SET user_id = %s WHERE user_id IS NULL", (OWNER_USER_ID,)
+    ).rowcount
+    return mem, jobs
+
+
 def _migrate_document(conn, table: str, data) -> int:
     if data is None:
         return 0
@@ -192,6 +237,7 @@ def main() -> int:
         prefs = _migrate_document(conn, "device_preferences", _load(PREFERENCES_JSON))
         maps = _migrate_document(conn, "maps_memory", _load(MAPS_JSON))
         convs = migrate_conversations(conn)
+        mem_bf, jobs_bf = seed_owner_and_backfill(conn)
 
     print("\nMigration complete (JSON files left untouched):")
     print(f"  memory_entries      : {mem} row(s)")
@@ -199,6 +245,7 @@ def main() -> int:
     print(f"  device_preferences  : {prefs} document(s)")
     print(f"  maps_memory         : {maps} document(s)")
     print(f"  conversations       : {convs} conversation(s)")
+    print(f"  owner/default seed  : memory user_id backfilled {mem_bf}, jobs {jobs_bf}")
     return 0
 
 

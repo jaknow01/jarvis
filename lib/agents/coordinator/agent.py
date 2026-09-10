@@ -4,6 +4,7 @@ from llama_index.core.agent.workflow import FunctionAgent
 
 from lib.core import LLM_BY_AGENT, agents_decorator, agent_enabled, agent_as_tool
 from lib.domain import memory
+from lib.domain.profile import Profile
 
 # Sibling factories, imported from their own feature packages (public surface). These
 # packages never import the coordinator, so there is no import cycle.
@@ -20,10 +21,40 @@ from lib.agents.math_agent import create_math_agent
 logger = logging.getLogger(__name__)
 
 
+# Canonical catalog of subagents (name, factory, tool description). The coordinator's
+# roster for a turn is the subset enabled by the acting principal's resolved profile
+# (see lib/domain/profile.py); with no profile it falls back to the global env toggles.
+def subagent_catalog() -> list[tuple]:
+    return [
+        ("iot_operator", create_iot_agent, "Controls smart devices (lighting) in a houshold."),
+        ("weather_agent", create_weather_agent, "Checks current weather and weather forecast at a given location"),
+        ("finance_agent", create_finance_agent, "Retrieves and analyzes financial data."),
+        ("maps_agent", create_maps_agent, "Controls access to maps and navigation. Can calculate routes."),
+        ("news_agent", create_news_agent, "Summarizes current world and financial-market news."),
+        ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
+        ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
+        ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders, recurring proactive briefs, AND conditional watches that poll live data and notify ONLY when a condition becomes true ('daj znać, gdy...', 'powiadom, kiedy...'); plus listing/cancelling them."),
+        ("math_agent", create_math_agent, "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."),
+    ]
+
+
+def subagent_names() -> list[str]:
+    """Candidate subagent names for profile resolution (the resolver lives in `domain`
+    and must not import this `agents` module, so the caller supplies these)."""
+    return [n for n, _, _ in subagent_catalog()]
+
+
 @agents_decorator(name="coordinator")
-def create_coordinator_agent() -> FunctionAgent:
+def create_coordinator_agent(profile: Profile | None = None) -> FunctionAgent:
     name = "coordinator"
     llm = LLM_BY_AGENT[name]()
+
+    # A turn passes the acting principal's resolved profile; without one (legacy callers,
+    # some tests) fall back to the global env toggles so behavior is unchanged.
+    def is_on(agent_name: str) -> bool:
+        return profile.is_enabled(agent_name) if profile is not None else agent_enabled(agent_name)
+
+    user_id = profile.user_id if profile is not None else None
 
     instructions = (
         "You are a coordinator of a multiagent personal assistant network called Jarvis.\
@@ -43,21 +74,11 @@ def create_coordinator_agent() -> FunctionAgent:
         so the composer can inform the user."
     )
 
-    # Each subagent can be switched off via AGENT_<NAME>_ENABLED; a disabled agent is
-    # simply not exposed to the coordinator as a tool.
-    subagents = [
-        ("iot_operator", create_iot_agent, "Controls smart devices (lighting) in a houshold."),
-        ("weather_agent", create_weather_agent, "Checks current weather and weather forecast at a given location"),
-        ("finance_agent", create_finance_agent, "Retrieves and analyzes financial data."),
-        ("maps_agent", create_maps_agent, "Controls access to maps and navigation. Can calculate routes."),
-        ("news_agent", create_news_agent, "Summarizes current world and financial-market news."),
-        ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
-        ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
-        ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders, recurring proactive briefs, AND conditional watches that poll live data and notify ONLY when a condition becomes true ('daj znać, gdy...', 'powiadom, kiedy...'); plus listing/cancelling them."),
-        ("math_agent", create_math_agent, "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."),
-    ]
+    # The roster (which subagents are exposed as tools) is decided per principal by the
+    # resolved profile; a disabled agent is simply not exposed as a tool.
+    subagents = subagent_catalog()
 
-    if agent_enabled("scheduler_agent"):
+    if is_on("scheduler_agent"):
         instructions += (
             "\n\nWhen the user wants something to happen later or on its own, delegate to the "
             "scheduler_agent. There are two shapes and you MUST NOT collapse the second into the first:\n"
@@ -81,25 +102,25 @@ def create_coordinator_agent() -> FunctionAgent:
             "what is still active) instead of claiming success."
         )
 
-    if agent_enabled("memory_operator"):
+    if is_on("memory_operator"):
         instructions += (
             "\n\nWhen the user states a durable preference or fact about themselves, store it via the "
             "memory_operator so future conversations stay personalized. Consult the memory_operator when "
             "you need details about the user's saved preferences."
         )
-        profile = memory.summary()
-        if profile:
+        mem_profile = memory.summary(user_id=user_id)
+        if mem_profile:
             instructions += (
                 "\n\nWhat you already know about the user (long-term memory — use it to personalize, "
-                "and prefer it over asking the user again):\n" + profile
+                "and prefer it over asking the user again):\n" + mem_profile
             )
 
     tools = []
     for sub_name, factory, description in subagents:
-        if agent_enabled(sub_name):
+        if is_on(sub_name):
             tools.append(agent_as_tool(factory(), tool_name=sub_name, tool_description=description))
         else:
-            logger.info(f"Subagent '{sub_name}' disabled via env; not exposed to coordinator")
+            logger.info(f"Subagent '{sub_name}' not in roster; not exposed to coordinator")
 
     agent = FunctionAgent(
         name=name,

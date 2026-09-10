@@ -32,8 +32,9 @@ async def get_memory(ctx: Context, category: Optional[str] = None) -> dict:
     Output:
         JSON object with the matching memory entries and their count.
     """
-    logging.info(f"Reading long-term memory (category={category or 'all'})")
-    entries = memory.by_category(category) if category else memory.all()
+    uid = app_context(ctx).user_id
+    logging.info(f"Reading long-term memory (category={category or 'all'}, user={uid})")
+    entries = memory.by_category(category, user_id=uid) if category else memory.all(user_id=uid)
     return {"entries": entries, "count": len(entries)}
 
 @tool_ownership("memory_operator")
@@ -70,9 +71,10 @@ async def save_memory(ctx: Context,
     Output:
         JSON object with the saved entry (including its generated id).
     """
-    logging.info(f"Saving long-term memory (category={category}, source={source})")
+    uid = app_context(ctx).user_id
+    logging.info(f"Saving long-term memory (category={category}, source={source}, user={uid})")
     try:
-        entry = memory.add(text, category=category, source=source, confidence=confidence)
+        entry = memory.add(text, category=category, source=source, confidence=confidence, user_id=uid)
     except ValueError as e:
         return {"Error": str(e)}
     return {"saved": entry}
@@ -108,8 +110,9 @@ async def update_memory(ctx: Context,
     Output:
         JSON object with the updated entry, or an error if the id was not found.
     """
-    logging.info(f"Updating long-term memory {entry_id}")
-    entry = memory.update(entry_id, text=text, category=category, confidence=confidence)
+    uid = app_context(ctx).user_id
+    logging.info(f"Updating long-term memory {entry_id} (user={uid})")
+    entry = memory.update(entry_id, text=text, category=category, confidence=confidence, user_id=uid)
     return {"updated": entry} if entry else {"Error": f"No memory entry with id '{entry_id}'"}
 
 @tool_ownership("memory_operator")
@@ -130,5 +133,6 @@ async def delete_memory(ctx: Context, entry_id: str) -> dict:
     Output:
         JSON object confirming deletion, or an error if the id was not found.
     """
-    logging.info(f"Deleting long-term memory {entry_id}")
-    return {"deleted": entry_id} if memory.delete(entry_id) else {"Error": f"No memory entry with id '{entry_id}'"}
+    uid = app_context(ctx).user_id
+    logging.info(f"Deleting long-term memory {entry_id} (user={uid})")
+    return {"deleted": entry_id} if memory.delete(entry_id, user_id=uid) else {"Error": f"No memory entry with id '{entry_id}'"}

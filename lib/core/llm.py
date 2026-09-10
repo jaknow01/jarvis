@@ -29,6 +29,7 @@ Parallel tool-calling is a property of the *agent* under LlamaIndex
 is set on the agents rather than here.
 """
 
+import contextvars
 import os
 
 from llama_index.llms.openai import OpenAIResponses
@@ -110,6 +111,38 @@ for _p in _OPENAI_COMPAT_PROVIDERS:
     PROVIDER_BUILDERS[_p] = _make_openai_like_builder(_p)
 
 
+# --------------------------------------------------------- per-principal overrides
+# The acting principal's resolved per-agent model/reasoning for the current turn, bound
+# on a contextvar by the runtime (engine.handle_message) from the resolved Profile.
+# Kept as a plain ``{agent_name: {"model": str|None, "reasoning": str|None}}`` dict so
+# ``core`` stays a leaf (it must not import the ``domain`` Profile type). ``build_llm``
+# consults it first and falls back to env when a field is absent — so a turn with no
+# override (or no per-principal config) resolves exactly as before.
+_MODEL_OVERRIDES: "contextvars.ContextVar[dict]" = contextvars.ContextVar(
+    "jarvis_model_overrides", default={}
+)
+
+
+def bind_model_overrides(overrides: dict) -> "contextvars.Token":
+    """Bind per-agent model/reasoning overrides for the current turn. Returns the token
+    to reset. The binding propagates to the coordinator's step-workers and sub-agent runs
+    (same contextvar propagation the shared Ctx relies on)."""
+    return _MODEL_OVERRIDES.set(overrides or {})
+
+
+def reset_model_overrides(token: "contextvars.Token") -> None:
+    try:
+        _MODEL_OVERRIDES.reset(token)
+    except (ValueError, LookupError):
+        pass
+
+
+def _override(agent_name: str, field: str) -> str | None:
+    row = _MODEL_OVERRIDES.get().get(agent_name)
+    val = row.get(field) if row else None
+    return val if (val is not None and str(val).strip() != "") else None
+
+
 # ------------------------------------------------------------------ config resolution
 def _agent_env(agent_name: str, suffix: str) -> str | None:
     val = os.getenv(f"AGENT_{agent_name.upper()}_{suffix}")
@@ -117,8 +150,12 @@ def _agent_env(agent_name: str, suffix: str) -> str | None:
 
 
 def _resolve_model(agent_name: str) -> str | None:
-    """Resolve an agent's model string: ``AGENT_<NAME>_MODEL`` → legacy coordinator var →
-    ``DEFAULT_MODEL`` → legacy ``OPENAI_DEFAULT_MODEL`` (bare → treated as ``openai/…``)."""
+    """Resolve an agent's model string: per-principal override → ``AGENT_<NAME>_MODEL`` →
+    legacy coordinator var → ``DEFAULT_MODEL`` → legacy ``OPENAI_DEFAULT_MODEL`` (bare →
+    treated as ``openai/…``)."""
+    override = _override(agent_name, "model")
+    if override:
+        return override
     val = _agent_env(agent_name, "MODEL")
     if val:
         return val
@@ -138,8 +175,12 @@ def _resolve_model(agent_name: str) -> str | None:
 def _resolve_effort_raw(agent_name: str) -> str | None:
     """Resolve an agent's raw reasoning-effort string (pre-normalization):
     ``AGENT_<NAME>_REASONING_EFFORT`` → legacy ``COORDINATOR_REASONING_EFFORT`` (coordinator
-    only) → ``DEFAULT_REASONING_EFFORT``. The coordinator keeps its historical ``medium``
-    default when nothing is configured; other agents default to no reasoning."""
+    only) → ``DEFAULT_REASONING_EFFORT``. A per-principal override wins over all of these.
+    The coordinator keeps its historical ``medium`` default when nothing is configured;
+    other agents default to no reasoning."""
+    override = _override(agent_name, "reasoning")
+    if override:
+        return override
     val = _agent_env(agent_name, "REASONING_EFFORT")
     if val:
         return val

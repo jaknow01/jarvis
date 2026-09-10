@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 MEMORY_PATH = Path("data/memory_data/memory.json")
 SUGGESTED_CATEGORIES = ["preferences", "facts", "habits", "interests", "routines"]
+# Legacy JSON entries predate per-user scoping and have no user_id; they belong to the
+# migrated owner (imported lazily to avoid any import-order coupling).
+from lib.domain.principals import OWNER_USER_ID  # noqa: E402
 VALID_SOURCES = ("user", "inferred")
 VALID_CONFIDENCE = ("high", "medium", "low")
 SUMMARY_CAP = 40
@@ -91,18 +94,27 @@ class MemoryStore:
         tmp.replace(self.path)  # atomic swap
 
     # -- reads ----------------------------------------------------------------
-    def all(self) -> list[dict]:
-        return self._load()["entries"]
+    def _matches_user(self, e: dict, user_id: Optional[str]) -> bool:
+        if user_id is None:
+            return True  # unscoped read (legacy/global callers)
+        eu = e.get("user_id")
+        if eu is None:  # legacy entry with no owner → belongs to the migrated owner
+            return user_id == OWNER_USER_ID
+        return eu == user_id
 
-    def by_category(self, category: str) -> list[dict]:
-        return [e for e in self.all() if e.get("category") == category]
+    def all(self, user_id: Optional[str] = None) -> list[dict]:
+        return [e for e in self._load()["entries"] if self._matches_user(e, user_id)]
 
-    def summary(self, cap: int = SUMMARY_CAP) -> str:
-        return summarize(self.all(), cap)
+    def by_category(self, category: str, user_id: Optional[str] = None) -> list[dict]:
+        return [e for e in self.all(user_id) if e.get("category") == category]
+
+    def summary(self, cap: int = SUMMARY_CAP, user_id: Optional[str] = None) -> str:
+        return summarize(self.all(user_id), cap)
 
     # -- writes ---------------------------------------------------------------
     def add(self, text: str, category: str = "preferences",
-            source: str = "user", confidence: str = "high") -> dict:
+            source: str = "user", confidence: str = "high",
+            user_id: Optional[str] = None) -> dict:
         text = (text or "").strip()
         if not text:
             raise ValueError("memory text cannot be empty")
@@ -112,8 +124,10 @@ class MemoryStore:
         now = _now()
         with self._lock:
             data = self._load()
-            for e in data["entries"]:  # exact-text dedup within a category
-                if e.get("category") == category and e.get("text", "").strip().lower() == text.lower():
+            for e in data["entries"]:  # exact-text dedup within a (user, category)
+                if (self._matches_user(e, user_id)
+                        and e.get("category") == category
+                        and e.get("text", "").strip().lower() == text.lower()):
                     e.update(updated_at=now, source=source, confidence=confidence)
                     self._save(data)
                     return e
@@ -123,6 +137,7 @@ class MemoryStore:
                 "category": category,
                 "source": source,
                 "confidence": confidence,
+                "user_id": user_id,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -131,11 +146,12 @@ class MemoryStore:
             return entry
 
     def update(self, entry_id: str, text: Optional[str] = None,
-               category: Optional[str] = None, confidence: Optional[str] = None) -> Optional[dict]:
+               category: Optional[str] = None, confidence: Optional[str] = None,
+               user_id: Optional[str] = None) -> Optional[dict]:
         with self._lock:
             data = self._load()
             for e in data["entries"]:
-                if e["id"] == entry_id:
+                if e["id"] == entry_id and self._matches_user(e, user_id):
                     if text is not None:
                         e["text"] = text.strip()
                     if category is not None:
@@ -147,10 +163,13 @@ class MemoryStore:
                     return e
         return None
 
-    def delete(self, entry_id: str) -> bool:
+    def delete(self, entry_id: str, user_id: Optional[str] = None) -> bool:
         with self._lock:
             data = self._load()
-            remaining = [e for e in data["entries"] if e.get("id") != entry_id]
+            remaining = [
+                e for e in data["entries"]
+                if not (e.get("id") == entry_id and self._matches_user(e, user_id))
+            ]
             if len(remaining) != len(data["entries"]):
                 data["entries"] = remaining
                 self._save(data)
@@ -182,8 +201,8 @@ class _MemoryProxy:
     def __init__(self):
         self._impl = None
         # Short-TTL cache of summary() (the coordinator reads it every turn to build its
-        # prompt). Keyed by cap -> (expiry_monotonic, text). Cleared on any write below.
-        self._summary_cache: dict[int, tuple[float, str]] = {}
+        # prompt). Keyed by (cap, user_id) -> (expiry_monotonic, text). Cleared on any write.
+        self._summary_cache: dict[tuple, tuple[float, str]] = {}
 
     def _store(self):
         if self._impl is None:
@@ -193,24 +212,25 @@ class _MemoryProxy:
     def _invalidate_summary(self) -> None:
         self._summary_cache.clear()
 
-    def all(self) -> list[dict]:
-        return self._store().all()
+    def all(self, user_id: Optional[str] = None) -> list[dict]:
+        return self._store().all(user_id)
 
-    def by_category(self, category: str) -> list[dict]:
-        return self._store().by_category(category)
+    def by_category(self, category: str, user_id: Optional[str] = None) -> list[dict]:
+        return self._store().by_category(category, user_id)
 
-    def summary(self, cap: int = SUMMARY_CAP) -> str:
-        """Return the memory profile, served from a short-TTL cache to keep it off the
-        per-turn hot path (see ``_summary_cache_ttl``). Writes invalidate the cache."""
+    def summary(self, cap: int = SUMMARY_CAP, user_id: Optional[str] = None) -> str:
+        """Return the memory profile for ``user_id``, served from a short-TTL cache to keep
+        it off the per-turn hot path (see ``_summary_cache_ttl``). Writes invalidate it."""
         ttl = _summary_cache_ttl()
         if ttl <= 0:
-            return self._store().summary(cap)
+            return self._store().summary(cap, user_id)
         now = time.monotonic()
-        hit = self._summary_cache.get(cap)
+        key = (cap, user_id)
+        hit = self._summary_cache.get(key)
         if hit is not None and hit[0] > now:
             return hit[1]
-        val = self._store().summary(cap)
-        self._summary_cache[cap] = (now + ttl, val)
+        val = self._store().summary(cap, user_id)
+        self._summary_cache[key] = (now + ttl, val)
         return val
 
     def add(self, *args, **kwargs) -> dict:

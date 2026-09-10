@@ -1,5 +1,10 @@
 # Long-term memory (`memory_operator`) — design & decisions
 
+> **Multi-user:** memory is scoped **per user** (`memory_entries.user_id`). Reads, writes
+> and the injected profile are confined to the acting user; there is no group/shared
+> memory. Dedup uniqueness is per user. Legacy rows with no `user_id` belong to the
+> migrated owner. See [MULTI_USER.md](MULTI_USER.md).
+
 The `memory_operator` agent gives Jarvis a **general, cross-cutting long-term
 memory** of the owner: durable preferences, facts, habits, interests and routines
 that are not tied to a single domain agent. It is the backbone of the project's

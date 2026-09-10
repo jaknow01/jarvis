@@ -5,7 +5,7 @@ Imports go up only: runtime -> agents -> {domain, core}. This `__init__` is the 
 surface consumed by `app/`.
 """
 
-from lib.runtime.engine import handle_message
+from lib.runtime.engine import handle_message, ensure_default_group_roster
 from lib.runtime.chatbot import Chatbot
 from lib.runtime.tracing import setup_tracing, last_trace_id
 from lib.runtime.scheduler_runner import run_scheduler_loop, scheduler_enabled
@@ -21,6 +21,7 @@ from lib.runtime.messenger import (
 
 __all__ = [
     "handle_message",
+    "ensure_default_group_roster",
     "Chatbot",
     "setup_tracing",
     "last_trace_id",

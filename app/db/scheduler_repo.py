@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _COLS = (
     "id, prompt, channel, target, conversation_id, kind, cron_expr, run_at, "
     "next_run_at, until_spec, max_runs, run_count, last_run_at, status, created_at, "
-    "source, params, check_code, poll_interval, last_result, last_data, repeating"
+    "source, params, check_code, poll_interval, last_result, last_data, repeating, user_id"
 )
 
 # Time fields stored as TIMESTAMPTZ (converted to/from ISO strings at the boundary).
@@ -59,6 +59,7 @@ def _row(r) -> dict:
         "last_result": r[19],
         "last_data": r[20],
         "repeating": r[21],
+        "user_id": r[22],
     }
 
 
@@ -79,6 +80,7 @@ def _params(job: dict) -> tuple:
         job.get("source"), Json(watch_params) if watch_params is not None else None,
         job.get("check_code"), job.get("poll_interval"), job.get("last_result"),
         Json(last_data) if last_data is not None else None, bool(job.get("repeating", False)),
+        job.get("user_id"),
     )
 
 
@@ -131,7 +133,7 @@ class PostgresJobStore:
             conn.execute(
                 f"INSERT INTO scheduled_jobs ({_COLS}) VALUES "
                 "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s, %s, %s, %s, %s, %s, %s)",
+                "%s, %s, %s, %s, %s, %s, %s, %s)",
                 _params(job),
             )
         return job
@@ -142,7 +144,7 @@ class PostgresJobStore:
             conn.execute(
                 f"INSERT INTO scheduled_jobs ({_COLS}) VALUES "
                 "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s, %s, %s, %s, %s, %s, %s) "
+                "%s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (id) DO UPDATE SET "
                 "prompt = EXCLUDED.prompt, channel = EXCLUDED.channel, "
                 "target = EXCLUDED.target, conversation_id = EXCLUDED.conversation_id, "
@@ -153,7 +155,8 @@ class PostgresJobStore:
                 "status = EXCLUDED.status, source = EXCLUDED.source, "
                 "params = EXCLUDED.params, check_code = EXCLUDED.check_code, "
                 "poll_interval = EXCLUDED.poll_interval, last_result = EXCLUDED.last_result, "
-                "last_data = EXCLUDED.last_data, repeating = EXCLUDED.repeating",
+                "last_data = EXCLUDED.last_data, repeating = EXCLUDED.repeating, "
+                "user_id = EXCLUDED.user_id",
                 _params(job),
             )
         return job

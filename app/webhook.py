@@ -25,10 +25,12 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 
 from lib.core import Cache, Ctx, Logger
+from lib.domain import principals, is_admin
 from lib.runtime import (
     admin,
     diag,
     handle_message,
+    ensure_default_group_roster,
     iter_message_events,
     send_message,
     verify_challenge,
@@ -59,6 +61,21 @@ async def lifespan(app: FastAPI):
     Logger.config_root_logger()
     setup_tracing()
     app.state.ctx = Ctx(cache=Cache())
+    # Ensure the migrated single-user owner exists, then reconcile the declarative
+    # principals config file (config/principals.yaml) if present — the authoritative
+    # source of truth for users/groups/rosters. Both idempotent and non-fatal.
+    try:
+        from lib.domain import seed_owner, apply_config_file
+        seed_owner()
+        ensure_default_group_roster()  # owner's default group gets a full roster (opt-in model)
+        summary = apply_config_file()
+        if summary is not None:
+            logger.info(
+                "Principals config: %d group(s), %d user(s), %d warning(s)",
+                summary["groups"], summary["users"], len(summary["warnings"]),
+            )
+    except Exception:
+        logger.exception("Owner seed / principals config failed (non-fatal)")
     if not (VERIFY_TOKEN and APP_SECRET and PAGE_ACCESS_TOKEN):
         logger.warning(
             "Messenger env incomplete — set MESSENGER_VERIFY_TOKEN, "
@@ -128,17 +145,39 @@ async def verify(request: Request) -> Response:
     return Response(content=challenge, media_type="text/plain")
 
 
-async def _process(ctx: Ctx, sender_id: str, text: str) -> None:
+async def _process_public(ctx: Ctx, sender_id: str, text: str) -> None:
+    """Handle a message from a NON-whitelisted sender: run only public commands (/whoami)
+    so they can read their PSID; ignore everything else (no agent run, nothing stored)."""
+    conversation_id = f"messenger:{sender_id}"
+    try:
+        reply = await admin.maybe_handle(
+            text, conversation_id=conversation_id, channel="messenger", is_admin=False
+        )
+    except Exception:
+        logger.exception("Public command router failed for %s", sender_id)
+        return
+    if reply is not None:
+        logger.conversation(f"[PUBLIC -> {sender_id}] {reply}")
+        await send_message(PAGE_ACCESS_TOKEN, sender_id, reply)
+    else:
+        logger.info("Ignoring message from non-whitelisted sender %s", sender_id)
+
+
+async def _process(ctx: Ctx, sender_id: str, text: str, user_id: str) -> None:
     """Run the coordinator for one inbound message and send the reply back."""
-    logger.conversation(f"[MESSENGER {sender_id}] {text}")
+    logger.conversation(f"[MESSENGER {sender_id} → {user_id}] {text}")
     conversation_id = f"messenger:{sender_id}"
 
     # Note the inbound for the /window estimate, then let the admin surface intercept
     # technical commands (/status, /logs, …) BEFORE the agent stack — so they still work
-    # even when the coordinator/LLM is the thing that's broken, and cost no tokens.
+    # even when the coordinator/LLM is the thing that's broken, and cost no tokens. Admins
+    # (owner + `admins` group) get the full surface; a non-admin gets only public commands
+    # (/whoami). Non-command messages and a non-admin's other /commands fall through.
     diag.record_inbound(conversation_id)
     try:
-        admin_reply = await admin.maybe_handle(text, conversation_id=conversation_id, channel="messenger")
+        admin_reply = await admin.maybe_handle(
+            text, conversation_id=conversation_id, channel="messenger", is_admin=is_admin(user_id)
+        )
     except Exception:
         logger.exception("Admin router failed for %s", sender_id)
         admin_reply = None
@@ -157,7 +196,7 @@ async def _process(ctx: Ctx, sender_id: str, text: str) -> None:
     diag.register_running(conversation_id, turn)
     try:
         reply = await handle_message(
-            conversation_id, text, ctx, notify=_notify
+            conversation_id, text, ctx, notify=_notify, user_id=user_id
         )
     except asyncio.CancelledError:
         # Turn cancelled by /stop. Swallow at this task boundary (the /stop handler
@@ -185,10 +224,15 @@ async def receive(request: Request, background: BackgroundTasks) -> Response:
     ctx: Ctx = request.app.state.ctx
 
     for sender_id, text in iter_message_events(body):
-        if ALLOWED_SENDER_ID and sender_id != ALLOWED_SENDER_ID:
-            logger.info("Ignoring message from non-allowed sender %s", sender_id)
+        # Whitelist gate: an inbound sender must resolve to a known user via
+        # user_identities. This replaces the single MESSENGER_ALLOWED_SENDER_ID allowlist.
+        user_id = principals.resolve_user("messenger", sender_id)
+        if user_id is None:
+            # Not whitelisted — ignored, EXCEPT public commands (/whoami) so a new person
+            # can self-service the PSID the owner needs for /user add.
+            background.add_task(_process_public, ctx, sender_id, text)
             continue
-        background.add_task(_process, ctx, sender_id, text)
+        background.add_task(_process, ctx, sender_id, text, user_id)
 
     # Always 200 within the 5 s window; work happens after the response is sent.
     return Response(status_code=200)
