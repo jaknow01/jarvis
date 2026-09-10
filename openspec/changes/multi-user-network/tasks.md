@@ -99,6 +99,18 @@
 - [ ] 8.3 (Optional) `omegaconf` for the layer merge — SKIPPED: the hand-rolled
   last-non-null merge is ~40 lines and clearer; no dependency added.
 
+## 11. Declarative principals config file (post-review addition)
+
+- [x] 11.1 `lib/domain/principals_config.py` — reconcile a hand-editable YAML file
+  (`config/principals.yaml`, override `PRINCIPALS_CONFIG_PATH`) into the principals +
+  agent_config stores; authoritative for config (priorities/memberships/rosters),
+  non-destructive for accounts (never deletes users/groups/identities/memories)
+- [x] 11.2 `AgentConfigStore.clear_scope` (JSON + Postgres) so reconcile replaces a layer
+- [x] 11.3 Apply the file at startup (webhook + REPL, after `seed_owner`) and add the
+  owner-only `/reload` admin command
+- [x] 11.4 `config/principals.example.yaml` committed; `config/principals.yaml` gitignored
+  (holds PSIDs); docs/MULTI_USER.md documents the file + semantics
+
 ## 9. Admin surface
 
 - [x] 9.1 Add owner-only `/user add|list|assign` to `lib/runtime/admin.py`

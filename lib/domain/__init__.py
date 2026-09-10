@@ -47,6 +47,12 @@ from lib.domain.profile import (
     AgentProfile,
     FieldValue,
 )
+from lib.domain.principals_config import (
+    apply_config_file,
+    load_config_file,
+    reconcile,
+    config_path,
+)
 from lib.domain.scheduler import (
     store,
     build_job,
@@ -86,6 +92,10 @@ __all__ = [
     "Profile",
     "AgentProfile",
     "FieldValue",
+    "apply_config_file",
+    "load_config_file",
+    "reconcile",
+    "config_path",
     "memory",
     "MemoryStore",
     "summarize",

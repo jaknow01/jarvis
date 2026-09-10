@@ -60,13 +60,20 @@ async def lifespan(app: FastAPI):
     Logger.config_root_logger()
     setup_tracing()
     app.state.ctx = Ctx(cache=Cache())
-    # Ensure the migrated single-user owner (default group + identity from
-    # MESSENGER_ALLOWED_SENDER_ID) exists, so the whitelist gate resolves it. Idempotent.
+    # Ensure the migrated single-user owner exists, then reconcile the declarative
+    # principals config file (config/principals.yaml) if present — the authoritative
+    # source of truth for users/groups/rosters. Both idempotent and non-fatal.
     try:
-        from lib.domain import seed_owner
+        from lib.domain import seed_owner, apply_config_file
         seed_owner()
+        summary = apply_config_file()
+        if summary is not None:
+            logger.info(
+                "Principals config: %d group(s), %d user(s), %d warning(s)",
+                summary["groups"], summary["users"], len(summary["warnings"]),
+            )
     except Exception:
-        logger.exception("Owner seed failed (non-fatal)")
+        logger.exception("Owner seed / principals config failed (non-fatal)")
     if not (VERIFY_TOKEN and APP_SECRET and PAGE_ACCESS_TOKEN):
         logger.warning(
             "Messenger env incomplete — set MESSENGER_VERIFY_TOKEN, "

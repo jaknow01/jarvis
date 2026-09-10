@@ -95,7 +95,36 @@ Two config systems for two lifetimes:
   by design — **not** `pydantic-settings`, and **not** Hydra — to respect the repo's
   "don't churn the lockfile" rule while still giving a typed, discoverable surface.
 - **Per-principal profiles** (rosters/models): **data in the DB** (`agent_config`),
-  because they change at runtime via admin commands without a redeploy.
+  authored either by the declarative config file below or by admin commands.
+
+### Declarative config file (recommended authoring surface)
+
+`config/principals.yaml` (gitignored — holds PSIDs; copy from
+`config/principals.example.yaml`) is the **source of truth** for users, groups,
+memberships and rosters. It is reconciled into the store on every startup and on the
+admin `/reload` command (`lib/domain/principals_config.py`).
+
+```yaml
+groups:
+  dom:    { priority: 10, agents: { finance_agent: true } }
+  dzieci: { priority: 5,  agents: { finance_agent: false, news_agent: openai/gpt-5-mini } }
+users:
+  owner:  { name: Kuba, messenger: "2401...", groups: [dom] }
+  ala:    { name: Ala,  messenger: ["2402..."], groups: [dom, dzieci], agents: { scheduler_agent: false } }
+```
+
+An agent value is a bool (`enabled`), a `provider/model` string (`model`), or a dict
+`{enabled, model, reasoning}`. A user's YAML key IS its `user_id` (`owner` reconciles the
+migrated owner).
+
+**Semantics:** authoritative for *configuration* — priorities, memberships, and each
+group/user roster layer are set **exactly** to the file on each apply (stale overrides and
+memberships are removed). **Non-destructive** for *accounts* — users/groups/identities/
+memories absent from the file are **not** deleted (remove them explicitly); they're logged
+as warnings. Identities already mapped to another user are never silently reassigned.
+
+You can still use `/user` / `/group` for ad-hoc tweaks, but if you keep a config file, a
+restart or `/reload` reconciles the file back over those — so treat the file as primary.
 
 ## Owner-only admin commands
 

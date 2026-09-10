@@ -14,3 +14,6 @@ logs/*
 sandbox/
 # Local-only compose override (e.g. Pi sandbox socket wiring); never commit.
 docker-compose.override.yml
+
+# Declarative principals config holds Messenger PSIDs — keep local (example is committed)
+config/principals.yaml

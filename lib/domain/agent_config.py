@@ -106,6 +106,22 @@ class AgentConfigStore:
                 return True
         return False
 
+    def clear_scope(self, scope_type: str, scope_id: str = "") -> int:
+        """Remove every row for one layer (used by declarative reconcile to wipe a scope
+        before re-applying the file). Returns how many rows were removed."""
+        scope_id = scope_id or ""
+        with self._lock:
+            data = self._load()
+            before = len(data["rows"])
+            data["rows"] = [
+                r for r in data["rows"]
+                if not (r.get("scope_type") == scope_type and (r.get("scope_id") or "") == scope_id)
+            ]
+            removed = before - len(data["rows"])
+            if removed:
+                self._save(data)
+        return removed
+
 
 def _select_backend():
     try:
@@ -139,6 +155,9 @@ class _AgentConfigProxy:
 
     def delete(self, *a, **k):
         return self._store().delete(*a, **k)
+
+    def clear_scope(self, *a, **k):
+        return self._store().clear_scope(*a, **k)
 
 
 # module-wide singleton (backend chosen on first use)

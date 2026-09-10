@@ -623,6 +623,20 @@ async def _cmd_group(args, *, conversation_id, channel) -> str:
     return f"⚠️ Nieznana podkomenda '{sub}'. Użyj: list | add | priority | agents"
 
 
+async def _cmd_reload(args, *, conversation_id, channel) -> str:
+    """Re-apply the declarative principals config file (config/principals.yaml) now."""
+    from lib.domain import apply_config_file, config_path
+    summary = apply_config_file()
+    if summary is None:
+        return (f"ℹ️ Brak pliku configu ({config_path()}).\n"
+                f"Utwórz go (patrz config/principals.example.yaml), aby konfigurować deklaratywnie.")
+    lines = ["♻️ RELOAD principals config", "",
+             f"grupy: {summary['groups']} · użytkownicy: {summary['users']} · nowe tożsamości: {summary['identities']}"]
+    if summary["warnings"]:
+        lines += ["", "⚠️ Ostrzeżenia:"] + [f"• {w}" for w in summary["warnings"][:15]]
+    return "\n".join(lines)
+
+
 async def _cmd_profile(args, *, conversation_id, channel) -> str:
     """Show a user's resolved roster + per-agent model/reasoning with the winning layer."""
     from lib.agents import subagent_names  # runtime→agents; imported lazily to avoid cost
@@ -744,6 +758,7 @@ _COMMANDS: dict[str, _Cmd] = {
     "user": _Cmd(_cmd_user, "Użytkownicy", "/user [list|add|assign]", "użytkownicy + whitelista tożsamości i przypisania do grup"),
     "group": _Cmd(_cmd_group, "Użytkownicy", "/group [list|add|priority|agents]", "grupy: priorytet i konfiguracja rostera agentów"),
     "profile": _Cmd(_cmd_profile, "Użytkownicy", "/profile <user_id>", "rozwiązany roster + model per agent (z warstwą-źródłem)"),
+    "reload": _Cmd(_cmd_reload, "Użytkownicy", "/reload", "wczytaj ponownie plik config/principals.yaml (deklaratywny)"),
     # Konfiguracja
     "agents": _Cmd(_cmd_agents, "Konfiguracja", "/agents", "którzy subagenci włączeni/wyłączeni"),
     "models": _Cmd(_cmd_models, "Konfiguracja", "/models", "model + reasoning effort per agent"),

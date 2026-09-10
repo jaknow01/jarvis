@@ -1,0 +1,43 @@
+# Declarative principals config — the source of truth for users, groups and rosters.
+#
+# Copy this to config/principals.yaml (gitignored — it holds Messenger PSIDs) and edit it.
+# It is reconciled into the store on every startup and on the admin `/reload` command.
+#
+# Authoritative for CONFIG (priorities, memberships, per-group/per-user rosters): the file
+# replaces those on each apply. Non-destructive for ACCOUNTS: users/groups/identities/
+# memories absent from the file are NOT deleted (remove them explicitly). See
+# docs/MULTI_USER.md and lib/domain/principals_config.py.
+#
+# An agent value may be:
+#   finance_agent: false                 # shorthand → enabled: false
+#   news_agent: openai/gpt-5-mini        # shorthand → model: <this>
+#   iot_operator: { enabled: true, model: anthropic/claude-sonnet-4-20250514, reasoning: low }
+#
+# A user's YAML key IS its user_id. Use `owner` for yourself so it reconciles the
+# migrated owner (whose Messenger id was seeded from MESSENGER_ALLOWED_SENDER_ID).
+
+groups:
+  dom:
+    priority: 10
+    agents:
+      # everything on by default; list only the exceptions/overrides you want
+      finance_agent: { enabled: true }
+  dzieci:
+    priority: 5
+    agents:
+      finance_agent: false          # kids don't get finance
+      iot_operator: false           # ...or device control
+      news_agent: openai/gpt-5-mini # cheaper model for their news
+
+users:
+  owner:
+    name: Kuba
+    messenger: "PUT-YOUR-PSID-HERE"
+    groups: [dom]
+
+  ala:
+    name: Ala
+    messenger: ["PUT-ALA-PSID-HERE"]   # one id or a list
+    groups: [dom, dzieci]
+    agents:                            # optional per-user overrides (win over groups)
+      scheduler_agent: false

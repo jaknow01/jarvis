@@ -60,3 +60,12 @@ class PostgresAgentConfigStore:
                 (scope_type, scope_id, agent_name),
             )
             return cur.rowcount > 0
+
+    def clear_scope(self, scope_type: str, scope_id: str = "") -> int:
+        """Remove every row for one layer (declarative reconcile). Returns rows removed."""
+        with connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM agent_config WHERE scope_type = %s AND scope_id = %s",
+                (scope_type, scope_id),
+            )
+            return cur.rowcount
