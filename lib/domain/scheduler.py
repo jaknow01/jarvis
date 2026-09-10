@@ -126,7 +126,7 @@ def describe_schedule(job: dict) -> str:
 def build_job(prompt: str, channel: str, target: Optional[str], conversation_id: str,
               cron_expr: Optional[str] = None, run_at: Optional[str] = None,
               delay_minutes: Optional[int] = None, until: Optional[str] = None,
-              max_runs: Optional[int] = None) -> dict:
+              max_runs: Optional[int] = None, user_id: Optional[str] = None) -> dict:
     """Validate inputs and assemble a job dict with its first ``next_run_at`` computed.
 
     Exactly one of ``cron_expr`` / ``run_at`` / ``delay_minutes`` must be given; it
@@ -173,12 +173,14 @@ def build_job(prompt: str, channel: str, target: Optional[str], conversation_id:
         "last_run_at": None,
         "status": "active",
         "created_at": base.isoformat(timespec="seconds"),
+        "user_id": user_id,
     }
 
 
 def build_watch(message: str, source: str, params: dict, check_code: str,
                 poll_interval: int, channel: str, target: Optional[str],
-                conversation_id: str, repeat: bool = False) -> dict:
+                conversation_id: str, repeat: bool = False,
+                user_id: Optional[str] = None) -> dict:
     """Validate inputs and assemble a conditional-watch job (kind="watch").
 
     A watch polls ``source`` every ``poll_interval`` seconds, evaluates ``check_code``
@@ -237,6 +239,7 @@ def build_watch(message: str, source: str, params: dict, check_code: str,
         "last_result": None,  # tri-state: None=unknown, False, True
         "last_data": None,    # previous poll's raw reading (for change detection via _previous)
         "repeating": bool(repeat),  # keep armed after firing (notify on every future edge)
+        "user_id": user_id,
     }
 
 

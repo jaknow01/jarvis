@@ -1,4 +1,5 @@
 from lib.core import Cache, Ctx
+from lib.domain import seed_owner, OWNER_USER_ID
 from lib.runtime.engine import handle_message
 from lib.runtime import admin, diag
 import logging
@@ -12,6 +13,9 @@ class Chatbot():
         logger.conversation("[ASSISTANT] Wiadomość powitalna")
         ctx = Ctx()
         ctx.cache = Cache()
+        # The local REPL always acts as the owner (a single local operator). Seed ensures
+        # the owner user/default group exist so profile resolution and per-user scoping work.
+        seed_owner()
 
         async def notify(msg: str) -> None:
             # Interim "still working" ping surfaced in the terminal (mirrors what a
@@ -30,6 +34,6 @@ class Chatbot():
                 logger.conversation(f"[ADMIN]\n{admin_reply}")
                 continue
 
-            reply = await handle_message("repl", text, ctx, notify=notify)
+            reply = await handle_message("repl", text, ctx, notify=notify, user_id=OWNER_USER_ID)
 
             logger.conversation(f"[ASSISTANT] {reply}")

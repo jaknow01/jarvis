@@ -23,12 +23,13 @@ from lib.agents.scheduler_agent import create_scheduler_agent
 from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.math_agent import create_math_agent
 from lib.agents.composer import create_composer_agent
-from lib.agents.coordinator import create_coordinator_agent
+from lib.agents.coordinator import create_coordinator_agent, subagent_names
 
 __all__ = [
     "AGENTS",
     "agent_enabled",
     "create_coordinator_agent",
+    "subagent_names",
     "create_composer_agent",
     "create_iot_agent",
     "create_weather_agent",

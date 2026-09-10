@@ -130,8 +130,12 @@ entry point (REPL and Messenger both call it):
    **one** interim "still working" message naming the sub-agents already returned
    (templated Polish, no LLM; see `lib/runtime/progress.py`). Ordering is race-free: the
    final reply is only sent by the transport after `handle_message` returns, so the ping
-   always precedes it. `notify` is a per-call parameter (not on `Ctx`) because one `Ctx`
-   is shared across concurrent Messenger senders.
+   always precedes it. `notify` is a per-call parameter (not on `Ctx`) because it is wired per turn.
+   **Multi-user:** the engine resolves the acting principal (from `user_id`) into a
+   profile (roster + per-agent models) and composes a **per-turn** `Ctx` scoped to that
+   principal — a cached group scope (shared devices/maps) + fresh user scope (memory,
+   conversation, profile) — so `create_coordinator_agent(profile)` exposes only that
+   user's rostered subagents. See docs/MULTI_USER.md.
 4. It then runs the **composer deterministically** (`composer.run(...)`) on the
    gathered results — a code step, not an LLM decision — which writes the final reply
    in Polish.
@@ -155,7 +159,8 @@ the coordinator. This is a technical window into the running service from the ph
 each item's kind — cron vs one-shot vs repeating/one-shot watch — for verification; `all`
 also shows completed/cancelled),
 `/fire <id>`, `/scheduler pause|resume`, `/collect [finance|fpl]` (run the daily observation
-collectors now), `/agents`, `/models`, `/env` with masked secrets,
+collectors now), `/user`, `/group`, `/profile <user>` (multi-user management — see
+docs/MULTI_USER.md), `/agents`, `/models`, `/env` with masked secrets,
 `/memory`, `/summary`, `/reset confirm`, `/last`, `/window`, `/version`, `/probe`, `/help`).
 `/stop` works because the webhook runs each inbound message as its own task: a live turn
 registers its `asyncio.Task` in `diag`, and the concurrently-arriving `/stop` cancels it. Bypassing the agents is deliberate: the

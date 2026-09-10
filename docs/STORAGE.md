@@ -1,5 +1,12 @@
 # Storage: Postgres + on-disk JSON
 
+> **Multi-user:** the schema adds `users`, `user_identities` (the whitelist, unique on
+> `(channel, external_id)`), `groups` (with `priority`), `user_groups` (M:N), and
+> `agent_config` (the three-layer `default`/`group`/`user` roster+model config). `user_id`
+> is added to `memory_entries` and `scheduled_jobs`. The same JSON/Postgres backend
+> selection applies (`lib/domain/principals.py`, `lib/domain/agent_config.py`); JSON lives
+> under `data/principals_data/`. See [MULTI_USER.md](MULTI_USER.md).
+
 ## Where data lives
 
 Jarvis keeps its persistent data in **Postgres** (added to `docker-compose.yml`).

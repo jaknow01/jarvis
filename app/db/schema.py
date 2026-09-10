@@ -208,6 +208,85 @@ SCHEMA_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS observations_by_series
         ON observations (series, obs_date)
     """,
+    # ---- multi-user network: identities, users, groups, membership, layered config ----
+    # A user is the stable principal (cognition owner). Identities map a channel-specific
+    # sender to a user; the (channel, external_id) PK IS the whitelist — an inbound pair
+    # absent from this table is ignored (no auto-provisioning). See docs/MULTI_USER.md.
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id           TEXT PRIMARY KEY,
+        display_name TEXT,
+        status       TEXT NOT NULL DEFAULT 'active',
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS user_identities (
+        user_id     TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+        channel     TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (channel, external_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS user_identities_by_user ON user_identities (user_id)
+    """,
+    # Groups are the shared-resource (household) unit AND a config layer. `priority`
+    # orders groups during profile resolution (higher priority applied later → wins).
+    """
+    CREATE TABLE IF NOT EXISTS groups (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE,
+        priority   INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    # Many-to-many membership: a user may belong to multiple groups.
+    """
+    CREATE TABLE IF NOT EXISTS user_groups (
+        user_id  TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+        group_id TEXT NOT NULL REFERENCES groups (id) ON DELETE CASCADE,
+        PRIMARY KEY (user_id, group_id)
+    )
+    """,
+    # One table holds all three config layers, discriminated by `scope_type`
+    # (default | group | user). `scope_id` is the group/user id; for the `default` layer
+    # it is '' (empty), so it can stay in the PK (Postgres PK columns are NOT NULL).
+    # `enabled`/`model`/`reasoning` are NULLABLE so "unset" is representable — the union
+    # roster semantics depend on unset never disabling an agent (see agent-roster-resolution).
+    """
+    CREATE TABLE IF NOT EXISTS agent_config (
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('default','group','user')),
+        scope_id   TEXT NOT NULL DEFAULT '',
+        agent_name TEXT NOT NULL,
+        enabled    BOOLEAN,
+        model      TEXT,
+        reasoning  TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (scope_type, scope_id, agent_name)
+    )
+    """,
+    # Per-user scoping of cognition stores. Added idempotently; `user_id` is nullable so the
+    # additive migration can run before the backfill. The memory dedup index moves from a
+    # global (text, category) to a per-user one so two users may hold the same fact. COALESCE
+    # keeps uniqueness well-defined for any not-yet-backfilled NULL rows.
+    """
+    ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS user_id TEXT
+    """,
+    """
+    DROP INDEX IF EXISTS memory_entries_text_category
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS memory_entries_user_text_category
+        ON memory_entries (COALESCE(user_id, ''), lower(text), category)
+    """,
+    """
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS user_id TEXT
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS scheduled_jobs_by_user ON scheduled_jobs (user_id)
+    """,
     # Permanent daily FPL mini-league history (distinct from the TTL cache in
     # fpl_league_squads, which is overwritten): one append-only snapshot per (league, day)
     # capturing every manager's standing (rank + points) AND their squad (which footballers
