@@ -1,9 +1,10 @@
 # Komendy techniczne (admin / ops)
 
-> **Multi-user:** komendy `/user`, `/group` i `/profile <user_id>` zarządzają
-> użytkownikami, grupami i rozwiązanym rosterem (tylko właściciel). Szczegóły w
-> [MULTI_USER.md](MULTI_USER.md). Cała powierzchnia `/` jest teraz owner-only
-> (webhook przepuszcza admina tylko dla użytkownika-właściciela).
+> **Multi-user:** komendy `/user`, `/group`, `/profile <user_id>` i `/reload` zarządzają
+> użytkownikami, grupami i rozwiązanym rosterem. Szczegóły w [MULTI_USER.md](MULTI_USER.md).
+> Dostęp do całej powierzchni `/` mają **admini**: właściciel (zawsze) oraz członkowie grupy
+> `admins` (`is_admin()` w `lib/domain/principals.py`, egzekwowane w webhooku). Nadaj admina
+> dodając kogoś do grupy `admins`.
 
 Specjalne wiadomości zaczynające się od `/`, dzięki którym podejrzysz i lekko
 poszturchasz działający program **z telefonu** — bez SSH na Pi i grzebania w logach.

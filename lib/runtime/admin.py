@@ -461,7 +461,7 @@ def _agent_names() -> list[str]:
 
 
 async def _cmd_agents(args, *, conversation_id, channel) -> str:
-    lines = ["🤖 SUBAGENCI", ""]
+    lines = ["🤖 SUBAGENCI", "(nazwy do użycia w config/principals.yaml → agents:)", ""]
     for name in _agent_names():
         dot = "🟢" if agent_enabled(name) else "🔴"
         lines.append(f"{dot} {name}")

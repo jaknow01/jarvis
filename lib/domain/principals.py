@@ -28,6 +28,10 @@ PRINCIPALS_PATH = Path("data/principals_data/principals.json")
 OWNER_USER_ID = "owner"
 DEFAULT_GROUP_ID = "grp_default"
 DEFAULT_GROUP_NAME = "default"
+# Membership in this group grants access to the admin `/` command surface. The owner is
+# always an admin (bootstrap), regardless of membership.
+ADMINS_GROUP_ID = "grp_admins"
+ADMINS_GROUP_NAME = "admins"
 
 
 def _now() -> str:
@@ -256,9 +260,23 @@ def seed_owner(display_name: str = "Owner") -> str:
     backends — the underlying add_* methods upsert/dedupe. Returns the owner user id.
     """
     principals.add_group(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, 0)
+    # Ensure the admins group exists so the config file can reference it and /group shows
+    # it. High priority so an admin's config wins ties, but it carries no roster of its own.
+    principals.add_group(ADMINS_GROUP_ID, ADMINS_GROUP_NAME, 100)
     principals.add_user(OWNER_USER_ID, display_name)
     principals.add_membership(OWNER_USER_ID, DEFAULT_GROUP_ID)
     allowed = (os.getenv("MESSENGER_ALLOWED_SENDER_ID") or "").strip()
     if allowed and principals.resolve_user("messenger", allowed) is None:
         principals.add_identity(OWNER_USER_ID, "messenger", allowed)
     return OWNER_USER_ID
+
+
+def is_admin(user_id: str | None) -> bool:
+    """Whether ``user_id`` may use the admin `/` command surface: the owner (always, for
+    bootstrap) or any member of the ``admins`` group. Grant admin to others by adding them
+    to the ``admins`` group (config file or ``/user assign``)."""
+    if not user_id:
+        return False
+    if user_id == OWNER_USER_ID:
+        return True
+    return any(g.get("name") == ADMINS_GROUP_NAME for g in principals.groups_for_user(user_id))

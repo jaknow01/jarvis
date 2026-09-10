@@ -126,14 +126,30 @@ as warnings. Identities already mapped to another user are never silently reassi
 You can still use `/user` / `/group` for ad-hoc tweaks, but if you keep a config file, a
 restart or `/reload` reconciles the file back over those — so treat the file as primary.
 
-## Owner-only admin commands
+## Admin commands (owner + `admins` group)
 
-Reuse the `/` surface (deterministic, no LLM, owner-gated — the webhook restricts the
-admin surface to the owner user):
+Reuse the `/` surface (deterministic, no LLM). Access is restricted to **admins**: the
+owner (always, for bootstrap) and any member of the `admins` group — `is_admin(user_id)`
+in `lib/domain/principals.py`, enforced in `app/webhook.py` before the command runs. Grant
+admin to someone by adding them to the `admins` group (in the config file's `groups:` list
+for that user, or `/user assign <uid> admins`). The `admins` group is auto-seeded and
+carries no roster of its own.
 
 - `/user list | add <external_id> [name] | assign <user_id> <group,…>`
 - `/group list | add <name> [priority] | priority <name> <n> | agents <name> +a -b a=provider/model`
 - `/profile <user_id>` — the resolved roster and, per agent field, the winning layer.
+- `/reload` — re-apply the declarative config file.
+
+### What `priority` does
+
+Groups are a **config layer**, and a user can be in several. During profile resolution the
+layers are applied in order `[default, groups ascending by priority, user]`, last-non-null
+wins. So a group's `priority` only matters **when a user is in two groups that set the same
+field to different values** — the higher-priority group is applied later and wins that tie.
+It does **not** gate access or ordering of anything else. Example: user in `dom` (priority
+10, `news_agent: anthropic/…`) and `dzieci` (priority 5, `news_agent: openai/…`) → resolves
+to the `dom` model. A user-level override always beats both. Priority is irrelevant for a
+field only one group sets (that value simply applies).
 
 ## Migration
 

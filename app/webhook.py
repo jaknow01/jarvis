@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 
 from lib.core import Cache, Ctx, Logger
-from lib.domain import principals, OWNER_USER_ID
+from lib.domain import principals, is_admin
 from lib.runtime import (
     admin,
     diag,
@@ -151,10 +151,10 @@ async def _process(ctx: Ctx, sender_id: str, text: str, user_id: str) -> None:
     # Note the inbound for the /window estimate, then let the admin surface intercept
     # technical commands (/status, /logs, …) BEFORE the agent stack — so they still work
     # even when the coordinator/LLM is the thing that's broken, and cost no tokens. The
-    # admin surface is owner-only, so it is only consulted for the owner user.
+    # admin surface is restricted to admins (owner + members of the `admins` group).
     diag.record_inbound(conversation_id)
     admin_reply = None
-    if user_id == OWNER_USER_ID:
+    if is_admin(user_id):
         try:
             admin_reply = await admin.maybe_handle(text, conversation_id=conversation_id, channel="messenger")
         except Exception:

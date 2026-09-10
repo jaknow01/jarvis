@@ -164,8 +164,10 @@ docs/MULTI_USER.md), `/agents`, `/models`, `/env` with masked secrets,
 `/memory`, `/summary`, `/reset confirm`, `/last`, `/window`, `/version`, `/probe`, `/help`).
 `/stop` works because the webhook runs each inbound message as its own task: a live turn
 registers its `asyncio.Task` in `diag`, and the concurrently-arriving `/stop` cancels it. Bypassing the agents is deliberate: the
-diagnostics must work when the LLM/coordinator is the thing that's broken. It's implicitly
-owner-only (the webhook already gates on `MESSENGER_ALLOWED_SENDER_ID`; REPL is local).
+diagnostics must work when the LLM/coordinator is the thing that's broken. Access is
+restricted to **admins** — the owner plus members of the `admins` group (`is_admin()` in
+`lib/domain/principals.py`, enforced in the webhook before the command runs; REPL is the
+local owner). See docs/MULTI_USER.md.
 Output is plain text formatted for a mobile chat bubble (no Markdown). In-memory
 diagnostic state (uptime, last-turn stats, the `/window` inbound tracker, the scheduler
 heartbeat/pause) lives in `lib/runtime/diag.py` + `scheduler_runner` and resets on restart.
