@@ -645,7 +645,7 @@ async def _cmd_whoami(args, *, conversation_id, channel) -> str:
         lines.append(f"admin: {'tak' if is_admin(uid) else 'nie'}")
     else:
         lines.append("")
-        lines.append("Nie jesteś jeszcze dodany. Podaj powyższy PSID właścicielowi —")
+        lines.append("Nie jesteś jeszcze dodany. Podaj powyższy PSID właścicielowi")
     return "\n".join(lines)
 
 
