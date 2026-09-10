@@ -25,18 +25,34 @@ affect the merged value for that field.
 - **WHEN** a higher layer leaves an agent's `model` unset while a lower layer sets it
 - **THEN** the merged profile keeps the lower layer's value
 
-### Requirement: Enabled agents form a union unless explicitly disabled
+### Requirement: The roster is opt-in — agents are off until explicitly enabled
 
-The system SHALL treat an agent as part of a principal's roster when any applicable
-layer enables it and no higher-precedence layer explicitly disables it. Because `unset`
-never disables, the roster SHALL be the union of agents enabled across the user's
-groups, from which an explicit `enabled = false` in a higher-precedence layer (a
-higher-priority group, or the user) removes an agent.
+The system SHALL treat every agent as OFF by default and part of a principal's roster
+only when some applicable layer explicitly sets `enabled = true` and no higher-precedence
+layer disables it. `unset` neither activates nor disables. The roster is therefore the
+**union of agents explicitly enabled** across the user's layers, minus explicit
+`enabled = false` in a higher-precedence layer (a higher-priority group, or the user).
+To preserve the pre-multi-user single-user behavior, the migrated owner's `default` group
+SHALL be seeded at startup with every subagent enabled, so an un-configured owner keeps a
+full roster; a newly-added user with no groups SHALL have an empty roster.
 
-#### Scenario: Roster is the union across groups
+#### Scenario: Nothing is enabled without a config entry
 
-- **WHEN** a user's group A enables `iot_operator` and group B does not mention it
-- **THEN** the user's roster includes `iot_operator`
+- **WHEN** a user is in a group that has no `agent_config` rows and no other layer enables
+  any agent
+- **THEN** the user's roster is empty
+
+#### Scenario: An agent is included only when a layer enables it
+
+- **WHEN** a user's group A sets `iot_operator.enabled = true` and group B does not mention
+  it
+- **THEN** the user's roster includes `iot_operator` and excludes agents no layer enabled
+
+#### Scenario: The owner keeps a full roster with no explicit config
+
+- **WHEN** the migrated owner (member of the seeded `default` group) resolves a profile
+  and has written no per-agent config
+- **THEN** every subagent is in the owner's roster (from the seeded `default` group)
 
 #### Scenario: User explicitly removes an agent
 

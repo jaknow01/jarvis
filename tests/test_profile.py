@@ -38,16 +38,25 @@ def _user_in_groups(ps, groups):
     return uid, ids
 
 
-def test_empty_config_parity(tmp_path, monkeypatch):
+def test_empty_config_is_opt_in_off(tmp_path, monkeypatch):
     ps, acs = _wire(tmp_path, monkeypatch)
     uid, _ = _user_in_groups(ps, [("dom", 0)])
     prof = resolve_profile(uid, AGENTS)
-    # No DB rows → every agent enabled (env default True), models/reasoning unset (None).
-    assert set(prof.roster()) == set(AGENTS)
+    # Opt-in: with no config rows, nothing is enabled; models/reasoning unset (None).
+    assert prof.roster() == []
     for name in AGENTS:
+        assert prof.is_enabled(name) is False
+        assert prof.agents[name].enabled.source == "default-off"
         assert prof.model(name) is None
         assert prof.reasoning(name) is None
-        assert prof.agents[name].enabled.source == "env"
+
+
+def test_agent_enabled_only_when_a_layer_activates_it(tmp_path, monkeypatch):
+    ps, acs = _wire(tmp_path, monkeypatch)
+    uid, gids = _user_in_groups(ps, [("dom", 0)])
+    acs.set(GROUP_SCOPE, gids["dom"], "weather_agent", enabled=True)
+    prof = resolve_profile(uid, AGENTS)
+    assert prof.roster() == ["weather_agent"]  # only the explicitly-enabled one
 
 
 def test_union_across_groups(tmp_path, monkeypatch):

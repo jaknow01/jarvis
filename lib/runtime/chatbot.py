@@ -1,6 +1,6 @@
 from lib.core import Cache, Ctx
 from lib.domain import seed_owner, apply_config_file, OWNER_USER_ID
-from lib.runtime.engine import handle_message
+from lib.runtime.engine import handle_message, ensure_default_group_roster
 from lib.runtime import admin, diag
 import logging
 
@@ -17,6 +17,7 @@ class Chatbot():
         # the owner user/default group exist, then apply the declarative principals config
         # file (config/principals.yaml) if present, so profile resolution matches it.
         seed_owner()
+        ensure_default_group_roster()
         apply_config_file()
 
         async def notify(msg: str) -> None:

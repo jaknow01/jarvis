@@ -33,7 +33,14 @@ from lib.core import (
     reset_model_overrides,
     group_scope_for,
 )
-from lib.domain import conversations, principals, resolve_profile
+from lib.domain import (
+    conversations,
+    principals,
+    resolve_profile,
+    agent_config,
+    GROUP_SCOPE,
+    DEFAULT_GROUP_ID,
+)
 from lib.runtime import diag, progress
 from lib.runtime.history_window import build_chat_history, schedule_summary_fold
 from lib.runtime.tracing import last_trace_id
@@ -104,6 +111,20 @@ async def _gather_with_progress_ping(handler, notify, want_ping):
         for task in (pinger, collector):
             if task is not None:
                 task.cancel()
+
+
+def ensure_default_group_roster() -> None:
+    """Seed the ``default`` group's roster with every subagent enabled, so the migrated
+    single-user owner (member of ``default``) gets a full roster without per-agent config —
+    preserving the pre-multi-user behavior under the new opt-in model. Seeds **once**: if the
+    default group already has any agent_config rows (from a prior seed, admin edit, or the
+    declarative config file), it is left untouched. Called at startup, before the config
+    file is applied. Lives here (runtime) because it needs the subagent catalog (agents)."""
+    if agent_config.get_layer(GROUP_SCOPE, DEFAULT_GROUP_ID):
+        return
+    for name in subagent_names():
+        agent_config.set(GROUP_SCOPE, DEFAULT_GROUP_ID, name, enabled=True)
+    logger.info("Seeded default group roster (all subagents enabled) for the owner")
 
 
 def _resource_group_id(user_id: str | None) -> str | None:

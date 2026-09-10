@@ -539,11 +539,13 @@ async def _cmd_user(args, *, conversation_id, channel) -> str:
         uid = new_user_id()
         principals.add_user(uid, display)
         principals.add_identity(uid, "messenger", external_id)
-        principals.add_membership(uid, DEFAULT_GROUP_ID)
+        # Opt-in model: a new user starts with NO groups (empty roster). Assign them to
+        # groups that enable the agents they should have. (The `default` group is the
+        # owner's full-access group and is intentionally not auto-assigned.)
         return (f"✅ Dodano użytkownika {uid} „{display or ''}”\n"
                 f"   tożsamość: messenger:{external_id}\n"
-                f"   grupa: {DEFAULT_GROUP_NAME}\n"
-                f"   (przypisz do grup: {PREFIX}user assign {uid} <grupa,...>)")
+                f"   grupy: (brak — roster jest pusty do czasu przypisania)\n"
+                f"   ➡️ przypisz do grup: {PREFIX}user assign {uid} <grupa,...>")
     if sub == "assign":
         # /user assign <user_id> <group_name>[,group_name...]
         if len(args) < 3:

@@ -30,6 +30,7 @@ from lib.runtime import (
     admin,
     diag,
     handle_message,
+    ensure_default_group_roster,
     iter_message_events,
     send_message,
     verify_challenge,
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
     try:
         from lib.domain import seed_owner, apply_config_file
         seed_owner()
+        ensure_default_group_roster()  # owner's default group gets a full roster (opt-in model)
         summary = apply_config_file()
         if summary is not None:
             logger.info(

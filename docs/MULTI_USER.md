@@ -39,16 +39,19 @@ coordinator's roster, and each agent's `model`/`reasoning`. One rule does it all
 
 Everything falls out of that single rule:
 
-- **Union of agents.** `enabled` starts from the env default (`agent_enabled` — True
-  unless `AGENT_<NAME>_ENABLED` is falsy). `unset` never disables; only an explicit
-  `enabled=false` in a later layer removes an agent. So the roster is the union of agents
-  enabled across the user's groups, minus explicit disables.
+- **Opt-in roster.** `enabled` starts **OFF**. An agent is in the roster only if some
+  applicable layer explicitly sets `enabled: true`; `unset` never activates and never
+  disables; an explicit `enabled: false` removes one a lower layer activated. So the
+  roster is the **union of agents explicitly enabled** across the user's layers, minus
+  explicit disables. (Owner bootstrap: the `default` group is seeded with every subagent
+  enabled at startup — `ensure_default_group_roster` — so the un-configured single-user
+  setup keeps a full roster. New users start with no groups → empty roster until assigned.)
 - **User wins.** The user layer is applied last.
 - **Group priority breaks ties.** Groups are applied ascending by `priority`, so the
   higher-priority group is applied later and wins.
-- **Empty-config parity.** With no DB config rows, `enabled` is the env default and
-  `model`/`reasoning` are `None` — meaning the LLM resolver falls back to
-  `AGENT_<NAME>_MODEL` / `DEFAULT_MODEL` exactly as before this change.
+- **Env kill-switch.** `AGENT_<NAME>_ENABLED` set falsy forces an agent OFF globally,
+  overriding any layer. Models still fall back to `AGENT_<NAME>_MODEL` / `DEFAULT_MODEL`
+  when no layer sets one (`model`/`reasoning` unset = `None`).
 
 The layers live in one table, `agent_config(scope_type ∈ {default,group,user},
 scope_id, agent_name, enabled, model, reasoning)`, nullable so "unset" is representable.
@@ -157,5 +160,8 @@ field only one group sets (that value simply applies).
 identity from `MESSENGER_ALLOWED_SENDER_ID`, and backfills existing `memory_entries` /
 `scheduled_jobs` with the owner `user_id`. On startup both the webhook and the REPL call
 `seed_owner()` (idempotent), so the JSON backend gets the same owner seed. The migration
-is additive and each step is independently reversible; with no per-principal config the
-resolved profile equals today's env-driven behavior.
+is additive and each step is independently reversible. The roster model is **opt-in**
+(agents off until a layer enables them); to preserve the single-user experience, the
+owner's `default` group is seeded with every subagent enabled at startup, so the
+un-configured owner keeps a full roster. Newly-added users start with no groups (empty
+roster) until you assign them.

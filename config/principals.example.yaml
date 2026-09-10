@@ -32,18 +32,27 @@
 # member of the `admins` group. Grant it by adding a user to `admins` (see `ala` below).
 # The `admins` group always exists (auto-seeded); it carries no roster of its own.
 
+# Roster is OPT-IN: agents are OFF until a layer enables them. List the agents you
+# want ON for each group (enabled: true, or the shorthand `true`). `false` explicitly
+# removes one that another layer enabled. A bare `provider/model` sets the model only.
+# (The `default` group — the owner's — is auto-seeded with everything enabled.)
 groups:
   dom:
     priority: 10
-    agents:
-      # everything on by default; list only the exceptions/overrides you want
-      finance_agent: { enabled: true }
+    agents:                          # turn ON what this group should have
+      weather_agent: true
+      finance_agent: true
+      maps_agent: true
+      news_agent: true
+      iot_operator: true
+      memory_operator: true
+      scheduler_agent: true
   dzieci:
     priority: 5
-    agents:
-      finance_agent: false          # kids don't get finance
-      iot_operator: false           # ...or device control
-      news_agent: openai/gpt-5-mini # cheaper model for their news
+    agents:                          # kids: a small, explicit allowlist
+      weather_agent: true
+      fpl_agent: true
+      news_agent: openai/gpt-5-mini  # on, with a cheaper model
 
 users:
   owner:

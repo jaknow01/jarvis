@@ -5,10 +5,15 @@ ordered ``[env/default, groups sorted by ascending priority, user]`` and, per
 ``(agent, field)``, the **last non-null value wins**. Consequences that fall out of
 this one rule:
 
-- **Union of agents**: ``enabled`` starts from the env default (``agent_enabled`` —
-  True unless ``AGENT_<NAME>_ENABLED`` is falsy). An ``unset`` layer never disables;
-  only an explicit ``enabled = false`` in a later layer removes an agent. So the roster
-  is the union of agents enabled across the user's groups, minus explicit disables.
+- **Opt-in roster**: ``enabled`` starts **OFF**. An agent is in the roster only if some
+  applicable layer explicitly sets ``enabled = true`` (a group, the user, or the seeded
+  ``default`` group). An ``unset`` layer never activates and never disables; an explicit
+  ``enabled = false`` in a later layer removes an agent activated by a lower one. So the
+  roster is the **union of agents explicitly enabled** across the user's layers, minus
+  explicit disables. (The owner's ``default`` group is seeded with every subagent enabled
+  at startup, so the un-configured single-user setup still gets a full roster.)
+- **Env kill-switch**: ``AGENT_<NAME>_ENABLED`` set to a falsy value forces an agent OFF
+  globally, overriding any layer that enabled it.
 - **User wins**: the user layer is applied last.
 - **Group priority breaks ties**: groups are applied in ascending ``priority`` order,
   so the higher-priority group is applied later and wins.
@@ -24,18 +29,29 @@ names are supplied by the caller (the coordinator, which owns its subagent list)
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from lib.core import agent_enabled
 from lib.domain.principals import principals
 from lib.domain.agent_config import agent_config, DEFAULT_SCOPE, GROUP_SCOPE, USER_SCOPE
 
 logger = logging.getLogger(__name__)
 
-# Provenance label used when a field's winning value came from the environment/default
-# base rather than a DB config row.
+# Provenance label used when a field's winning value came from the env/base rather than a
+# DB config row.
 ENV_SOURCE = "env"
+# Provenance label for the opt-in default: an agent is OFF until a layer enables it.
+DEFAULT_OFF_SOURCE = "default-off"
+
+_FALSY = ("0", "false", "no", "off", "disabled")
+
+
+def _env_kill(agent_name: str) -> bool:
+    """True when ``AGENT_<NAME>_ENABLED`` is explicitly falsy — a hard global off switch
+    that overrides any layer that enabled the agent."""
+    raw = os.getenv(f"AGENT_{agent_name.upper()}_ENABLED")
+    return raw is not None and raw.strip().lower() in _FALSY
 
 
 @dataclass(frozen=True)
@@ -98,7 +114,8 @@ def resolve_profile(user_id: Optional[str], candidate_agents: list[str]) -> Prof
     layers = _ordered_layers(user_id)
     agents: dict[str, AgentProfile] = {}
     for name in candidate_agents:
-        enabled = FieldValue(bool(agent_enabled(name)), ENV_SOURCE)
+        # Opt-in: an agent is OFF until a layer explicitly enables it.
+        enabled = FieldValue(False, DEFAULT_OFF_SOURCE)
         model = FieldValue(None, ENV_SOURCE)
         reasoning = FieldValue(None, ENV_SOURCE)
         for label, cfg in layers:
@@ -111,5 +128,8 @@ def resolve_profile(user_id: Optional[str], candidate_agents: list[str]) -> Prof
                 model = FieldValue(row["model"], label)
             if row.get("reasoning") is not None:
                 reasoning = FieldValue(row["reasoning"], label)
+        # Hard global kill-switch overrides any layer that enabled the agent.
+        if _env_kill(name):
+            enabled = FieldValue(False, "env-off")
         agents[name] = AgentProfile(enabled, model, reasoning)
     return Profile(user_id, agents)
