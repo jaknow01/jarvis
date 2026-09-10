@@ -13,6 +13,11 @@ services:
       # Device DB, maps memory, and JSON stores live here — without this mount the
       # container has no smart_devices.json ("baza świateł niedostępna").
       - ./data:/app/data
+      # Declarative principals config (users/groups/rosters). Gitignored + holds PSIDs,
+      # so it is NOT baked into the image — it must be mounted from the host. Without this
+      # mount apply_config_file() finds no file and nobody gets added ("Nie zostałeś
+      # jeszcze dodany"). Read-only: the app only reads it (host edits + /reload apply).
+      - ./config:/app/config:ro
     # Secrets (OPENAI_API_KEY, MESSENGER_*, etc.) come from .env; the explicit
     # `environment:` below overrides any compose-internal hosts baked into .env.
     env_file: .env
