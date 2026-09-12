@@ -25,6 +25,7 @@ the single source of truth for source validation and for what the model is told 
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Awaitable, Callable, Optional
 
@@ -136,9 +137,44 @@ def _resolve_tool(agent_name: str, tool_name: str):
 
 
 def _tool_fetcher(tool) -> Fetcher:
-    """Wrap a tool's coroutine as a params->dict fetcher (ctx is decorative -> None)."""
+    """Wrap a tool's coroutine as a params->dict fetcher (ctx is decorative -> None).
+
+    Params come from an LLM-authored watch, so they may include plausible-but-unsupported
+    keys (e.g. a ``league_id`` on ``fpl.live``, which only takes ``gameweek``/``entry_id``).
+    Splatting those straight in would raise ``TypeError`` and fail every poll — and the
+    prepare_watch smoke test — turning the whole watch "unavailable". So we keep only the
+    keys the tool's signature actually accepts (unless it declares ``**kwargs``), dropping
+    the rest with a warning rather than crashing.
+    """
+    fn = tool.async_fn
+    tool_name = tool.metadata.name
+    try:
+        sig = inspect.signature(fn)
+        accepts_var_kw = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        # First param is the injected ctx; everything else is a real tool param.
+        allowed = {
+            name
+            for name, p in sig.parameters.items()
+            if name != "ctx"
+            and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+    except (ValueError, TypeError):  # pragma: no cover - signature always introspectable here
+        accepts_var_kw, allowed = True, None
+
     async def fetch(params: dict) -> dict:
-        return await tool.async_fn(None, **(params or {}))
+        kwargs = dict(params or {})
+        if not accepts_var_kw and allowed is not None:
+            unknown = [k for k in kwargs if k not in allowed]
+            if unknown:
+                logger.warning(
+                    "watch source '%s': ignoring unsupported param(s) %s "
+                    "(tool accepts %s)",
+                    tool_name, unknown, sorted(allowed),
+                )
+                kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+        return await fn(None, **kwargs)
     return fetch
 
 
