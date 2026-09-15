@@ -33,11 +33,11 @@ def test_coordinator_excludes_disabled_subagents(monkeypatch):
 
 def test_coordinator_has_all_subagents_by_default(monkeypatch):
     monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
-    for a in ["IOT_OPERATOR", "WEATHER_AGENT", "FINANCE_AGENT", "MAPS_AGENT", "NEWS_AGENT", "MEMORY_OPERATOR", "FPL_AGENT", "SCHEDULER_AGENT"]:
+    for a in ["IOT_OPERATOR", "WEATHER_AGENT", "FINANCE_AGENT", "MAPS_AGENT", "NEWS_AGENT", "MEMORY_OPERATOR", "FPL_AGENT", "SCHEDULER_AGENT", "CALENDAR_AGENT"]:
         monkeypatch.delenv(f"AGENT_{a}_ENABLED", raising=False)
     coord = agents.create_coordinator_agent()
     names = {t.metadata.name for t in coord.tools}
-    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent", "math_agent"}
+    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent", "math_agent", "calendar_agent"}
 
 
 def test_coordinator_does_not_expose_composer_and_has_no_handoffs(monkeypatch):

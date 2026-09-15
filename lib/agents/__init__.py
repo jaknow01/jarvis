@@ -22,6 +22,7 @@ from lib.agents.memory_operator import create_memory_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
 from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.math_agent import create_math_agent
+from lib.agents.calendar_agent import create_calendar_agent
 from lib.agents.composer import create_composer_agent
 from lib.agents.coordinator import create_coordinator_agent, subagent_names
 
@@ -40,4 +41,5 @@ __all__ = [
     "create_scheduler_agent",
     "create_fpl_agent",
     "create_math_agent",
+    "create_calendar_agent",
 ]

@@ -26,6 +26,7 @@
 #   fpl_agent        – Fantasy Premier League
 #   scheduler_agent  – reminders / recurring briefs / conditional watches
 #   math_agent       – exact calculations over gathered figures
+#   calendar_agent   – Apple (iCloud) calendar: list/add/edit/delete events
 #
 # ── Admin access ──
 # The admin `/` command surface (in Messenger) is available to the owner and to any

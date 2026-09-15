@@ -17,6 +17,7 @@ from lib.agents.memory_operator import create_memory_agent
 from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
 from lib.agents.math_agent import create_math_agent
+from lib.agents.calendar_agent import create_calendar_agent
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ def subagent_catalog() -> list[tuple]:
         ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
         ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders, recurring proactive briefs, AND conditional watches that poll live data and notify ONLY when a condition becomes true ('daj znać, gdy...', 'powiadom, kiedy...'); plus listing/cancelling them."),
         ("math_agent", create_math_agent, "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."),
+        ("calendar_agent", create_calendar_agent, "Reads and manages the owner's Apple (iCloud) calendar: list events in a time window ('co mam jutro/w tym tygodniu', 'czy jestem wolny...'), add events ('dodaj do kalendarza...'), edit them, and delete them (deletion is confirmed with the user first)."),
     ]
 
 
