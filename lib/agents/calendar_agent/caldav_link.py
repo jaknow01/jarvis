@@ -23,7 +23,8 @@ iCloud setup (owner, one-time):
 Read vs write are separate: writes go to the single ICLOUD_CALENDAR_NAME calendar, but
 reads (listing, and finding an event to edit/delete) span every calendar by default — or
 the ICLOUD_READ_CALENDARS subset (always including the write calendar). So Jarvis can add
-to 'Asystent' yet still see 'Dom', 'Praca', etc.
+to 'Asystent' yet still see 'Dom', 'Praca', etc. If ICLOUD_CALENDAR_NAME names a calendar
+that does not exist yet, it is created on iCloud on first write (never on a read).
 
 The ``caldav`` library is synchronous (``requests`` under the hood). Every public helper
 here is a plain blocking function; the async tools call them via ``asyncio.to_thread`` so
@@ -85,14 +86,28 @@ def _all_calendars(principal: "caldav.Principal") -> list:
 def _write_calendar(principal: "caldav.Principal", name: str | None):
     """The single calendar new events are written to: the explicit ``name`` arg, else
     ICLOUD_CALENDAR_NAME, else the account's first calendar. Matching is case-insensitive
-    by display name."""
+    by display name.
+
+    Auto-create: if a name IS configured but no such calendar exists, create it on iCloud
+    (the owner's stated intent — "use calendar X" — is to have Jarvis own that calendar).
+    Only ever called on the write path, so a read never creates anything. If creation
+    fails, fall back to the first calendar so writes still succeed (the caller returns the
+    actual 'calendar' it wrote to)."""
     calendars = _all_calendars(principal)
-    wanted = (name or os.getenv("ICLOUD_CALENDAR_NAME") or "").strip().lower()
-    if wanted:
+    wanted_raw = (name or os.getenv("ICLOUD_CALENDAR_NAME") or "").strip()
+    if wanted_raw:
+        wanted = wanted_raw.lower()
         for cal in calendars:
             if _cal_name(cal).strip().lower() == wanted:
                 return cal
-        logger.warning("Write calendar %r not found; falling back to the first one.", name)
+        try:
+            created = principal.make_calendar(name=wanted_raw)
+            logger.info("Write calendar %r did not exist; created it on iCloud.", wanted_raw)
+            return created
+        except Exception:  # noqa: BLE001 - creation can fail (perms/server); stay writable
+            logger.exception(
+                "Could not create calendar %r; falling back to the first one.", wanted_raw
+            )
     return calendars[0]
 
 
@@ -117,7 +132,11 @@ def _read_calendars(principal: "caldav.Principal", name: str | None = None) -> l
         return calendars  # default: every calendar
 
     wanted = {n.strip().lower() for n in raw.split(",") if n.strip()}
-    wanted.add(_cal_name(_write_calendar(principal, None)).strip().lower())
+    # Always include the write calendar so Jarvis sees its own events — by NAME only, so a
+    # read never resolves/creates the write calendar (that stays a write-path side effect).
+    write_name = (os.getenv("ICLOUD_CALENDAR_NAME") or "").strip().lower()
+    if write_name:
+        wanted.add(write_name)
     picked = [c for c in calendars if _cal_name(c).strip().lower() in wanted]
     return picked or calendars
 
