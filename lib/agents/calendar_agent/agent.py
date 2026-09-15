@@ -18,7 +18,11 @@ def create_calendar_agent() -> FunctionAgent:
         "create, update and (with confirmation) delete them.",
         system_prompt=(
             "You manage the owner's Apple iCloud calendar over CalDAV. You can list events "
-            "in a time window, create events, update them, and delete them.\n"
+            "in a time window, create events, update them, and delete them. Listing spans "
+            "all of the owner's calendars by default (each returned event carries a "
+            "'calendar' field, e.g. 'Dom' or 'Asystent'), while new events you create go to "
+            "the one configured write calendar. Mention the source calendar when it helps "
+            "the user tell overlapping events apart.\n"
             "\n"
             "Dates: the environment context above gives you today's date, weekday and time "
             "and the timezone. ALWAYS resolve relative days ('dziś', 'jutro', 'w piątek', "

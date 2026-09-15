@@ -17,7 +17,13 @@ iCloud setup (owner, one-time):
        ICLOUD_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
      Optional::
        ICLOUD_CALDAV_URL=https://caldav.icloud.com/   (default)
-       ICLOUD_CALENDAR_NAME=Personal                  (default calendar to read/write)
+       ICLOUD_CALENDAR_NAME=Asystent                  (calendar NEW events are written to)
+       ICLOUD_READ_CALENDARS=Asystent,Dom             (calendars reads span; empty = ALL)
+
+Read vs write are separate: writes go to the single ICLOUD_CALENDAR_NAME calendar, but
+reads (listing, and finding an event to edit/delete) span every calendar by default — or
+the ICLOUD_READ_CALENDARS subset (always including the write calendar). So Jarvis can add
+to 'Asystent' yet still see 'Dom', 'Praca', etc.
 
 The ``caldav`` library is synchronous (``requests`` under the hood). Every public helper
 here is a plain blocking function; the async tools call them via ``asyncio.to_thread`` so
@@ -62,22 +68,58 @@ def _client() -> caldav.DAVClient:
     return caldav.DAVClient(url=url, username=user, password=password)
 
 
-def _pick_calendar(principal: "caldav.Principal", name: str | None):
-    """Choose the target calendar. ``name`` (or ICLOUD_CALENDAR_NAME) is matched
-    case-insensitively by display name; otherwise the first calendar is used."""
+def _cal_name(cal) -> str:
+    try:
+        return str(cal.name or "")
+    except Exception:  # noqa: BLE001 - name lookup can PROPFIND and fail
+        return ""
+
+
+def _all_calendars(principal: "caldav.Principal") -> list:
     calendars = principal.calendars()
     if not calendars:
         raise RuntimeError("No calendars found on the iCloud account.")
+    return calendars
+
+
+def _write_calendar(principal: "caldav.Principal", name: str | None):
+    """The single calendar new events are written to: the explicit ``name`` arg, else
+    ICLOUD_CALENDAR_NAME, else the account's first calendar. Matching is case-insensitive
+    by display name."""
+    calendars = _all_calendars(principal)
     wanted = (name or os.getenv("ICLOUD_CALENDAR_NAME") or "").strip().lower()
     if wanted:
         for cal in calendars:
-            try:
-                if str(cal.name or "").strip().lower() == wanted:
-                    return cal
-            except Exception:  # noqa: BLE001 - name lookup can PROPFIND and fail
-                continue
-        logger.warning("Calendar %r not found; falling back to the first one.", name)
+            if _cal_name(cal).strip().lower() == wanted:
+                return cal
+        logger.warning("Write calendar %r not found; falling back to the first one.", name)
     return calendars[0]
+
+
+def _read_calendars(principal: "caldav.Principal", name: str | None = None) -> list:
+    """The calendars reads (list/find) span. Precedence:
+    1. an explicit ``name`` arg -> just that calendar (a caller narrowing the scope);
+    2. ICLOUD_READ_CALENDARS (comma-separated display names) -> those, PLUS the write
+       calendar so Jarvis always sees the events it created;
+    3. neither set -> ALL calendars on the account.
+    So reading is broad by default and writing stays pinned to one calendar."""
+    calendars = _all_calendars(principal)
+    if name:
+        wanted = name.strip().lower()
+        picked = [c for c in calendars if _cal_name(c).strip().lower() == wanted]
+        if picked:
+            return picked
+        logger.warning("Read calendar %r not found; reading all instead.", name)
+        return calendars
+
+    raw = (os.getenv("ICLOUD_READ_CALENDARS") or "").strip()
+    if not raw:
+        return calendars  # default: every calendar
+
+    wanted = {n.strip().lower() for n in raw.split(",") if n.strip()}
+    wanted.add(_cal_name(_write_calendar(principal, None)).strip().lower())
+    picked = [c for c in calendars if _cal_name(c).strip().lower() in wanted]
+    return picked or calendars
 
 
 # --------------------------------------------------------------------------- (de)serialize
@@ -97,8 +139,10 @@ def _parse_dt(value: str) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=_TZ)
 
 
-def event_to_dict(event: "caldav.Event") -> dict:
-    """Project a raw CalDAV event down to the safe fields the model may see."""
+def event_to_dict(event: "caldav.Event", calendar_name: str | None = None) -> dict:
+    """Project a raw CalDAV event down to the safe fields the model may see.
+    ``calendar_name`` tags which calendar the event came from (so a merged multi-calendar
+    listing stays legible, e.g. 'Dom' vs 'Asystent')."""
     comp = event.icalendar_component or {}
 
     def _text(key: str) -> str | None:
@@ -124,6 +168,7 @@ def event_to_dict(event: "caldav.Event") -> dict:
         "location": _text("location"),
         "description": _text("description"),
         "status": _text("status"),
+        "calendar": calendar_name,
     }
 
 
@@ -163,11 +208,20 @@ def _build_ical(
 
 
 def list_events(start_iso: str, end_iso: str, calendar_name: str | None = None) -> list[dict]:
+    """List events in the window across the read scope (all calendars by default, or the
+    ICLOUD_READ_CALENDARS subset; ``calendar_name`` narrows to one). Each event is tagged
+    with its source calendar."""
     principal = _client().principal()
-    cal = _pick_calendar(principal, calendar_name)
     start, end = _parse_dt(start_iso), _parse_dt(end_iso)
-    found = cal.search(start=start, end=end, event=True, expand=True)
-    events = [event_to_dict(e) for e in found]
+    events: list[dict] = []
+    for cal in _read_calendars(principal, calendar_name):
+        name = _cal_name(cal)
+        try:
+            found = cal.search(start=start, end=end, event=True, expand=True)
+        except Exception:  # noqa: BLE001 - one bad calendar must not sink the whole read
+            logger.exception("Search failed on calendar %r; skipping it.", name)
+            continue
+        events.extend(event_to_dict(e, name) for e in found)
     events.sort(key=lambda e: e["start"] or "")
     return events
 
@@ -195,23 +249,28 @@ def create_event(
         location=location, description=description, uid=uid,
     )
     principal = _client().principal()
-    cal = _pick_calendar(principal, calendar_name)
+    cal = _write_calendar(principal, calendar_name)
     saved = cal.save_event(ical)
-    return event_to_dict(saved)
+    return event_to_dict(saved, _cal_name(cal))
 
 
-def _find_event(cal, event_id: str):
-    try:
-        return cal.event_by_uid(event_id)
-    except Exception:  # noqa: BLE001 - some servers 404 unknown uids
-        return None
+def _find_event_across(principal, event_id: str, calendar_name: str | None = None):
+    """Locate an event by UID across the read scope, so an event the user saw in any
+    calendar can be edited/deleted. Returns (event, calendar_name) or (None, None)."""
+    for cal in _read_calendars(principal, calendar_name):
+        try:
+            ev = cal.event_by_uid(event_id)
+        except Exception:  # noqa: BLE001 - servers 404 unknown uids per calendar
+            continue
+        if ev is not None:
+            return ev, _cal_name(cal)
+    return None, None
 
 
 def get_event(event_id: str, calendar_name: str | None = None) -> dict | None:
     principal = _client().principal()
-    cal = _pick_calendar(principal, calendar_name)
-    ev = _find_event(cal, event_id)
-    return event_to_dict(ev) if ev is not None else None
+    ev, name = _find_event_across(principal, event_id, calendar_name)
+    return event_to_dict(ev, name) if ev is not None else None
 
 
 def update_event(
@@ -225,8 +284,7 @@ def update_event(
     calendar_name: str | None = None,
 ) -> dict | None:
     principal = _client().principal()
-    cal = _pick_calendar(principal, calendar_name)
-    ev = _find_event(cal, event_id)
+    ev, name = _find_event_across(principal, event_id, calendar_name)
     if ev is None:
         return None
     comp = ev.icalendar_component
@@ -247,13 +305,12 @@ def update_event(
     if description is not None:
         _set("description", description)
     ev.save()
-    return event_to_dict(ev)
+    return event_to_dict(ev, name)
 
 
 def delete_event(event_id: str, calendar_name: str | None = None) -> bool:
     principal = _client().principal()
-    cal = _pick_calendar(principal, calendar_name)
-    ev = _find_event(cal, event_id)
+    ev, _ = _find_event_across(principal, event_id, calendar_name)
     if ev is None:
         return False
     ev.delete()

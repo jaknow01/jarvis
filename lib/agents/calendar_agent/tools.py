@@ -28,10 +28,11 @@ logger = logging.getLogger(__name__)
 async def list_calendar_events(ctx: Context, start: str, end: str, calendar_name: str = "") -> dict:
     """
     Description:
-        Lists the owner's calendar events in a time window (from the Apple iCloud
-        calendar). Use it to answer "what's on my calendar", "am I free on...", "what do
-        I have tomorrow / this week". Recurring events are expanded into their individual
-        occurrences within the window.
+        Lists the owner's calendar events in a time window. By default it reads across ALL
+        the owner's calendars (or the configured ICLOUD_READ_CALENDARS subset), so it sees
+        e.g. both "Dom" and "Asystent". Use it to answer "what's on my calendar", "am I
+        free on...", "what do I have tomorrow / this week". Recurring events are expanded
+        into their individual occurrences within the window.
 
     Parameters:
     start: str
@@ -41,13 +42,14 @@ async def list_calendar_events(ctx: Context, start: str, end: str, calendar_name
     end: str
         End of the window as an ISO-8601 datetime, e.g. "2026-09-16T00:00:00".
     calendar_name: str = ""
-        Optional calendar display name to read from. Empty means the configured default
-        (ICLOUD_CALENDAR_NAME) or the account's first calendar.
+        Optional: restrict the listing to a single calendar by display name. Empty (the
+        normal case) reads across the full read scope described above.
 
     Output:
         JSON object: {"events": [ {id, summary, start, end, all_day, location,
-        description, status}, ... ]}. Each event's "id" (UID) is what update/delete tools
-        take. An empty list means nothing is scheduled in that window.
+        description, status, calendar}, ... ]}. "calendar" is the source calendar's name
+        (e.g. "Dom"). Each event's "id" (UID) is what the update/delete tools take. An
+        empty list means nothing is scheduled in that window.
     """
     try:
         events = await asyncio.to_thread(
@@ -96,10 +98,12 @@ async def create_calendar_event(
     description: str = ""
         Optional notes/body.
     calendar_name: str = ""
-        Optional target calendar display name; empty means the configured default.
+        Optional target calendar display name; empty writes to the configured default
+        (ICLOUD_CALENDAR_NAME, e.g. "Asystent") or the account's first calendar.
 
     Output:
-        JSON object with the created event (including its "id"), or {"Error": ...}.
+        JSON object with the created event (including its "id" and "calendar"), or
+        {"Error": ...}.
     """
     try:
         event = await asyncio.to_thread(
