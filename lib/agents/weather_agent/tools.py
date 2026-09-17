@@ -41,11 +41,12 @@ async def current_weather(ctx: Context, city: str = "Warsaw") -> dict:
     logging.info(f"Getting weather at {city}")
 
     try:
-        current_weather = owm_manager.weather_at_place(city)
+        # pyowm is blocking; run it off the event loop so it can't stall other agents.
+        current_weather = await asyncio.to_thread(owm_manager.weather_at_place, city)
     except Exception as e:
         logging.error(f"Couldnt get weather at {city}")
         return {"message": f"Couldnt get weather at {city}",
-                "exception": e}
+                "exception": str(e)}
 
     return current_weather
 
@@ -122,14 +123,18 @@ async def weather_forecast(ctx: Context,
     }
 
     logging.info(f"Starting geolocation for {city}")
+    def _geolocate():
+        resp = requests.get(geolocation_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
     try:
-        geolocation = requests.get(geolocation_url, headers=headers)
-        geolocation = geolocation.json()
+        geolocation = await asyncio.to_thread(_geolocate)
         logging.info("Geolocation obtained")
-    except HTTPError as e:
+    except Exception as e:
         logging.error(f"Couldnt geolocate {city} - issue with API")
         return {"message" : f"Couldnt geolocate this location {city}",
-                "status_code" : e}
+                "error" : str(e)}
 
     output = [
         {"name" : result["display_name"], "long" : result["lon"], "lat" : result["lat"]}

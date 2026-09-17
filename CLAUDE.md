@@ -314,6 +314,17 @@ Proactive delivery reuses `MESSENGER_PAGE_ACCESS_TOKEN`). See `docs/SCHEDULER.md
 ping on slow live turns: master switch — same falsy-parsing as `agent_enabled()`, default
 on; delay before the single ping fires in seconds, default 20. See `lib/runtime/progress.py`
 and the turn-flow note above).
+`SUBAGENT_TIMEOUT_SECONDS` + `COORDINATOR_TIMEOUT_SECONDS` + `LLM_REQUEST_TIMEOUT_SECONDS` +
+`LLM_MAX_RETRIES` (turn time limits: wall-clock cap per sub-agent run in `agent_as_tool`,
+default 120 — on timeout the run is cancelled and the coordinator gets an error string telling
+it to continue without that agent; wall-clock cap on the coordinator's gather phase in the
+engine, default 300 — past it the run is cancelled and the composer replies from the sub-agent
+results collected so far; `0` disables either cap. The last two are per-HTTP-request limits set
+on every provider client, defaults 60 s / 2 retries — per-read only, which is why the wall-clock
+caps exist). Tools must not block the event loop: wrap blocking clients (`requests`, pyowm,
+googlemaps, Tavily) in `asyncio.to_thread` with a timeout. FPL tool failures go through
+`fpl_error()` (`fpl_agent/fpl_api.py`), which returns a `Hint` + `gameweek_calendar` so the
+agent can recover (e.g. a 404 on a not-yet-started gameweek's picks).
 `OBSERVATIONS_ENABLED` + `OBSERVATIONS_FINANCE_HOUR` + `OBSERVATIONS_FPL_HOUR` +
 `OBSERVATIONS_TICK_SECONDS` + `OBSERVATIONS_FX`/`OBSERVATIONS_EQUITIES`/`OBSERVATIONS_METALS`
 (the daily time-series collectors: master switch — same falsy-parsing as `agent_enabled()`,

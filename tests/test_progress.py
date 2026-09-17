@@ -143,3 +143,43 @@ def test_want_ping_false_skips_notify(monkeypatch):
     result = asyncio.run(scenario())
     assert result == "plain"
     assert sent == []
+
+
+class _SlowCancellableHandler(_FakeHandler):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.cancelled = False
+
+    async def cancel_run(self):
+        self.cancelled = True
+
+
+def test_coordinator_timeout_returns_partial_results(monkeypatch):
+    async def notify(msg: str) -> None:
+        pass
+
+    async def scenario():
+        handler = _SlowCancellableHandler(
+            "never", run_delay=5.0, events=[(0.01, "weather_agent")]
+        )
+        # Fractional timeout: wait_for accepts floats, the env helper only ints.
+        result = await _gather_with_progress_ping(handler, notify, want_ping=False, timeout=0.1)
+        return handler, result
+
+    handler, result = asyncio.run(scenario())
+    assert handler.cancelled is True
+    assert "przekroczyło limit" in result
+    assert "[weather_agent]" in result
+
+
+def test_coordinator_finishes_before_timeout(monkeypatch):
+    async def notify(msg: str) -> None:
+        pass
+
+    async def scenario():
+        handler = _SlowCancellableHandler("gathered", run_delay=0.01, events=[])
+        return handler, await _gather_with_progress_ping(handler, notify, want_ping=False, timeout=5)
+
+    handler, result = asyncio.run(scenario())
+    assert result == "gathered"
+    assert handler.cancelled is False

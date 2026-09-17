@@ -38,6 +38,7 @@ from llama_index.llms.openai_like import OpenAILike
 
 from lib.core.registry import bind_default_llm_resolver
 from lib.core import reasoning
+from lib.core.settings import env_int
 
 # The default provider when a model string carries no ``provider/`` prefix.
 DEFAULT_PROVIDER = "openai"
@@ -70,16 +71,28 @@ def parse_model_string(raw: str) -> tuple[str, str]:
 
 
 # -------------------------------------------------------------------------- builders
+def _client_kwargs() -> dict:
+    """Transport limits shared by every provider client: ``LLM_REQUEST_TIMEOUT_SECONDS``
+    (default 60) and ``LLM_MAX_RETRIES`` (default 2). Set explicitly because provider
+    defaults differ (Anthropic's client has no timeout and retries 10x). These bound a
+    single HTTP request only — a streamed response is limited per read, so the hard
+    wall-clock caps live in ``agent_as_tool`` / the engine."""
+    return {
+        "timeout": float(env_int("LLM_REQUEST_TIMEOUT_SECONDS", 60, minimum=1)),
+        "max_retries": env_int("LLM_MAX_RETRIES", 2, minimum=0),
+    }
+
+
 def _build_openai(model_id: str, effort: str | None, budget_override: int | None):
     """OpenAI via the Responses API (tools + reasoning together)."""
-    kwargs = {"model": model_id, "api_key": os.getenv("OPENAI_API_KEY")}
+    kwargs = {"model": model_id, "api_key": os.getenv("OPENAI_API_KEY"), **_client_kwargs()}
     kwargs.update(reasoning.openai_reasoning_kwargs(effort))
     return OpenAIResponses(**kwargs)
 
 
 def _build_anthropic(model_id: str, effort: str | None, budget_override: int | None):
     """Native Anthropic with extended thinking (constraint-safe via the reasoning module)."""
-    kwargs = {"model": model_id, "api_key": os.getenv("ANTHROPIC_API_KEY")}
+    kwargs = {"model": model_id, "api_key": os.getenv("ANTHROPIC_API_KEY"), **_client_kwargs()}
     kwargs.update(reasoning.anthropic_thinking_kwargs(effort, budget_override))
     return Anthropic(**kwargs)
 
@@ -96,6 +109,7 @@ def _make_openai_like_builder(provider: str):
             # OpenAI-compatible endpoints don't always advertise them.
             "is_chat_model": True,
             "is_function_calling_model": True,
+            **_client_kwargs(),
         }
         kwargs.update(reasoning.openai_compat_reasoning_kwargs(effort))
         return OpenAILike(**kwargs)

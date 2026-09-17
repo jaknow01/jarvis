@@ -6,6 +6,7 @@ an alias to its real street address is resolved server-side inside get_route_det
 so the user's actual home/work addresses are never handed to the LLM as a browsable
 address book."""
 
+import asyncio
 import json
 import logging
 import os
@@ -142,7 +143,7 @@ async def get_route_details(ctx: Context,
         be covered in 1.25x faster than the navigation data suggests.
     """
 
-    gmaps_client = googlemaps.Client(os.getenv("GOOGLE_MAPS_API_KEY"))
+    gmaps_client = googlemaps.Client(os.getenv("GOOGLE_MAPS_API_KEY"), timeout=20, retry_timeout=20)
 
     if transport_mode != "transit" and transit_mode is not None:
         transit_mode = None
@@ -159,7 +160,9 @@ async def get_route_details(ctx: Context,
     logging.info("Starting route planning")
 
     try:
-        directions_result = gmaps_client.directions(
+        # googlemaps is blocking; run it off the event loop so it can't stall other agents.
+        directions_result = await asyncio.to_thread(
+            gmaps_client.directions,
             origin=origin_address,
             destination=destination_address,
             mode=transport_mode,
