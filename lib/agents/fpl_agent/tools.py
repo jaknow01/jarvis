@@ -26,6 +26,7 @@ from lib.agents.fpl_agent.fpl_api import (
     find_players_by_name,
     load_league_squads,
     load_league_history,
+    fpl_error,
     _LEAGUE_SCAN_DEFAULT,
 )
 
@@ -76,6 +77,7 @@ async def get_fpl_fixtures(ctx: Context, gameweek: Optional[int] = None) -> dict
         if the match has been played — the final score.
     """
     logger.info(f"Getting FPL fixtures for gameweek={gameweek or 'in-play'}")
+    bootstrap, gw = None, None  # referenced by the error hint if the try fails early
     try:
         bootstrap = await fetch_fpl_bootstrap()
         gw = gameweek if gameweek is not None else relevant_gameweek(bootstrap)
@@ -84,8 +86,8 @@ async def get_fpl_fixtures(ctx: Context, gameweek: Optional[int] = None) -> dict
         teams_by_id, _, _ = index_bootstrap(bootstrap)
         fixtures = await fetch_fpl(f"fixtures/?event={gw}")
     except Exception as e:
-        logger.error("Error while getting FPL fixtures", exc_info=True)
-        return {"Message": "Error while getting FPL fixtures", "Error": str(e)}
+        return fpl_error("Error while getting FPL fixtures", e,
+                         bootstrap=bootstrap, gameweek=gw)
 
     matches = []
     for f in fixtures:
@@ -127,8 +129,7 @@ async def get_pl_teams(ctx: Context) -> dict:
     try:
         bootstrap = await fetch_fpl_bootstrap()
     except Exception as e:
-        logger.error("Error while getting PL teams", exc_info=True)
-        return {"Message": "Error while getting Premier League teams", "Error": str(e)}
+        return fpl_error("Error while getting Premier League teams", e)
 
     teams = [
         {
@@ -185,8 +186,7 @@ async def get_fpl_player(ctx: Context, name: str, upcoming_fixtures: int = 5) ->
         teams_by_id, _, positions_by_id = index_bootstrap(bootstrap)
         candidates = find_players_by_name(bootstrap, name)
     except Exception as e:
-        logger.error("Error while getting FPL player", exc_info=True)
-        return {"Message": "Error while getting the FPL player", "Error": str(e)}
+        return fpl_error("Error while getting the FPL player", e)
 
     if not candidates:
         return {"Error": f"No Premier League player matches '{name}'.", "query": name}
@@ -266,6 +266,7 @@ async def get_my_fpl_squad(ctx: Context,
                    "URL fantasy.premierleague.com/entry/<ID>/event/1) or pass entry_id explicitly.",
         }
     logger.info(f"Getting FPL squad for entry={eid}, gameweek={gameweek or 'current'}")
+    bootstrap, gw = None, None  # referenced by the error hint if the try fails early
     try:
         bootstrap = await fetch_fpl_bootstrap()
         gw = resolve_gameweek(bootstrap, gameweek, prefer="current")
@@ -274,13 +275,8 @@ async def get_my_fpl_squad(ctx: Context,
         teams_by_id, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
         picks_data = await fetch_fpl(f"entry/{eid}/event/{gw}/picks/")
     except Exception as e:
-        logger.error("Error while getting FPL squad", exc_info=True)
-        return {
-            "Message": "Error while getting the FPL squad",
-            "Error": str(e),
-            "Tip": "The squad is only public after that gameweek's deadline. Check the "
-                   "manager id and that the gameweek has started.",
-        }
+        return fpl_error("Error while getting the FPL squad", e,
+                         bootstrap=bootstrap, gameweek=gw)
 
     if isinstance(picks_data, dict) and picks_data.get("detail"):
         return {"Error": f"FPL API: {picks_data['detail']}", "entry_id": eid, "gameweek": gw}
@@ -344,8 +340,7 @@ async def get_my_fpl_leagues(ctx: Context, entry_id: Optional[int] = None) -> di
     try:
         entry = await fetch_fpl(f"entry/{eid}/")
     except Exception as e:
-        logger.error("Error while getting FPL leagues", exc_info=True)
-        return {"Message": "Error while getting the manager's leagues", "Error": str(e)}
+        return fpl_error("Error while getting the manager's leagues", e)
 
     leagues = [
         {"id": l.get("id"), "name": l.get("name"), "my_rank": l.get("entry_rank")}
@@ -398,8 +393,7 @@ async def get_fpl_league_standings(ctx: Context,
     try:
         data = await fetch_fpl(f"leagues-classic/{lid}/standings/")
     except Exception as e:
-        logger.error("Error while getting FPL league standings", exc_info=True)
-        return {"Message": "Error while getting the league standings", "Error": str(e)}
+        return fpl_error("Error while getting the league standings", e)
 
     my_entry = _fpl_entry_id(None)
     results = (data.get("standings", {}) or {}).get("results", [])
@@ -658,6 +652,7 @@ async def get_fpl_live(ctx: Context,
         (each squad player's live stats, match status and provisional points).
     """
     logger.info(f"Getting FPL live state for gameweek={gameweek or 'in-play'}")
+    bootstrap, gw = None, None  # referenced by the error hint if the try fails early
     try:
         bootstrap = await fetch_fpl_bootstrap()
         gw = gameweek if gameweek is not None else relevant_gameweek(bootstrap)
@@ -666,8 +661,8 @@ async def get_fpl_live(ctx: Context,
         teams_by_id, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
         fixtures = await fetch_fpl(f"fixtures/?event={gw}")
     except Exception as e:
-        logger.error("Error while getting FPL live state", exc_info=True)
-        return {"Message": "Error while getting the live FPL state", "Error": str(e)}
+        return fpl_error("Error while getting the live FPL state", e,
+                         bootstrap=bootstrap, gameweek=gw)
 
     # A fixture is "live" once it has started but before it is provisionally finished
     # (finished_provisional flips to true at full time, before bonus is finalized).
@@ -711,8 +706,10 @@ async def get_fpl_live(ctx: Context,
             live_data = await fetch_fpl(f"event/{gw}/live/")
             picks_data = await fetch_fpl(f"entry/{eid}/event/{gw}/picks/")
         except Exception as e:
-            logger.error("Error while getting live squad performance", exc_info=True)
-            result["my_players"] = {"Error": str(e)}
+            result["my_players"] = fpl_error(
+                "Error while getting the squad's live performance", e,
+                bootstrap=bootstrap, gameweek=gw,
+            )
             return result
 
         live_by_element = {e.get("id"): e.get("stats", {}) for e in live_data.get("elements", [])}
@@ -831,6 +828,7 @@ async def who_owns_player_in_league(ctx: Context,
             "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
         }
     logger.info(f"Scanning league {lid} for owners of '{player}'")
+    bootstrap, gw = None, None  # referenced by the error hint if the try fails early
     try:
         bootstrap = await fetch_fpl_bootstrap()
         gw = resolve_gameweek(bootstrap, gameweek, prefer="current")
@@ -838,8 +836,8 @@ async def who_owns_player_in_league(ctx: Context,
             return {"Error": "Could not determine a gameweek (no events in the FPL calendar)."}
         teams_by_id, elements_by_id, _ = index_bootstrap(bootstrap)
     except Exception as e:
-        logger.error("Error while preparing league ownership scan", exc_info=True)
-        return {"Message": "Error while scanning the league", "Error": str(e)}
+        return fpl_error("Error while scanning the league", e,
+                         bootstrap=bootstrap, gameweek=gw)
 
     matches = find_players_by_name(bootstrap, player)
     if not matches:
@@ -861,8 +859,8 @@ async def who_owns_player_in_league(ctx: Context,
     try:
         league_name, pairs = await load_league_squads(lid, gw, max(1, max_managers))
     except Exception as e:
-        logger.error("Error while fetching league squads", exc_info=True)
-        return {"Message": "Error while fetching the league squads", "Error": str(e)}
+        return fpl_error("Error while fetching the league squads", e,
+                         bootstrap=bootstrap, gameweek=gw)
 
     owners, scanned, failed = [], 0, 0
     for row, picks in pairs:
@@ -939,6 +937,7 @@ async def get_league_ownership(ctx: Context,
             "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
         }
     logger.info(f"Aggregating ownership for league {lid}")
+    bootstrap, gw = None, None  # referenced by the error hint if the try fails early
     try:
         bootstrap = await fetch_fpl_bootstrap()
         gw = resolve_gameweek(bootstrap, gameweek, prefer="current")
@@ -947,8 +946,8 @@ async def get_league_ownership(ctx: Context,
         teams_by_id, elements_by_id, positions_by_id = index_bootstrap(bootstrap)
         league_name, pairs = await load_league_squads(lid, gw, max(1, max_managers))
     except Exception as e:
-        logger.error("Error while aggregating league ownership", exc_info=True)
-        return {"Message": "Error while aggregating league ownership", "Error": str(e)}
+        return fpl_error("Error while aggregating league ownership", e,
+                         bootstrap=bootstrap, gameweek=gw)
 
     owned: dict = {}
     captained: dict = {}

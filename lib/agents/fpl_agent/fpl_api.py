@@ -451,6 +451,67 @@ def resolve_gameweek(bootstrap: dict, gameweek: Optional[int], prefer: Literal["
     return chosen["id"] if chosen else None
 
 
+def gameweek_calendar(bootstrap: Optional[dict]) -> Optional[dict]:
+    """A compact view of where the FPL season is: the current and next gameweek with their
+    deadlines and whether the current one is finished. None when no bootstrap is at hand."""
+    if not bootstrap:
+        return None
+    events = bootstrap.get("events", []) or []
+    current = next((e for e in events if e.get("is_current")), None)
+    nxt = next((e for e in events if e.get("is_next")), None)
+
+    def _gw(e: Optional[dict]) -> Optional[dict]:
+        if not e:
+            return None
+        return {"gameweek": e.get("id"), "deadline_time": e.get("deadline_time"),
+                "finished": bool(e.get("finished"))}
+
+    return {"current": _gw(current), "next": _gw(nxt)}
+
+
+def fpl_error(message: str, exc: BaseException, *, bootstrap: Optional[dict] = None,
+              gameweek: Optional[int] = None) -> dict:
+    """Turn a failed FPL call into a tool result the model can act on.
+
+    Logs the failure (an expected HTTP 4xx as a one-line warning, anything else with a
+    traceback) and returns ``Message``/``Error`` plus a ``Hint`` explaining what most
+    likely went wrong and how to recover — e.g. that a 404 on a gameweek's picks/live data
+    usually means that gameweek hasn't reached its deadline yet — together with the current
+    FPL ``gameweek_calendar`` when available, so the agent can re-orient itself instead of
+    guessing. The gameweek is never changed silently: the agent decides whether to retry."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is not None and 400 <= status < 500:
+        logger.warning("%s: %s", message, exc)
+    else:
+        logger.error(message, exc_info=exc)
+
+    if status == 404 and gameweek is not None:
+        hint = (
+            f"FPL returned 404 for gameweek {gameweek}. Most likely that gameweek's deadline "
+            "has not passed yet — squads (picks) and live points are only published after the "
+            "deadline — or the gameweek number is wrong. Compare with gameweek_calendar: if "
+            f"gameweek {gameweek} is the upcoming one, the latest squad available is the current "
+            "gameweek's. Retry at most once with the right gameweek; if the id is wrong instead, "
+            "say so."
+        )
+    elif status == 404:
+        hint = ("FPL returned 404 — the requested manager/league/player id most likely doesn't "
+                "exist or isn't public. Check the id; don't retry the same request.")
+    elif status == 429:
+        hint = "FPL is rate-limiting requests. Don't retry now; report the data as temporarily unavailable."
+    elif (status is not None and status >= 500) or isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        hint = ("The FPL API is temporarily unavailable (it is often down while a gameweek is "
+                "being updated). Don't retry repeatedly; report the data as unavailable for now.")
+    else:
+        hint = "Unexpected error while processing FPL data. Don't retry the same call; report it as unavailable."
+
+    out = {"Message": message, "Error": str(exc), "Hint": hint}
+    calendar = gameweek_calendar(bootstrap)
+    if calendar:
+        out["gameweek_calendar"] = calendar
+    return out
+
+
 def relevant_gameweek(bootstrap: dict) -> Optional[int]:
     """The gameweek whose matches are 'in play' for questions like "today's / the
     upcoming matches". While the current gameweek is still running (is_current and not

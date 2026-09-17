@@ -32,6 +32,7 @@ from lib.core import (
     bind_model_overrides,
     reset_model_overrides,
     group_scope_for,
+    env_int,
 )
 from lib.domain import (
     conversations,
@@ -58,15 +59,40 @@ _SYSTEM_PROMPT_MARKER = (
 )
 
 
-async def _gather_with_progress_ping(handler, notify, want_ping):
+def coordinator_timeout_seconds() -> int:
+    """Wall-clock cap on the coordinator's gather phase, ``COORDINATOR_TIMEOUT_SECONDS``
+    (default 300; ``0`` disables). Past it the run is stopped and the composer writes the
+    reply from whatever sub-agent results already came back."""
+    return env_int("COORDINATOR_TIMEOUT_SECONDS", 300, minimum=0)
+
+
+def _partial_gather(results: list[tuple[str, str]], timeout: int) -> str:
+    """The composer input used when the coordinator hit its deadline: the sub-agent
+    results that did arrive, plus an explicit note that the rest is missing."""
+    header = (
+        f"UWAGA: zbieranie danych przekroczyło limit {timeout} s i zostało przerwane. "
+        "Poniżej są tylko wyniki, które zdążyły wrócić — napisz odpowiedź z nich i wyraźnie "
+        "zaznacz, których informacji nie udało się pobrać."
+    )
+    if not results:
+        return header + "\n\n(Żaden podagent nie zdążył zwrócić wyników.)"
+    body = "\n\n".join(f"[{name}]\n{output}" for name, output in results)
+    return header + "\n\n" + body
+
+
+async def _gather_with_progress_ping(handler, notify, want_ping, timeout: int = 0):
     """Await the coordinator `handler`, optionally pushing one interim progress ping.
 
-    When `want_ping`, two background tasks run alongside the await: one consumes the
-    handler's event stream to record which subagents have already returned, the other
-    sleeps `progress.ping_after_seconds()` and then fires a single `notify(...)` with a
-    "still working" message listing them. If the handler finishes before that timeout,
-    the pending ping is cancelled and never fires. Both helpers are best-effort and
-    swallow their own errors so tracing/telemetry can never break a turn.
+    An event collector always consumes the handler's stream, recording each finished
+    subagent (for the ping's labels) and its output (for the timeout fallback). When
+    `want_ping`, a second task sleeps `progress.ping_after_seconds()` and then fires a
+    single `notify(...)` with a "still working" message listing the finished subagents. If
+    the handler finishes before that, the pending ping is cancelled and never fires. Both
+    helpers are best-effort and swallow their own errors so telemetry can never break a turn.
+
+    When `timeout` (seconds) is set and the coordinator outlasts it, the workflow is
+    cancelled and the partial results gathered so far are returned instead (see
+    `_partial_gather`), so a hung LLM call or a tool loop can't hold the reply forever.
 
     On cancellation (the transport cancelling this turn via /stop), the coordinator's
     underlying workflow task is cancelled too — not just this awaiter — so the in-flight
@@ -74,29 +100,41 @@ async def _gather_with_progress_ping(handler, notify, want_ping):
 
     Returns the handler's result (the coordinator's gathered summary).
     """
-    collector = pinger = None
-    if want_ping:
-        done_labels: list[str] = []
+    done_labels: list[str] = []
+    results: list[tuple[str, str]] = []
 
-        async def _collect_progress() -> None:
+    async def _collect_progress() -> None:
+        try:
             async for ev in handler.stream_events():
                 if isinstance(ev, ToolCallResult):
                     lbl = progress.label_for(ev.tool_name)
                     if lbl and lbl not in done_labels:
                         done_labels.append(lbl)
+                    results.append((ev.tool_name, str(ev.tool_output)))
+        except Exception:
+            logger.debug("Coordinator event collector stopped", exc_info=True)
 
-        async def _ping_after_timeout() -> None:
-            await asyncio.sleep(progress.ping_after_seconds())
-            try:
-                await notify(progress.progress_message(done_labels))
-            except Exception:
-                logger.exception("Interim progress ping failed (non-fatal)")
+    async def _ping_after_timeout() -> None:
+        await asyncio.sleep(progress.ping_after_seconds())
+        try:
+            await notify(progress.progress_message(done_labels))
+        except Exception:
+            logger.exception("Interim progress ping failed (non-fatal)")
 
-        collector = asyncio.create_task(_collect_progress())
-        pinger = asyncio.create_task(_ping_after_timeout())
+    collector = asyncio.create_task(_collect_progress())
+    pinger = asyncio.create_task(_ping_after_timeout()) if want_ping else None
 
     try:
-        return await handler
+        return await asyncio.wait_for(_await_handler(handler), timeout=timeout or None)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Coordinator exceeded %ss; composing from %d partial result(s)", timeout, len(results)
+        )
+        try:
+            await handler.cancel_run()
+        except Exception:
+            logger.debug("Coordinator cancel after timeout failed (ignored)", exc_info=True)
+        return _partial_gather(results, timeout)
     except asyncio.CancelledError:
         # /stop cancelled this turn: propagate into the workflow so its internal task
         # (and the in-flight LLM request) is cancelled, not left running detached.
@@ -111,6 +149,10 @@ async def _gather_with_progress_ping(handler, notify, want_ping):
         for task in (pinger, collector):
             if task is not None:
                 task.cancel()
+
+
+async def _await_handler(handler):
+    return await handler
 
 
 def ensure_default_group_roster() -> None:
@@ -209,7 +251,9 @@ async def handle_message(
             user_msg=input_text, chat_history=history, ctx=Context(coordinator)
         )
         want_ping = notify is not None and origin == "user" and progress.ping_enabled()
-        gathered = str(await _gather_with_progress_ping(handler, notify, want_ping))
+        gathered = str(await _gather_with_progress_ping(
+            handler, notify, want_ping, timeout=coordinator_timeout_seconds()
+        ))
 
         # 2) Composer writes the final user-facing reply, deterministically (always runs).
         composer = create_composer_agent()

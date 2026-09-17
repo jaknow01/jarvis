@@ -1,6 +1,7 @@
 """news_agent tool: news / market-news search via Tavily. Registered into
 TOOLS_BY_AGENT["news_agent"] via @tool_ownership."""
 
+import asyncio
 import logging
 import os
 from typing import Literal
@@ -47,24 +48,32 @@ async def search_news(ctx: Context,
     """
     logging.info(f"Starting news search with query {query} at {search_depth} depth")
 
-    client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+    client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"), timeout=30)
 
-    # general search
-    response = client.search(
-        query=query,
-        include_answer="advanced",
-        search_depth=search_depth,
-        topic=topic
-    )
+    # The Tavily client is blocking: run both searches concurrently off the event loop,
+    # each bounded, so a slow search can't stall the other agents.
+    def _search(**kwargs):
+        return client.search(query=query, include_answer="advanced",
+                             search_depth=search_depth, **kwargs)
 
-    # reputable source
-    response_reputable = client.search(
-        query=query,
-        include_answer="advanced",
-        search_depth=search_depth,
-        topic="news",
-        include_domains=["reuters.com"] if topic == "news" else ["bloomberg.com"]
+    response, response_reputable = await asyncio.gather(
+        asyncio.to_thread(_search, topic=topic),  # general search
+        asyncio.to_thread(                         # reputable source
+            _search, topic="news",
+            include_domains=["reuters.com"] if topic == "news" else ["bloomberg.com"],
+        ),
+        return_exceptions=True,
     )
+    if isinstance(response, Exception) and isinstance(response_reputable, Exception):
+        logging.error(f"News search failed: {response}")
+        return {
+            "error": f"News search failed: {response}",
+            "tip": "The search source is unavailable right now — report that instead of retrying.",
+        }
+    if isinstance(response, Exception):
+        response = {"error": str(response)}
+    if isinstance(response_reputable, Exception):
+        response_reputable = {"error": str(response_reputable)}
 
     result = {
         "general_search": response,

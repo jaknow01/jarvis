@@ -62,21 +62,31 @@ async def get_exchange_rate(ctx: Context,
             "Error" : f"{base_currency if not is_base_valid else foreign_currency} is not a valid currency code."
         }
 
+    def _fetch() -> dict:
+        resp = requests.get(
+            f"https://api.frankfurter.dev/v1/latest?base={base_currency}&to={foreign_currency}",
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     try:
-        data = requests.get(f"https://api.frankfurter.dev/v1/latest?base={base_currency}&to={foreign_currency}")
-        data_json = data.json()
+        # Blocking HTTP runs off the event loop so it can't stall the other agents/tools.
+        data_json = await asyncio.to_thread(_fetch)
 
         base = float(data_json["amount"])
         rate = float(data_json["rates"][foreign_currency])
 
         exchange_rate = base/rate
 
-    except HTTPError as e:
-        logging.error(f"Invalid request for Frankfurter API [base: {base_currency}, to: {foreign_currency}]")
+    except Exception as e:
+        logging.warning(f"Frankfurter request failed [base: {base_currency}, to: {foreign_currency}]: {e}")
         return {
-            "message" : "Invalid request for Frankfurter API",
-            "error" : e,
-            "tip" : "Remember that the foreign_currency must be a correct three-letter currency code."
+            "message" : "Could not get the exchange rate from the Frankfurter API",
+            "error" : str(e),
+            "tip" : "Check that both codes are valid ISO 4217 currencies supported by the ECB "
+                    "reference rates. If they are, the source is temporarily unavailable — "
+                    "report that instead of retrying repeatedly.",
         }
 
     return {
@@ -116,11 +126,14 @@ async def get_stock_quote(ctx: Context, symbol: str) -> dict:
     headers = {"User-Agent": "Jarvis (personal assistant)"}
     params = {"interval": "1d", "range": "1d"}
 
-    try:
+    def _fetch() -> dict:
         response = requests.get(quote_url, headers=headers, params=params, timeout=10)
         # Yahoo returns a JSON error body (with HTTP 404) for unknown symbols,
         # so we parse the body before deciding it is a hard failure.
-        data = response.json()
+        return response.json()
+
+    try:
+        data = await asyncio.to_thread(_fetch)
     except Exception as e:
         logging.error(f"Couldnt get quote for {symbol}")
         return {
@@ -132,7 +145,12 @@ async def get_stock_quote(ctx: Context, symbol: str) -> dict:
     if chart.get("error") or not chart.get("result"):
         return {
             "error": f"Unknown or unsupported symbol '{symbol}'.",
-            "tip": "For GPW stocks add the '.WA' suffix (e.g. 'PKO.WA'). For indices prefix with '^' (e.g. '^WIG20').",
+            "tip": "For GPW stocks add the '.WA' suffix (e.g. 'PKO.WA'). For indices prefix with '^' (e.g. '^WIG20'). "
+                   "Do NOT keep guessing ticker variants: Yahoo does not carry every instrument — many "
+                   "ETFs listed on GPW have no '.WA' symbol at all. If the symbol isn't known for sure, "
+                   "stop after one or two attempts and report that the quote is unavailable; if the user "
+                   "or the request names a specific listing (e.g. a Euronext/Xetra cross-listing), use "
+                   "that and convert the currency with get_exchange_rate.",
         }
 
     meta = chart["result"][0].get("meta", {})

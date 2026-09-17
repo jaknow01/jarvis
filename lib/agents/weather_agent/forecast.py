@@ -1,6 +1,7 @@
 """Weather-agent private helper: Open-Meteo forecast fetch. Moved here from the shared
 lib/tools_utils grab-bag — it has a single consumer (weather_forecast)."""
 
+import asyncio
 import logging
 from datetime import timedelta, datetime
 from typing import Literal
@@ -36,7 +37,8 @@ async def get_forecast(params: dict,
     }
 
     try:
-        response = openmeteo.weather_api(url=forecast_url, params=request_params)
+        # openmeteo_requests is blocking (with retries); keep it off the event loop.
+        response = await asyncio.to_thread(openmeteo.weather_api, url=forecast_url, params=request_params)
         response = response[0]
     except Exception as e:
         logging.error("Error while getting the forecast")
