@@ -1,0 +1,22 @@
+# Sub-agents on locally hosted models (vLLM on gpu-server, see the local-models repo) vs the
+# current deepseek default. role "default" sets DEFAULT_MODEL, i.e. every agent without its own
+# AGENT_<NAME>_MODEL — all sub-agents; coordinator/composer keep their .env models.
+#
+# The vLLM server hosts ONE model at a time, so run one local candidate per server profile:
+#   OPENAI_COMPAT_BASE_URL=http://192.168.0.211:8000/v1 OPENAI_COMPAT_API_KEY=local \
+#     evals/.venv/bin/python -m evals.run evals/sweeps/subagents_local.yaml --only goldens
+# and comment out the candidate whose model is not currently served.
+
+name: subagents_local
+role: default
+judge_model: openai/gpt-5.6-luna
+mock: true
+dataset: labeled
+conversations: conversations
+composer_threshold: 0.7
+timeout: 240
+
+candidates:
+  - model: openrouter/deepseek/deepseek-v4-flash-0731          # current default (baseline)
+  - model: openai-compat/Intel/Qwen3.6-35B-A3B-int4-mixed-AutoRound   # profile qwen3.6-35b-a3b-parallel
+  - model: openai-compat/RedHatAI/Qwen3.8-27B-INT4                     # profile qwen3.8-27b-parallel

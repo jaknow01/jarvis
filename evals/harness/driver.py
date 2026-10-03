@@ -8,10 +8,14 @@ re-implement any agent wiring.
 Conversation isolation: each golden runs under a unique ``eval:<label>:<gid>:<uuid>``
 conversation id, so no prior history is replayed and eval turns are identifiable in the
 conversation store.
+
+Principal: turns run as ``EVAL_USER_ID`` (default ``owner``). The roster is opt-in per
+principal, so an anonymous turn (``user_id=None``) gets no sub-agents at all.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass, field
 
@@ -51,6 +55,7 @@ async def run_golden(
     ctx: Ctx | None = None,
     mock: bool = True,
     conversation_id: str | None = None,
+    user_id: str | None = None,
 ) -> GoldenRun:
     """Run one golden input end-to-end and return reply + per-role usage + cost.
 
@@ -65,13 +70,16 @@ async def run_golden(
             not tool reliability. Set False for a "live" run against the real tools/APIs.
         conversation_id: reuse a fixed conversation id (so prior turns replay as history) —
             used by the multi-turn driver. When omitted, a fresh unique id isolates the run.
+        user_id: the principal the turn runs as (roster + per-agent model overrides come
+            from its profile). Defaults to ``EVAL_USER_ID`` or ``owner``.
     """
     conversation_id = conversation_id or f"eval:{config.label}:{golden_id}:{uuid.uuid4().hex[:8]}"
     ctx = ctx or Ctx()
+    user_id = user_id or os.getenv("EVAL_USER_ID") or "owner"
     tool_ctx = mock_tools() if mock else contextlib.nullcontext()
     with apply_overrides(config):
         with tool_ctx, capture_run() as cap:
-            reply = await handle_message(conversation_id, text, ctx)
+            reply = await handle_message(conversation_id, text, ctx, user_id=user_id)
 
     costs = cost_from_usage(cap.by_role_model(), table)
     return GoldenRun(
