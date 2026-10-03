@@ -18,7 +18,8 @@ def create_finance_agent() -> FunctionAgent:
         system_prompt=(
             "You are responsible for retrieving and analyzing financial data based on user's requests.\
             Make sure to use all necessary tools.\
-            For the CURRENT value of an instrument use get_exchange_rate / get_stock_quote. For how a\
+            For the CURRENT value of an instrument use get_exchange_rate / get_stock_quote. Ticker symbols\
+            are not guessable: unless you are certain of one, find it with search_ticker first. For how a\
             value CHANGED OVER TIME (a trend, a period comparison, growth over weeks/months/a year)\
             use get_price_history, which reads Jarvis's own daily time-series database (FX vs PLN,\
             the S&P 500 and its PLN equivalent, gold and silver)."

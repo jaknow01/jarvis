@@ -55,6 +55,9 @@ FIXTURES: dict[str, object] = {
     # --- finance_agent ---
     "get_exchange_rate": {"pair": "EUR/PLN", "rate": 4.30, "date": _NOW["date"], "source": "Frankfurter"},
     "get_stock_quote": {"symbol": "AAPL", "price": 231.50, "currency": "USD", "change_pct": 0.8},
+    "search_ticker": {"query": "WIG20", "matches": [
+        {"symbol": "WIG20.WA", "name": "WIG20", "type": "INDEX", "exchange": "WSE", "match_score": 1.0},
+    ], "source": "Yahoo Finance search"},
     # --- maps_agent ---
     "get_maps_memory": {"places": ["Dom", "Praca", "Lotnisko Chopina"]},
     "get_route_details": {
