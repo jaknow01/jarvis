@@ -40,10 +40,12 @@ class EvalConfig:
         """The concrete ``AGENT_<ROLE>_*`` env vars this config sets."""
         pairs: dict[str, str] = {}
         for role, rm in self.overrides.items():
-            up = role.upper()
-            pairs[f"AGENT_{up}_MODEL"] = rm.model
+            # Pseudo-role "default" -> DEFAULT_MODEL/DEFAULT_REASONING_EFFORT: every agent
+            # without its own AGENT_<NAME>_MODEL (in practice: all sub-agents) at once.
+            prefix = "DEFAULT_" if role == "default" else f"AGENT_{role.upper()}_"
+            pairs[f"{prefix}MODEL"] = rm.model
             if rm.reasoning_effort is not None:
-                pairs[f"AGENT_{up}_REASONING_EFFORT"] = rm.reasoning_effort
+                pairs[f"{prefix}REASONING_EFFORT"] = rm.reasoning_effort
         return pairs
 
 
