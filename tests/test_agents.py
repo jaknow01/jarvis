@@ -37,7 +37,23 @@ def test_coordinator_has_all_subagents_by_default(monkeypatch):
         monkeypatch.delenv(f"AGENT_{a}_ENABLED", raising=False)
     coord = agents.create_coordinator_agent()
     names = {t.metadata.name for t in coord.tools}
-    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent", "math_agent", "calendar_agent"}
+    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent", "math_agent", "calendar_agent", "no_data_needed"}
+
+
+def test_coordinator_forces_tool_choice_by_default(monkeypatch):
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
+    monkeypatch.delenv("COORDINATOR_FORCE_TOOL", raising=False)
+    coord = agents.create_coordinator_agent()
+    assert coord.initial_tool_choice == "required"
+    assert "no_data_needed" in {t.metadata.name for t in coord.tools}
+
+
+def test_coordinator_force_tool_switch_off(monkeypatch):
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("COORDINATOR_FORCE_TOOL", "false")
+    coord = agents.create_coordinator_agent()
+    assert coord.initial_tool_choice is None
+    assert "no_data_needed" not in {t.metadata.name for t in coord.tools}
 
 
 def test_coordinator_does_not_expose_composer_and_has_no_handoffs(monkeypatch):

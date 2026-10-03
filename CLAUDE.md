@@ -69,8 +69,8 @@ lib/domain/            Shared stateful stores (used by agents AND runtime)
 
 lib/agents/            Coordinator + one feature subpackage per agent
   __init__.py          Aggregator: imports every subpackage (registration), public surface
-  coordinator/         create_coordinator_agent (wires subagents in as tools; gathers only)
-  composer/            create_composer_agent (deterministic final step: writes the reply)
+  coordinator/         create_coordinator_agent (wires subagents in as tools; gathers + writes the answer content)
+  composer/            create_composer_agent (deterministic final step: formats the answer, form only)
   <agent>/agent.py     the create_*_agent() factory (returns a FunctionAgent)
   <agent>/tools.py     that agent's @tool_ownership function-tools
   <agent>/<helper>.py  that agent's private helpers, e.g.
@@ -123,7 +123,9 @@ entry point (REPL and Messenger both call it):
    `coordinator.run(user_msg=text, chat_history=history, ctx=Context(coordinator))`.
    The coordinator calls sub-agents **as tools** (`agent_as_tool(...)`), in parallel
    when the query spans domains (LlamaIndex caps concurrent tool calls at
-   `num_workers=4` per step). It **only gathers** — it never writes the user's reply.
+   `num_workers=4` per step). It then **writes the answer** in Polish: it owns the entire
+   content (facts and numbers from this turn's sub-agent results only, what is unavailable,
+   which actions were confirmed).
    On a **live user turn** (`origin="user"`) with a transport `notify` callback, the
    coordinator is awaited via `_gather_with_progress_ping`, which watches its event
    stream and — if the turn outlasts `PROGRESS_PING_AFTER_SECONDS` (default 20) — pushes
@@ -136,9 +138,12 @@ entry point (REPL and Messenger both call it):
    principal — a cached group scope (shared devices/maps) + fresh user scope (memory,
    conversation, profile) — so `create_coordinator_agent(profile)` exposes only that
    user's rostered subagents. See docs/MULTI_USER.md.
-4. It then runs the **composer deterministically** (`composer.run(...)`) on the
-   gathered results — a code step, not an LLM decision — which writes the final reply
-   in Polish.
+4. It then runs the **composer deterministically** (`composer.run(...)`) — a code step,
+   not an LLM decision — which only **formats** the coordinator's answer as natural plain
+   Polish chat text (no Markdown). It is a form-only editor: it gets just that answer (no
+   user message, no history) and must not add, remove or correct content. When the
+   coordinator hits its deadline, the answer is a fixed notice plus the sub-agent results
+   that arrived (`_partial_gather`), so the composer still only formats.
 5. It persists the turn (user message + assistant reply) via `conversations.record_turn`,
    stamping the assistant row with the MLflow trace id (`last_trace_id()`, empty when
    tracing is off).
@@ -321,7 +326,16 @@ it to continue without that agent; wall-clock cap on the coordinator's gather ph
 engine, default 300 — past it the run is cancelled and the composer replies from the sub-agent
 results collected so far; `0` disables either cap. The last two are per-HTTP-request limits set
 on every provider client, defaults 60 s / 2 retries — per-read only, which is why the wall-clock
-caps exist). Tools must not block the event loop: wrap blocking clients (`requests`, pyowm,
+caps exist). `COORDINATOR_FORCE_TOOL` (default on): the coordinator is built with
+`initial_tool_choice="required"` so its first step must call a tool — it delegates instead
+of answering from history (weaker/local models otherwise invent figures on follow-ups). Pure
+small talk goes through the `no_data_needed` escape tool (`coordinator/no_data.py`); when that
+is the only call in a turn the engine replaces the coordinator's answer with a fixed one per
+declared kind (`_guard_no_data_turn`), so misuse can't leak invented data. The
+native Anthropic class is wrapped (`ToolChoiceAnthropic` in `lib/core/llm.py`) to translate
+`tool_choice` into Anthropic's `tool_required`. Every sub-agent prompt also gets
+`SUBAGENT_TOOL_RULES` appended by `agent_as_tool` (tools only, sanity-check results, retry
+once then report). Tools must not block the event loop: wrap blocking clients (`requests`, pyowm,
 googlemaps, Tavily) in `asyncio.to_thread` with a timeout. FPL tool failures go through
 `fpl_error()` (`fpl_agent/fpl_api.py`), which returns a `Hint` + `gameweek_calendar` so the
 agent can recover (e.g. a 404 on a not-yet-started gameweek's picks).

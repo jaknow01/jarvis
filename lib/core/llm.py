@@ -90,11 +90,32 @@ def _build_openai(model_id: str, effort: str | None, budget_override: int | None
     return OpenAIResponses(**kwargs)
 
 
+class ToolChoiceAnthropic(Anthropic):
+    """``Anthropic`` that understands the OpenAI-style ``tool_choice`` kwarg.
+
+    ``FunctionAgent(initial_tool_choice=...)`` passes ``tool_choice`` to the LLM, which the
+    OpenAI and OpenAI-compatible classes translate, but the native ``Anthropic`` class only
+    knows ``tool_required`` and would forward the raw string to the API (a 400). Map it:
+    ``"required"`` → ``tool_required=True`` (Anthropic ``{"type": "any"}``; the base class
+    already falls back to ``auto`` while extended thinking is on, as the API demands),
+    ``"auto"``/``"none"`` → the default, and a tool name → ``{"type": "tool", "name": …}``.
+    """
+
+    def _prepare_chat_with_tools(self, *args, tool_choice=None, **kwargs):
+        if tool_choice == "required":
+            kwargs["tool_required"] = True
+        elif isinstance(tool_choice, str) and tool_choice not in ("auto", "none"):
+            kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
+        elif isinstance(tool_choice, dict):
+            kwargs["tool_choice"] = tool_choice
+        return super()._prepare_chat_with_tools(*args, **kwargs)
+
+
 def _build_anthropic(model_id: str, effort: str | None, budget_override: int | None):
     """Native Anthropic with extended thinking (constraint-safe via the reasoning module)."""
     kwargs = {"model": model_id, "api_key": os.getenv("ANTHROPIC_API_KEY"), **_client_kwargs()}
     kwargs.update(reasoning.anthropic_thinking_kwargs(effort, budget_override))
-    return Anthropic(**kwargs)
+    return ToolChoiceAnthropic(**kwargs)
 
 
 def _make_openai_like_builder(provider: str):
