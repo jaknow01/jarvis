@@ -171,9 +171,13 @@ def test_agents_reflects_enabled_flag(monkeypatch):
     assert "🟢 weather_agent" in out
 
 
-def test_models_reports_resolved_config(monkeypatch):
-    monkeypatch.setenv("DEFAULT_MODEL", "anthropic/claude-sonnet-5")
-    out = _run("/models")
+def test_models_reports_resolved_config():
+    from lib.core.model_profiles import AgentModel, ModelProfile, using_profile
+    p = ModelProfile(name="demo", description="Demo set",
+                     default=AgentModel(model="anthropic/claude-sonnet-5"))
+    with using_profile(p):
+        out = _run("/models")
+    assert "profil: demo" in out and "Demo set" in out
     assert "anthropic/claude-sonnet-5" in out
 
 

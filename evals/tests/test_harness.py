@@ -5,7 +5,6 @@ extraction, price-table lookup (including the reported-without-provider case), c
 env-override isolation, and usage/tool aggregation.
 """
 
-import os
 
 from evals.harness.instrument import UsageCapture, LlmCall, ToolInvocation, _extract_tokens
 from evals.harness.cost import PriceTable, ModelPrice, cost_from_usage, total_usd
@@ -79,31 +78,40 @@ def test_total_usd_all_unpriced_is_none():
 
 
 # --------------------------------------------------------------- config overrides
-def test_env_pairs():
+def _profiles(tmp_path, monkeypatch):
+    (tmp_path / "base.yaml").write_text(
+        "default: {model: openrouter/a, reasoning: off}\nagents: {composer: openai/c}\n")
+    monkeypatch.setenv("MODEL_PROFILES_DIR", str(tmp_path))
+    monkeypatch.setenv("MODEL_PROFILE", "base")
+
+
+def test_config_profile_merges_overrides(tmp_path, monkeypatch):
+    _profiles(tmp_path, monkeypatch)
     cfg = EvalConfig(
         label="t",
-        overrides={"composer": RoleModel("composer", "openai/gpt-4.1-mini", "low")},
+        overrides={"composer": RoleModel("composer", "openai/gpt-4.1-mini", "low"),
+                   "default": RoleModel("default", "openai-compat/q")},
     )
-    pairs = cfg.env_pairs()
-    assert pairs["AGENT_COMPOSER_MODEL"] == "openai/gpt-4.1-mini"
-    assert pairs["AGENT_COMPOSER_REASONING_EFFORT"] == "low"
+    p = cfg.profile()
+    assert p.for_agent("composer").model == "openai/gpt-4.1-mini"
+    assert p.for_agent("composer").reasoning == "low"
+    assert p.for_agent("weather_agent").model == "openai-compat/q"
+    assert p.for_agent("weather_agent").reasoning == "off"  # inherited from the base default
 
 
-def test_apply_overrides_isolated(monkeypatch):
-    monkeypatch.delenv("AGENT_COMPOSER_MODEL", raising=False)
+def test_apply_overrides_is_scoped(tmp_path, monkeypatch):
+    from lib.core.model_profiles import active_profile
+    _profiles(tmp_path, monkeypatch)
     cfg = EvalConfig(label="t", overrides={"composer": RoleModel("composer", "openai/x")})
     with apply_overrides(cfg):
-        assert os.environ["AGENT_COMPOSER_MODEL"] == "openai/x"
-    # restored to "unset" after the block
-    assert "AGENT_COMPOSER_MODEL" not in os.environ
+        assert active_profile().for_agent("composer").model == "openai/x"
+    assert active_profile().for_agent("composer").model == "openai/c"
 
 
-def test_apply_overrides_restores_prior_value(monkeypatch):
-    monkeypatch.setenv("AGENT_COMPOSER_MODEL", "openai/prior")
-    cfg = EvalConfig(label="t", overrides={"composer": RoleModel("composer", "openai/new")})
-    with apply_overrides(cfg):
-        assert os.environ["AGENT_COMPOSER_MODEL"] == "openai/new"
-    assert os.environ["AGENT_COMPOSER_MODEL"] == "openai/prior"
+def test_explicit_base_profile(tmp_path, monkeypatch):
+    _profiles(tmp_path, monkeypatch)
+    (tmp_path / "other.yaml").write_text("default: openai/o\n")
+    assert EvalConfig(label="t", base_profile="other").profile().default.model == "openai/o"
 
 
 # --------------------------------------------------------------- capture aggregation

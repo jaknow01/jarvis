@@ -33,7 +33,7 @@ import lib.runtime.observations_runner as observations_runner
 import lib.runtime.progress as progress
 import lib.runtime.scheduler_runner as scheduler_runner
 import lib.runtime.tracing as tracing
-from lib.core import agent_enabled, llm
+from lib.core import agent_enabled, llm, active_profile, available_profiles, ModelProfileError
 from lib.core.registry import AGENTS
 from lib.domain import (
     conversations,
@@ -470,7 +470,17 @@ async def _cmd_agents(args, *, conversation_id, channel) -> str:
 
 
 async def _cmd_models(args, *, conversation_id, channel) -> str:
-    lines = ["🧩 MODELE (per agent)", ""]
+    try:
+        profile = active_profile()
+    except ModelProfileError as e:
+        return f"🧩 MODELE\n\n⚠️ {e}"
+    others = [p for p in available_profiles() if p != profile.name]
+    lines = [f"🧩 MODELE — profil: {profile.name}"]
+    if profile.description:
+        lines.append(profile.description)
+    if others:
+        lines.append(f"(inne profile: {', '.join(others)} — zmiana: MODEL_PROFILE w .env + restart)")
+    lines.append("")
     for name in sorted(AGENTS):
         cfg = llm.resolve_llm_config(name)
         if not cfg["model"]:
@@ -484,7 +494,7 @@ async def _cmd_models(args, *, conversation_id, channel) -> str:
 
 _ENV_PREFIXES = (
     "PROGRESS_PING", "SCHEDULER_", "TRACING_ENABLED", "MLFLOW_", "HISTORY_",
-    "DEFAULT_MODEL", "DEFAULT_REASONING", "AGENT_", "DATABASE_URL", "REDIS_URL",
+    "MODEL_PROFILE", "AGENT_", "DATABASE_URL", "REDIS_URL",
     "MESSENGER_ALLOWED_SENDER_ID", "WATCH_", "FPL_",
 )
 

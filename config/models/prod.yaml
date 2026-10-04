@@ -1,0 +1,10 @@
+# Production model set (the default; select another with MODEL_PROFILE=<file name>).
+# Schema and merge rules: lib/core/model_profiles.py. Provider API keys stay in .env.
+description: Everything on DeepSeek via OpenRouter, except the composer on gpt-4.1-mini
+
+default:                       # every agent not listed below (coordinator, all sub-agents, history_compressor, watch_coder)
+  model: openrouter/deepseek/deepseek-v4-flash-0731
+  reasoning: off
+
+agents:
+  composer: openai/gpt-4.1-mini

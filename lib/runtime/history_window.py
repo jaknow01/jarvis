@@ -10,8 +10,7 @@ behaviour — unbounded token growth), this module assembles a bounded context:
 The summary is maintained **incrementally**: each turn, only the exchange(s) that
 just fell outside the window are folded into the existing summary with a single small
 LLM call (the model resolved via ``LLM_BY_AGENT["history_compressor"]`` — configure
-with ``AGENT_HISTORY_COMPRESSOR_MODEL`` / ``…_REASONING_EFFORT``, falling back to
-``DEFAULT_MODEL``). We never recompute the whole summary from scratch.
+it as ``agents.history_compressor`` in the model profile, else the profile ``default``). We never recompute the whole summary from scratch.
 
 **The fold runs off the critical path.** ``build_chat_history`` is read-only and does
 **no** LLM call — it assembles ``[summary?] + everything since summary_upto`` and returns

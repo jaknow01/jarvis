@@ -1,10 +1,12 @@
-# Whole network on the locally hosted model: coordinator + sub-agents + composer.
+# Whole network on the locally hosted model: the `local` model profile
+# (config/models/local.yaml — coordinator, sub-agents and composer on Qwen3.8-27B on
+# `gpu-server`, see config/providers.yaml).
 # Compare with reports/2026-10-02/subagents_local-*-deterministic (same goldens/conversations;
 # there the coordinator stayed on openai/gpt-5.6-luna).
-#   OPENAI_COMPAT_BASE_URL=http://192.168.0.211:8000/v1 OPENAI_COMPAT_API_KEY=local \
-#     evals/.venv/bin/python -m evals.run evals/sweeps/local_full.yaml
+#   OPENAI_COMPAT_API_KEY=local evals/.venv/bin/python -m evals.run evals/sweeps/local_full.yaml
 
 name: local_full
+profile: local
 role: default
 judge_model: openai/gpt-5.6-luna
 mock: true
@@ -13,9 +15,5 @@ conversations: conversations
 composer_threshold: 0.7
 timeout: 240
 
-baseline:
-  coordinator: openai-compat/RedHatAI/Qwen3.8-27B-INT4
-  composer: openai-compat/RedHatAI/Qwen3.8-27B-INT4
-
 candidates:
-  - model: openai-compat/RedHatAI/Qwen3.8-27B-INT4
+  - model: gpu-server/RedHatAI/Qwen3.8-27B-INT4

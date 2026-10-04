@@ -54,9 +54,9 @@ def env_str(name: str, default: str | None = None) -> str | None:
 class Settings:
     """A snapshot of the process-level configuration (read from the environment)."""
 
-    # Models / providers (defaults; per-agent + per-principal overrides layer on top).
-    default_model: str | None
-    default_reasoning_effort: str | None
+    # Models: the active model profile (config/models/<name>.yaml); per-principal
+    # overrides layer on top. See lib/core/model_profiles.py.
+    model_profile: str
 
     # Storage.
     database_url: str | None
@@ -80,8 +80,7 @@ class Settings:
     @staticmethod
     def load() -> "Settings":
         return Settings(
-            default_model=env_str("DEFAULT_MODEL") or env_str("OPENAI_DEFAULT_MODEL"),
-            default_reasoning_effort=env_str("DEFAULT_REASONING_EFFORT"),
+            model_profile=env_str("MODEL_PROFILE") or "prod",
             database_url=env_str("DATABASE_URL"),
             redis_url=env_str("REDIS_URL") or "redis://localhost:6379",
             scheduler_enabled=env_flag("SCHEDULER_ENABLED"),

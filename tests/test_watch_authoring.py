@@ -218,7 +218,10 @@ def test_create_watch_arms_valid_code(monkeypatch):
 
 
 # -- watch_coder is separately configurable -----------------------------------
-def test_watch_coder_model_is_configurable(monkeypatch):
+def test_watch_coder_model_is_configurable():
     from lib.core.llm import _resolve_model
-    monkeypatch.setenv("AGENT_WATCH_CODER_MODEL", "anthropic/claude-x")
-    assert _resolve_model("watch_coder") == "anthropic/claude-x"
+    from lib.core.model_profiles import AgentModel, ModelProfile, using_profile
+    p = ModelProfile(name="t", default=AgentModel(model="openai/gpt-4.1-mini"),
+                     agents={"watch_coder": AgentModel(model="anthropic/claude-x")})
+    with using_profile(p):
+        assert _resolve_model("watch_coder") == "anthropic/claude-x"

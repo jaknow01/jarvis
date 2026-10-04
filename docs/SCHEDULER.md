@@ -193,7 +193,7 @@ pokrywają na razie tylko FX i kursy akcji.
 - **Fail-closed:** jeśli kod nie przejdzie walidacji w limicie prób — **nie uzbrajamy**,
   prosimy usera o doprecyzowanie. Tak samo gdy sandbox/źródło niedostępne.
 - **Generator = `scheduler_agent`** (pisze `check_code` + `intent`); **repair = osobny
-  „kodowy" model** przez `AGENT_WATCH_CODER_MODEL` (fallback `DEFAULT_MODEL`).
+  „kodowy" model** przez `agents.watch_coder` w profilu modeli (`config/models/*.yaml`; fallback `default`).
 - **Walidacja „na ślepo":** repair-LLM nie ma własnego Starlarka — faktyczna kompilacja
   zawsze przez sandbox (w dev: stub). Reguły Starlarka: `authoring.STARLARK_RULES`.
 

@@ -1,11 +1,13 @@
-"""Evaluation configuration: role -> (model, reasoning effort), applied via env overrides.
+"""Evaluation configuration: role -> (model, reasoning effort), applied via model profiles.
 
-A configuration is applied exactly the way the app already resolves models: by setting
-``AGENT_<ROLE>_MODEL`` and ``AGENT_<ROLE>_REASONING_EFFORT`` in the environment before the
-agent is built. ``engine.handle_message`` builds a fresh coordinator (and composer) each
-turn and ``LLM_BY_AGENT`` reads these vars at build time, so no production code changes are
-needed to switch models. ``apply_overrides`` is a context manager that saves and restores
-the touched variables so one grid point never leaks into the next.
+A configuration is applied exactly the way the app resolves models: through the active
+model profile (``config/models/<name>.yaml``, see ``lib.core.model_profiles``). An
+``EvalConfig`` names a base profile (default: the ambient ``MODEL_PROFILE``) and per-role
+overrides on top; ``apply_overrides`` forces that merged profile for the duration via
+``using_profile`` (a contextvar, so it reaches every agent built inside the run).
+``engine.handle_message`` builds a fresh coordinator (and composer) each turn and
+``LLM_BY_AGENT`` resolves at build time, so no production code changes are needed to
+switch models, and one grid point can never leak into the next.
 """
 
 from __future__ import annotations
@@ -13,6 +15,14 @@ from __future__ import annotations
 import contextlib
 import os
 from dataclasses import dataclass, field
+
+from lib.core.model_profiles import (
+    AgentModel,
+    ModelProfile,
+    active_profile_name,
+    load_profile,
+    using_profile,
+)
 
 
 @dataclass(frozen=True)
@@ -26,27 +36,27 @@ class RoleModel:
 
 @dataclass
 class EvalConfig:
-    """A complete configuration: the overrides to apply for one evaluation run.
+    """A complete configuration: a base model profile plus per-role overrides.
 
-    ``overrides`` maps role -> RoleModel. Roles not listed keep whatever the ambient
-    environment / ``DEFAULT_MODEL`` resolves them to (the fixed baseline in a sweep).
-    ``label`` names the config in reports.
+    ``base_profile`` names a file under ``config/models/`` (None → ``MODEL_PROFILE``, i.e.
+    whatever the app would run). ``overrides`` maps role -> RoleModel; the pseudo-role
+    ``"default"`` overrides the profile's ``default`` entry (every agent without its own
+    entry — in practice all sub-agents). Roles not listed keep the profile's models (the
+    fixed baseline in a sweep). ``label`` names the config in reports.
     """
 
     label: str
     overrides: dict[str, RoleModel] = field(default_factory=dict)
+    base_profile: str | None = None
 
-    def env_pairs(self) -> dict[str, str]:
-        """The concrete ``AGENT_<ROLE>_*`` env vars this config sets."""
-        pairs: dict[str, str] = {}
-        for role, rm in self.overrides.items():
-            # Pseudo-role "default" -> DEFAULT_MODEL/DEFAULT_REASONING_EFFORT: every agent
-            # without its own AGENT_<NAME>_MODEL (in practice: all sub-agents) at once.
-            prefix = "DEFAULT_" if role == "default" else f"AGENT_{role.upper()}_"
-            pairs[f"{prefix}MODEL"] = rm.model
-            if rm.reasoning_effort is not None:
-                pairs[f"{prefix}REASONING_EFFORT"] = rm.reasoning_effort
-        return pairs
+    def profile(self) -> ModelProfile:
+        """The merged profile this config runs under."""
+        base = load_profile(self.base_profile or active_profile_name())
+        return base.with_overrides(
+            {role: AgentModel(model=rm.model, reasoning=rm.reasoning_effort)
+             for role, rm in self.overrides.items()},
+            name=f"{base.name}+{self.label}" if self.overrides else base.name,
+        )
 
 
 @dataclass(frozen=True)
@@ -73,19 +83,7 @@ class JudgeConfig:
 
 @contextlib.contextmanager
 def apply_overrides(config: EvalConfig):
-    """Apply a config's env overrides for the duration, then restore prior values exactly.
-
-    Saves each touched variable's prior value (including "was unset") and restores it on
-    exit, so grid points are isolated even within a single process.
-    """
-    pairs = config.env_pairs()
-    saved: dict[str, str | None] = {k: os.environ.get(k) for k in pairs}
-    try:
-        os.environ.update(pairs)
+    """Run under the config's merged model profile for the duration (contextvar-scoped,
+    so grid points are isolated even within a single process)."""
+    with using_profile(config.profile()):
         yield
-    finally:
-        for k, prior in saved.items():
-            if prior is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = prior

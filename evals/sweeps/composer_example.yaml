@@ -53,8 +53,9 @@ candidates:                   # the grid for the swept role
   - model: openrouter/qwen/qwen3.6-27b
   # DISABLED: qwen3.6-35b-a3b's OpenRouter *streaming* endpoint hangs uncancellably
   # (non-streaming works ~23s). Agents stream, so it freezes the sweep and no in-process
-  # timeout can interrupt it. Re-enable when you host it locally via openai-compat:
-  #   - model: openai-compat/qwen3.6-35b-a3b   # + OPENAI_COMPAT_BASE_URL in .env
+  # timeout can interrupt it. Re-enable when you host it locally (a named server from
+  # config/providers.yaml):
+  #   - model: gpu-server/qwen3.6-35b-a3b
   # - model: openrouter/qwen/qwen3.6-35b-a3b
   # - model: openrouter/deepseek/deepseek-v4-flash-0731
   #   reasoning_effort: low
