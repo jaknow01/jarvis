@@ -19,6 +19,7 @@ import logging
 from llama_index.core.tools import FunctionTool
 from llama_index.core.workflow import Context
 
+from lib.core.cache import app_context
 from lib.core.settings import env_int
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,24 @@ def subagent_timeout_seconds() -> int:
     so a streamed completion that keeps trickling (or a sub-agent looping over tool calls)
     never trips them. ``0`` disables the cap."""
     return env_int("SUBAGENT_TIMEOUT_SECONDS", 120, minimum=0)
+
+
+# Tool-hygiene rules appended to every sub-agent's system prompt by `agent_as_tool`, so they
+# reach all sub-agents from one place. Weaker (local) models otherwise answer from built-in
+# knowledge, or re-call a tool that returned something unrelated until max_iterations.
+SUBAGENT_TOOL_RULES = (
+    "\n\nTool usage rules (apply to every request):\n"
+    "- Always obtain data and perform actions through your tools. Never answer from your "
+    "built-in knowledge or from earlier conversation, and never claim an action was done "
+    "unless a tool call in THIS run confirmed it.\n"
+    "- Sanity-check every tool result against the request (right currency pair/ticker/"
+    "device/place/date, plausible values). If a result is clearly unrelated, malformed, "
+    "empty or stale, you may retry ONCE with corrected arguments. If it is still wrong, "
+    "STOP calling tools and report plainly what you asked for, what came back and that "
+    "this part is unavailable — do not keep retrying and do not substitute invented values.\n"
+    "- Never call the same tool with the same arguments more than twice in one run.\n"
+    "- Return only facts the tools returned, keeping numbers, units and dates exact."
+)
 
 
 async def _cancel_quietly(handler) -> None:
@@ -49,9 +68,18 @@ def agent_as_tool(agent, tool_name: str, tool_description: str) -> FunctionTool:
     The run is bounded by :func:`subagent_timeout_seconds`. A timeout or an unexpected
     failure is returned to the coordinator as a plain-text error with guidance (not
     raised), so one slow/broken sub-agent degrades the turn instead of stalling it.
+
+    The agent's string ``system_prompt`` gets :data:`SUBAGENT_TOOL_RULES` appended (once).
     """
+    prompt_text = getattr(agent, "system_prompt", None)
+    if isinstance(prompt_text, str) and SUBAGENT_TOOL_RULES not in prompt_text:
+        agent.system_prompt = prompt_text + SUBAGENT_TOOL_RULES
 
     async def _run(ctx: Context, prompt: str) -> str:
+        try:
+            app_context().subagent_calls.append(tool_name)
+        except LookupError:
+            pass  # no turn context bound (direct/test use)
         timeout = subagent_timeout_seconds()
         handler = agent.run(user_msg=prompt, ctx=Context(agent))
         try:

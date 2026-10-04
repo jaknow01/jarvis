@@ -39,8 +39,9 @@ The bootstrap installs the production project as an editable path dependency
 EVAL_JUDGE_MODEL=gpt-4o        # one strong, constant judge for the whole sweep
 ```
 
-Agent models are read from the same `AGENT_<NAME>_MODEL` / `AGENT_<NAME>_REASONING_EFFORT`
-variables the app uses — the harness overrides them per candidate, no code changes.
+Agent models come from the same model profiles the app uses (`config/models/<name>.yaml`,
+selected by `MODEL_PROFILE`, or per sweep with `profile:`) — the harness merges each
+candidate's role override on top and forces that profile for the run, no code changes.
 
 ## Quick health check
 
@@ -105,7 +106,7 @@ relevant dataset field:
 
 - scripted-conversation sweep → add `conversations: conversations`;
 - simulated-conversation sweep → add `simulations: simulations` and `simulator_model:` (the
-  LLM that role-plays the user; defaults to `DEFAULT_MODEL`).
+  LLM that role-plays the user; defaults to the base profile's `default` model).
 
 Each candidate is evaluated on the same conversations, per-turn **and** at the conversation
 level (`conversation_quality_pl`, `knowledge_retention`), with per-turn cost summed.

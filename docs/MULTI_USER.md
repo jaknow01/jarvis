@@ -50,7 +50,7 @@ Everything falls out of that single rule:
 - **Group priority breaks ties.** Groups are applied ascending by `priority`, so the
   higher-priority group is applied later and wins.
 - **Env kill-switch.** `AGENT_<NAME>_ENABLED` set falsy forces an agent OFF globally,
-  overriding any layer. Models still fall back to `AGENT_<NAME>_MODEL` / `DEFAULT_MODEL`
+  overriding any layer. Models still fall back to the active model profile (`config/models/<MODEL_PROFILE>.yaml`)
   when no layer sets one (`model`/`reasoning` unset = `None`).
 
 The layers live in one table, `agent_config(scope_type ∈ {default,group,user},

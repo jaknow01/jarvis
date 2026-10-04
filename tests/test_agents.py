@@ -20,7 +20,6 @@ def test_agent_enabled_truthy_or_blank_stay_enabled(monkeypatch):
 
 
 def test_coordinator_excludes_disabled_subagents(monkeypatch):
-    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("AGENT_NEWS_AGENT_ENABLED", "false")
     monkeypatch.setenv("AGENT_IOT_OPERATOR_ENABLED", "off")
     coord = agents.create_coordinator_agent()
@@ -32,25 +31,36 @@ def test_coordinator_excludes_disabled_subagents(monkeypatch):
 
 
 def test_coordinator_has_all_subagents_by_default(monkeypatch):
-    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
     for a in ["IOT_OPERATOR", "WEATHER_AGENT", "FINANCE_AGENT", "MAPS_AGENT", "NEWS_AGENT", "MEMORY_OPERATOR", "FPL_AGENT", "SCHEDULER_AGENT", "CALENDAR_AGENT"]:
         monkeypatch.delenv(f"AGENT_{a}_ENABLED", raising=False)
     coord = agents.create_coordinator_agent()
     names = {t.metadata.name for t in coord.tools}
-    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent", "math_agent", "calendar_agent"}
+    assert names == {"iot_operator", "weather_agent", "finance_agent", "maps_agent", "news_agent", "memory_operator", "fpl_agent", "scheduler_agent", "math_agent", "calendar_agent", "no_data_needed"}
+
+
+def test_coordinator_forces_tool_choice_by_default(monkeypatch):
+    monkeypatch.delenv("COORDINATOR_FORCE_TOOL", raising=False)
+    coord = agents.create_coordinator_agent()
+    assert coord.initial_tool_choice == "required"
+    assert "no_data_needed" in {t.metadata.name for t in coord.tools}
+
+
+def test_coordinator_force_tool_switch_off(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FORCE_TOOL", "false")
+    coord = agents.create_coordinator_agent()
+    assert coord.initial_tool_choice is None
+    assert "no_data_needed" not in {t.metadata.name for t in coord.tools}
 
 
 def test_coordinator_does_not_expose_composer_and_has_no_handoffs(monkeypatch):
     # The composer is now a deterministic final step run by the engine, not a
     # coordinator tool and not an SDK handoff target.
-    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
     coord = agents.create_coordinator_agent()
     assert "composer" not in {t.metadata.name for t in coord.tools}
     assert not coord.can_handoff_to
 
 
 def test_every_agent_gets_environment_preamble(monkeypatch):
-    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4.1-mini")
     for factory in (agents.create_composer_agent, agents.create_weather_agent, agents.create_coordinator_agent):
         agent = factory()
         assert isinstance(agent.system_prompt, str)

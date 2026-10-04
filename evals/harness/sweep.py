@@ -126,7 +126,8 @@ async def sweep_role(
         label = f"{role}={cand.model}" + (f"@{cand.reasoning_effort}" if cand.reasoning_effort else "")
         overrides = dict(base_overrides)
         overrides[role] = cand
-        config = EvalConfig(label=label, overrides=overrides)
+        config = EvalConfig(label=label, overrides=overrides,
+                            base_profile=baseline.base_profile if baseline else None)
 
         cr = CandidateResult(
             role=role, label=label, model=cand.model, reasoning_effort=cand.reasoning_effort

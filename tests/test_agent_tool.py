@@ -27,6 +27,18 @@ def test_is_async():
     assert tool.async_fn is not None
 
 
+def test_appends_tool_rules_to_subagent_prompt_once():
+    from types import SimpleNamespace
+
+    from lib.core.agent_tool import SUBAGENT_TOOL_RULES
+
+    agent = SimpleNamespace(system_prompt="You are a finance agent.")
+    agent_as_tool(agent, "finance_agent", "d")
+    agent_as_tool(agent, "finance_agent", "d")  # re-wrapping must not duplicate the rules
+    assert agent.system_prompt.startswith("You are a finance agent.")
+    assert agent.system_prompt.count(SUBAGENT_TOOL_RULES) == 1
+
+
 # ---- timeout / graceful failure ---------------------------------------------------
 import asyncio
 
@@ -87,3 +99,17 @@ def test_failure_is_returned_not_raised(monkeypatch):
     handler = _FakeRunHandler(delay=0, error=RuntimeError("boom"))
     out = _call(agent_as_tool(_FakeAgent(handler), "fpl_agent", "d"), monkeypatch, "5")
     assert out.startswith("ERROR:") and "boom" in out
+
+
+def test_records_subagent_call_on_turn_context(monkeypatch):
+    from lib.core import Ctx, bind_app_context, reset_app_context
+
+    turn = Ctx()
+    token = bind_app_context(turn)
+    try:
+        out = _call(agent_as_tool(_FakeAgent(_FakeRunHandler(delay=0, result="ok")), "finance_agent", "d"),
+                    monkeypatch, "5")
+    finally:
+        reset_app_context(token)
+    assert out == "ok"
+    assert turn.subagent_calls == ["finance_agent"]

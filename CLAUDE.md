@@ -33,7 +33,8 @@ via `agent.run()`, and each sub-agent is exposed to the coordinator as a
 Per-agent models come from the `LLM_BY_AGENT` registry and are **provider-agnostic**:
 each agent's model is a `provider/model` string (bare → `openai`), resolved through a
 provider registry in `lib/core/llm.py` (`openai` → `OpenAIResponses`, `anthropic` →
-native `Anthropic`, `openrouter`/`groq`/`xai`/`openai-compat` → `OpenAILike`). See
+native `Anthropic`, `openrouter`/`groq`/`xai`/`openai-compat` → `OpenAILike`), and which
+model each agent uses comes from a named YAML model profile (`config/models/`). See
 "Models / providers" below. Conversation continuity is owned by us in Postgres
 (`lib/domain/conversation.py`), not by the OpenAI Responses API's `previous_response_id`.
 (The project migrated off the OpenAI Agents SDK. The `litellm` dependency is present but
@@ -57,6 +58,9 @@ lib/core/              LEAF layer — no imports from elsewhere in lib
   env.py               environment_preamble() — date/time/locale block for every agent
   llm.py               Provider-agnostic LLM resolution: model-prefix parser +
                          PROVIDER_BUILDERS + build_llm(agent_name) config resolution
+  model_profiles.py    Named model profiles (config/models/<MODEL_PROFILE>.yaml): the
+                         only source of per-agent model/reasoning config
+  custom_providers.py  Named model servers (config/providers.yaml) usable as model prefixes
   reasoning.py         Provider-normalized reasoning effort (effort enum → OpenAI
                          effort literal / Anthropic thinking budget / compat field)
   logger.py            Root logger config + custom CONVERSATION log level
@@ -69,8 +73,8 @@ lib/domain/            Shared stateful stores (used by agents AND runtime)
 
 lib/agents/            Coordinator + one feature subpackage per agent
   __init__.py          Aggregator: imports every subpackage (registration), public surface
-  coordinator/         create_coordinator_agent (wires subagents in as tools; gathers only)
-  composer/            create_composer_agent (deterministic final step: writes the reply)
+  coordinator/         create_coordinator_agent (wires subagents in as tools; gathers + writes the answer content)
+  composer/            create_composer_agent (deterministic final step: formats the answer, form only)
   <agent>/agent.py     the create_*_agent() factory (returns a FunctionAgent)
   <agent>/tools.py     that agent's @tool_ownership function-tools
   <agent>/<helper>.py  that agent's private helpers, e.g.
@@ -97,6 +101,8 @@ app/db/                Postgres access layer: connection, schema, repos, migrati
                          fpl_history_repo.py — permanent daily FPL league snapshots)
 scripts/               One-shot ops scripts: backfill_finance.py (year of daily finance history),
                          backfill_fpl_history.py (per-gameweek FPL league history)
+config/models/         Model profiles (prod.yaml, local.yaml) — pick with MODEL_PROFILE
+config/providers.yaml  Named model servers (e.g. gpu-server → local vLLM URL)
 data/                  JSON "databases" (devices, preferences, maps memory, memory)
 logs/                  Per-run log files
 ```
@@ -123,7 +129,9 @@ entry point (REPL and Messenger both call it):
    `coordinator.run(user_msg=text, chat_history=history, ctx=Context(coordinator))`.
    The coordinator calls sub-agents **as tools** (`agent_as_tool(...)`), in parallel
    when the query spans domains (LlamaIndex caps concurrent tool calls at
-   `num_workers=4` per step). It **only gathers** — it never writes the user's reply.
+   `num_workers=4` per step). It then **writes the answer** in Polish: it owns the entire
+   content (facts and numbers from this turn's sub-agent results only, what is unavailable,
+   which actions were confirmed).
    On a **live user turn** (`origin="user"`) with a transport `notify` callback, the
    coordinator is awaited via `_gather_with_progress_ping`, which watches its event
    stream and — if the turn outlasts `PROGRESS_PING_AFTER_SECONDS` (default 20) — pushes
@@ -136,9 +144,12 @@ entry point (REPL and Messenger both call it):
    principal — a cached group scope (shared devices/maps) + fresh user scope (memory,
    conversation, profile) — so `create_coordinator_agent(profile)` exposes only that
    user's rostered subagents. See docs/MULTI_USER.md.
-4. It then runs the **composer deterministically** (`composer.run(...)`) on the
-   gathered results — a code step, not an LLM decision — which writes the final reply
-   in Polish.
+4. It then runs the **composer deterministically** (`composer.run(...)`) — a code step,
+   not an LLM decision — which only **formats** the coordinator's answer as natural plain
+   Polish chat text (no Markdown). It is a form-only editor: it gets just that answer (no
+   user message, no history) and must not add, remove or correct content. When the
+   coordinator hits its deadline, the answer is a fixed notice plus the sub-agent results
+   that arrived (`_partial_gather`), so the composer still only formats.
 5. It persists the turn (user message + assistant reply) via `conversations.record_turn`,
    stamping the assistant row with the MLflow trace id (`last_trace_id()`, empty when
    tracing is off).
@@ -197,7 +208,7 @@ imports every feature subpackage precisely to trigger this. Follow them when add
 - **Models** — every agent reads its LLM via `LLM_BY_AGENT[name]()` and passes it as
   `llm=`. There is **no per-agent factory to write**: `LLM_BY_AGENT` falls back to a
   config-driven resolver (`build_llm(agent_name)`, bound via `bind_default_llm_resolver`)
-  that reads `AGENT_<NAME>_MODEL`/`AGENT_<NAME>_REASONING_EFFORT` and dispatches through
+  that reads the agent's entry in the active model profile (`config/models/*.yaml`) and dispatches through
   `PROVIDER_BUILDERS`. `@llm_usage([agent_names])` in `lib/core/llm.py` remains available
   as an explicit, code-level override (it wins over the resolver).
 
@@ -267,16 +278,34 @@ provider registry:
 | `openai` | `OpenAIResponses` | `/responses` — tools + reasoning together |
 | `anthropic` | native `Anthropic` | extended thinking (`thinking_dict`) |
 | `openrouter` / `groq` / `xai` | `OpenAILike(api_base=…)` | OpenAI-compatible |
-| `openai-compat` | `OpenAILike(api_base=env)` | local/vLLM/Ollama escape hatch |
+| `openai-compat` | `OpenAILike(api_base=OPENAI_COMPAT_BASE_URL)` | ad-hoc escape hatch |
+| *named server* (`config/providers.yaml`) | `OpenAILike(api_base=its base_url)` | self-hosted vLLM/Ollama |
 
-Config is per agent, same `AGENT_<NAME>_…` convention as `AGENT_<NAME>_ENABLED`:
-`AGENT_<NAME>_MODEL`, `AGENT_<NAME>_REASONING_EFFORT`, and (Anthropic only)
-`AGENT_<NAME>_THINKING_BUDGET`. Global fallbacks: `DEFAULT_MODEL` and
-`DEFAULT_REASONING_EFFORT`. Resolution per agent: `AGENT_<NAME>_MODEL` → `DEFAULT_MODEL`
-→ legacy. **Legacy fallbacks** keep old configs working: `COORDINATOR_MODEL` /
-`COORDINATOR_REASONING_EFFORT` back the coordinator's new keys, and `OPENAI_DEFAULT_MODEL`
-backs `DEFAULT_MODEL` (a bare value → `openai/…`). The coordinator keeps its historical
-`medium` reasoning default when nothing is set.
+**Named servers** (`lib/core/custom_providers.py`): `config/providers.yaml` maps a provider
+name to a server — `gpu-server: {type: openai-compat, base_url: …, api_key_env: …}` — so
+`gpu-server/RedHatAI/Qwen3.8-27B-INT4` means "that model on that machine". Several local
+models = several servers (or several model ids on one server); addresses live once in that
+shared file and profiles/sweeps name only models. Optional (absent → no custom providers;
+path overridable with `PROVIDERS_CONFIG`), re-read on change, validated (names may not
+redefine a built-in provider; only `openai-compat` type for now). `api_key_env` names the
+env var holding a key; omitted → placeholder `EMPTY` for an unauthenticated server.
+
+**Model profiles are the only source of model config** (`lib/core/model_profiles.py`). A
+profile is a YAML file `config/models/<name>.yaml` (committed; no secrets — API keys stay in
+`.env`); the active one is picked at startup by `MODEL_PROFILE` (default `prod`; dir
+overridable with `MODEL_PROFILES_DIR`). Shipped: `prod` (everything on
+DeepSeek via OpenRouter except the composer on gpt-4.1-mini) and `local` (everything on `gpu-server`).
+Schema: `description`, `default` (model / reasoning / thinking_budget for every agent not
+listed), `agents.<name>` (merged field by field over `default`; a bare string is the model
+only — this includes `coordinator`, `composer`, `history_compressor`, `watch_coder`). A
+profile names models only — where a self-hosted model runs is its provider prefix (a named
+server). Unknown keys are rejected. The file is re-read when it changes
+(mtime). Resolution per agent: per-principal override (`principals.yaml` → `agent_config`)
+→ profile `agents.<name>` → profile `default`; an unset reasoning means none. `/models`
+shows the active profile. The old `DEFAULT_MODEL` / `AGENT_<NAME>_MODEL` /
+`*_REASONING_EFFORT` / `*_THINKING_BUDGET` / `COORDINATOR_MODEL` / `OPENAI_DEFAULT_MODEL`
+env vars are no longer read. `using_profile(profile)` forces a profile in-process
+(contextvar) — the eval harness uses it to sweep models.
 
 Reasoning effort is one vocabulary — `off`/`minimal`/`low`/`medium`/`high` (plus the
 disable sentinels `none`/`off`/`no`/`false`/`disabled`/empty) — normalized per provider in
@@ -288,15 +317,15 @@ disable sentinels `none`/`off`/`no`/`false`/`disabled`/empty) — normalized per
 | minimal/low/medium/high | `reasoning_options={"effort": …}` | `thinking_dict` budget from `EFFORT_BUDGET` (1k/4k/12k/32k) | `reasoning_effort=…` |
 
 For Anthropic thinking the builder enforces the API's constraints: `temperature=1` and
-`max_tokens` > budget; `AGENT_<NAME>_THINKING_BUDGET` overrides the table.
+`max_tokens` > budget; a profile entry's `thinking_budget` overrides the table.
 
 ### Environment variables (`.env`)
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY` (provider keys — only the
-ones you use are required; `openai-compat` also reads `OPENAI_COMPAT_BASE_URL` +
-`OPENAI_COMPAT_API_KEY`), `DEFAULT_MODEL` + `DEFAULT_REASONING_EFFORT` and the per-agent
-`AGENT_<NAME>_MODEL` / `AGENT_<NAME>_REASONING_EFFORT` / `AGENT_<NAME>_THINKING_BUDGET`
-(see "Models / providers" above; legacy `OPENAI_DEFAULT_MODEL` / `COORDINATOR_MODEL` /
-`COORDINATOR_REASONING_EFFORT` still honored as fallbacks), `GOOGLE_MAPS_API_KEY`,
+ones you use are required; named servers read the env var their `api_key_env` names, e.g.
+`OPENAI_COMPAT_API_KEY`; the ad-hoc `openai-compat` provider reads `OPENAI_COMPAT_BASE_URL` +
+`OPENAI_COMPAT_API_KEY`), `MODEL_PROFILE` (+ optional
+`MODEL_PROFILES_DIR`) selecting the model profile (see "Models / providers" above),
+`GOOGLE_MAPS_API_KEY`,
 `XAI_API_KEY`,
 `OPENWEATHER_API_KEY`, `TAVILY_API_KEY`, `DATABASE_URL` (Postgres; when unset the
 memory store falls back to the on-disk JSON file), `TRACING_ENABLED` +
@@ -321,7 +350,16 @@ it to continue without that agent; wall-clock cap on the coordinator's gather ph
 engine, default 300 — past it the run is cancelled and the composer replies from the sub-agent
 results collected so far; `0` disables either cap. The last two are per-HTTP-request limits set
 on every provider client, defaults 60 s / 2 retries — per-read only, which is why the wall-clock
-caps exist). Tools must not block the event loop: wrap blocking clients (`requests`, pyowm,
+caps exist). `COORDINATOR_FORCE_TOOL` (default on): the coordinator is built with
+`initial_tool_choice="required"` so its first step must call a tool — it delegates instead
+of answering from history (weaker/local models otherwise invent figures on follow-ups). Pure
+small talk goes through the `no_data_needed` escape tool (`coordinator/no_data.py`); when that
+is the only call in a turn the engine replaces the coordinator's answer with a fixed one per
+declared kind (`_guard_no_data_turn`), so misuse can't leak invented data. The
+native Anthropic class is wrapped (`ToolChoiceAnthropic` in `lib/core/llm.py`) to translate
+`tool_choice` into Anthropic's `tool_required`. Every sub-agent prompt also gets
+`SUBAGENT_TOOL_RULES` appended by `agent_as_tool` (tools only, sanity-check results, retry
+once then report). Tools must not block the event loop: wrap blocking clients (`requests`, pyowm,
 googlemaps, Tavily) in `asyncio.to_thread` with a timeout. FPL tool failures go through
 `fpl_error()` (`fpl_agent/fpl_api.py`), which returns a `Hint` + `gameweek_calendar` so the
 agent can recover (e.g. a 404 on a not-yet-started gameweek's picks).

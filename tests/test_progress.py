@@ -168,8 +168,11 @@ def test_coordinator_timeout_returns_partial_results(monkeypatch):
 
     handler, result = asyncio.run(scenario())
     assert handler.cancelled is True
-    assert "przekroczyło limit" in result
-    assert "[weather_agent]" in result
+    # A user-facing notice written by code (the coordinator never answered), followed by
+    # the sub-agent output that did arrive; no internal agent names leak into it.
+    assert result.startswith("Nie zdążyłem zebrać wszystkich informacji")
+    assert result.rstrip().endswith("x")
+    assert "weather_agent" not in result
 
 
 def test_coordinator_finishes_before_timeout(monkeypatch):

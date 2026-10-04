@@ -15,7 +15,8 @@ the rest of the codebase and the tests rely on). This module makes that resoluti
   ``/responses`` path where tools + reasoning work together), ``anthropic`` → native
   ``Anthropic`` (extended thinking), and ``openrouter``/``groq``/``xai``/``openai-compat``
   → ``OpenAILike`` against an OpenAI-compatible ``api_base``.
-- **Per-agent config with defaults and legacy fallbacks** (see :func:`build_llm`).
+- **Per-agent config from a named model profile** (``config/models/<MODEL_PROFILE>.yaml``,
+  see :mod:`lib.core.model_profiles`), with per-principal overrides on top (see :func:`build_llm`).
 - **Reasoning normalized per provider** by :mod:`lib.core.reasoning` (one effort
   vocabulary, translated to OpenAI effort literals / Anthropic thinking budgets /
   OpenAI-compatible ``reasoning_effort``).
@@ -38,21 +39,33 @@ from llama_index.llms.openai_like import OpenAILike
 
 from lib.core.registry import bind_default_llm_resolver
 from lib.core import reasoning
+from lib.core import model_profiles
+from lib.core import custom_providers
 from lib.core.settings import env_int
 
 # The default provider when a model string carries no ``provider/`` prefix.
 DEFAULT_PROVIDER = "openai"
 
-# OpenAI-compatible providers: provider name → (base URL, API-key env var). These all
-# build through ``OpenAILike`` pointed at the provider's base URL. ``openai-compat`` is
-# the generic escape hatch for local/self-hosted OpenAI-compatible servers (vLLM,
-# Ollama, …), whose base URL and key come from the environment.
+# OpenAI-compatible providers: provider name → (default base URL, API-key env var). These
+# all build through ``OpenAILike`` pointed at the provider's base URL. ``openai-compat`` is
+# the generic escape hatch for local/self-hosted OpenAI-compatible servers (vLLM, Ollama,
+# …) whose URL comes from ``OPENAI_COMPAT_BASE_URL`` — for a quick one-off; a server you
+# keep using belongs in ``config/providers.yaml`` as a named provider (see
+# :mod:`lib.core.custom_providers`).
 _OPENAI_COMPAT_PROVIDERS: dict[str, tuple[str | None, str]] = {
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
-    "openai-compat": (os.getenv("OPENAI_COMPAT_BASE_URL"), "OPENAI_COMPAT_API_KEY"),
+    "openai-compat": (None, "OPENAI_COMPAT_API_KEY"),
 }
+
+
+def _base_url(provider: str) -> str | None:
+    """A built-in OpenAI-compatible provider's base URL (``openai-compat`` from env)."""
+    if provider == "openai-compat":
+        env = os.getenv("OPENAI_COMPAT_BASE_URL")
+        return env.strip() if env and env.strip() else None
+    return _OPENAI_COMPAT_PROVIDERS[provider][0]
 
 
 # --------------------------------------------------------------------------- parsing
@@ -90,17 +103,44 @@ def _build_openai(model_id: str, effort: str | None, budget_override: int | None
     return OpenAIResponses(**kwargs)
 
 
+class ToolChoiceAnthropic(Anthropic):
+    """``Anthropic`` that understands the OpenAI-style ``tool_choice`` kwarg.
+
+    ``FunctionAgent(initial_tool_choice=...)`` passes ``tool_choice`` to the LLM, which the
+    OpenAI and OpenAI-compatible classes translate, but the native ``Anthropic`` class only
+    knows ``tool_required`` and would forward the raw string to the API (a 400). Map it:
+    ``"required"`` → ``tool_required=True`` (Anthropic ``{"type": "any"}``; the base class
+    already falls back to ``auto`` while extended thinking is on, as the API demands),
+    ``"auto"``/``"none"`` → the default, and a tool name → ``{"type": "tool", "name": …}``.
+    """
+
+    def _prepare_chat_with_tools(self, *args, tool_choice=None, **kwargs):
+        if tool_choice == "required":
+            kwargs["tool_required"] = True
+        elif isinstance(tool_choice, str) and tool_choice not in ("auto", "none"):
+            kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
+        elif isinstance(tool_choice, dict):
+            kwargs["tool_choice"] = tool_choice
+        return super()._prepare_chat_with_tools(*args, **kwargs)
+
+
 def _build_anthropic(model_id: str, effort: str | None, budget_override: int | None):
     """Native Anthropic with extended thinking (constraint-safe via the reasoning module)."""
     kwargs = {"model": model_id, "api_key": os.getenv("ANTHROPIC_API_KEY"), **_client_kwargs()}
     kwargs.update(reasoning.anthropic_thinking_kwargs(effort, budget_override))
-    return Anthropic(**kwargs)
+    return ToolChoiceAnthropic(**kwargs)
 
 
 def _make_openai_like_builder(provider: str):
     """Build an ``OpenAILike`` builder bound to one OpenAI-compatible provider."""
     def build(model_id: str, effort: str | None, budget_override: int | None):
-        base_url, key_env = _OPENAI_COMPAT_PROVIDERS[provider]
+        _default_url, key_env = _OPENAI_COMPAT_PROVIDERS[provider]
+        base_url = _base_url(provider)
+        if not base_url:
+            raise ValueError(
+                f"No base URL for provider '{provider}': set OPENAI_COMPAT_BASE_URL, or define the "
+                "server as a named provider in config/providers.yaml."
+            )
         kwargs = {
             "model": model_id,
             "api_base": base_url,
@@ -114,6 +154,25 @@ def _make_openai_like_builder(provider: str):
         kwargs.update(reasoning.openai_compat_reasoning_kwargs(effort))
         return OpenAILike(**kwargs)
     return build
+
+
+def _build_custom_openai_compat(server: custom_providers.CustomProvider, model_id: str,
+                                effort: str | None, budget_override: int | None):
+    """A named OpenAI-compatible server from ``config/providers.yaml``."""
+    kwargs = {
+        "model": model_id,
+        "api_base": server.base_url,
+        "api_key": server.api_key(),
+        "is_chat_model": True,
+        "is_function_calling_model": True,
+        **_client_kwargs(),
+    }
+    kwargs.update(reasoning.openai_compat_reasoning_kwargs(effort))
+    return OpenAILike(**kwargs)
+
+
+# custom-provider type → builder(server, model_id, effort, budget_override)
+_CUSTOM_BUILDERS = {"openai-compat": _build_custom_openai_compat}
 
 
 # provider string → builder(model_id, effort, budget_override) -> LlamaIndex LLM
@@ -130,8 +189,7 @@ for _p in _OPENAI_COMPAT_PROVIDERS:
 # on a contextvar by the runtime (engine.handle_message) from the resolved Profile.
 # Kept as a plain ``{agent_name: {"model": str|None, "reasoning": str|None}}`` dict so
 # ``core`` stays a leaf (it must not import the ``domain`` Profile type). ``build_llm``
-# consults it first and falls back to env when a field is absent — so a turn with no
-# override (or no per-principal config) resolves exactly as before.
+# consults it first and falls back to the active model profile when a field is absent.
 _MODEL_OVERRIDES: "contextvars.ContextVar[dict]" = contextvars.ContextVar(
     "jarvis_model_overrides", default={}
 )
@@ -158,92 +216,64 @@ def _override(agent_name: str, field: str) -> str | None:
 
 
 # ------------------------------------------------------------------ config resolution
-def _agent_env(agent_name: str, suffix: str) -> str | None:
-    val = os.getenv(f"AGENT_{agent_name.upper()}_{suffix}")
-    return val if (val is not None and val.strip() != "") else None
-
-
 def _resolve_model(agent_name: str) -> str | None:
-    """Resolve an agent's model string: per-principal override → ``AGENT_<NAME>_MODEL`` →
-    legacy coordinator var → ``DEFAULT_MODEL`` → legacy ``OPENAI_DEFAULT_MODEL`` (bare →
-    treated as ``openai/…``)."""
-    override = _override(agent_name, "model")
-    if override:
-        return override
-    val = _agent_env(agent_name, "MODEL")
-    if val:
-        return val
-    if agent_name == "coordinator":
-        legacy = os.getenv("COORDINATOR_MODEL")
-        if legacy and legacy.strip():
-            return legacy.strip()
-    default = os.getenv("DEFAULT_MODEL")
-    if default and default.strip():
-        return default.strip()
-    legacy_default = os.getenv("OPENAI_DEFAULT_MODEL")
-    if legacy_default and legacy_default.strip():
-        return legacy_default.strip()  # bare value → default provider (openai)
-    return None
+    """Resolve an agent's model string: per-principal override → the active model
+    profile's entry for the agent → the profile's ``default``."""
+    return _override(agent_name, "model") or model_profiles.active_profile().for_agent(agent_name).model
 
 
 def _resolve_effort_raw(agent_name: str) -> str | None:
-    """Resolve an agent's raw reasoning-effort string (pre-normalization):
-    ``AGENT_<NAME>_REASONING_EFFORT`` → legacy ``COORDINATOR_REASONING_EFFORT`` (coordinator
-    only) → ``DEFAULT_REASONING_EFFORT``. A per-principal override wins over all of these.
-    The coordinator keeps its historical ``medium`` default when nothing is configured;
-    other agents default to no reasoning."""
-    override = _override(agent_name, "reasoning")
-    if override:
-        return override
-    val = _agent_env(agent_name, "REASONING_EFFORT")
-    if val:
-        return val
-    if agent_name == "coordinator":
-        legacy = os.getenv("COORDINATOR_REASONING_EFFORT")
-        if legacy and legacy.strip():
-            return legacy
-    default = os.getenv("DEFAULT_REASONING_EFFORT")
-    if default and default.strip():
-        return default
-    if agent_name == "coordinator":
-        return "medium"
-    return None
+    """Resolve an agent's raw reasoning-effort string (pre-normalization): per-principal
+    override → the active profile (agent entry → ``default``). Unset means no reasoning."""
+    return (_override(agent_name, "reasoning")
+            or model_profiles.active_profile().for_agent(agent_name).reasoning)
 
 
 def _resolve_budget(agent_name: str) -> int | None:
-    """Per-agent Anthropic thinking-budget override (``AGENT_<NAME>_THINKING_BUDGET``)."""
-    val = _agent_env(agent_name, "THINKING_BUDGET")
-    if val is None:
+    """Per-agent Anthropic thinking-budget override (``thinking_budget`` in the profile)."""
+    return model_profiles.active_profile().for_agent(agent_name).thinking_budget
+
+
+def custom_provider_names() -> list[str]:
+    return sorted(custom_providers.load_providers(set(PROVIDER_BUILDERS)))
+
+
+def _builder_for(provider: str):
+    """The builder for ``provider``: a built-in one, else a named server from
+    ``config/providers.yaml``; None when unknown."""
+    builder = PROVIDER_BUILDERS.get(provider)
+    if builder is not None:
+        return builder
+    server = custom_providers.load_providers(set(PROVIDER_BUILDERS)).get(provider)
+    if server is None:
         return None
-    try:
-        return int(val)
-    except ValueError:
-        raise ValueError(
-            f"AGENT_{agent_name.upper()}_THINKING_BUDGET must be an integer, got {val!r}"
-        )
+    custom = _CUSTOM_BUILDERS[server.type]
+    return lambda model_id, effort, budget: custom(server, model_id, effort, budget)
 
 
 def build_llm(agent_name: str):
     """Resolve and construct the LlamaIndex LLM for ``agent_name`` from configuration.
 
-    Reads the agent's model + reasoning effort (with the fallbacks in
-    :func:`_resolve_model` / :func:`_resolve_effort_raw`), parses the provider prefix,
+    Reads the agent's model + reasoning effort (per-principal override, else the active
+    model profile — see :mod:`lib.core.model_profiles`), parses the provider prefix,
     normalizes the effort, and dispatches through :data:`PROVIDER_BUILDERS`. Raises a
     clear ``ValueError`` for a missing model or an unknown provider.
     """
     raw_model = _resolve_model(agent_name)
     if not raw_model:
+        profile = model_profiles.active_profile()
         raise ValueError(
-            f"No model configured for agent '{agent_name}': set AGENT_{agent_name.upper()}_MODEL "
-            "or a global DEFAULT_MODEL (or legacy OPENAI_DEFAULT_MODEL)."
+            f"No model configured for agent '{agent_name}' in model profile '{profile.name}': "
+            f"set `default.model` or `agents.{agent_name}.model` there."
         )
 
     provider, model_id = parse_model_string(raw_model)
-    builder = PROVIDER_BUILDERS.get(provider)
+    builder = _builder_for(provider)
     if builder is None:
         raise ValueError(
             f"Unknown model provider '{provider}' for agent '{agent_name}' (from "
-            f"model string '{raw_model}'). Supported: {', '.join(sorted(PROVIDER_BUILDERS))}."
+            f"model string '{raw_model}'). Built-in: {', '.join(sorted(PROVIDER_BUILDERS))}; "
+            f"named servers (config/providers.yaml): {', '.join(custom_provider_names()) or 'none'}."
         )
 
     effort = reasoning.normalize_effort(_resolve_effort_raw(agent_name))

@@ -20,7 +20,7 @@ share one deterministic report; simulated is reported separately (it is non-dete
 and runs via its own event loop).
 
 Model sweeps are driven the same way for all kinds: the `role` + `candidates` in the config
-apply to goldens, scripted, AND simulated. `simulator_model:` (default DEFAULT_MODEL) is the
+apply to goldens, scripted, AND simulated. `simulator_model:` (default: the profile's default model) is the
 LLM that role-plays the user in the simulated kind.
 """
 
@@ -89,7 +89,7 @@ def main() -> None:
             print("  · simulated requested but no `simulations:` in config — skipping simulated")
         else:
             n_s = len(cfg.select_simulations())
-            print(f"  → running {n_s} simulated scenario(s) (simulator={cfg.simulator_model or 'DEFAULT_MODEL'}) …")
+            print(f"  → running {n_s} simulated scenario(s) (simulator={cfg.simulator_model or 'profile default'}) …")
             run_simulations_from_config(cfg, table)
             print(f"    wrote {date_dir}/{cfg.name}-simulated.json + .md")
             ran_any = True

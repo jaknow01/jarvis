@@ -1,0 +1,7 @@
+# Whole network on the self-hosted vLLM server (`gpu-server` in config/providers.yaml).
+# Schema and merge rules: lib/core/model_profiles.py.
+description: Coordinator, sub-agents and composer on local Qwen3.8-27B (vLLM)
+
+default:
+  model: gpu-server/RedHatAI/Qwen3.8-27B-INT4
+  reasoning: off

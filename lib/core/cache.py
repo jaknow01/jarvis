@@ -78,6 +78,12 @@ class Ctx():
         # notably the scheduler — know which channel/target to deliver a proactive
         # reply to.
         self.conversation_id: str | None = conversation_id
+        # Coordinator bookkeeping for the turn: names of the sub-agents actually run
+        # (appended by agent_as_tool) and the category the coordinator declared via its
+        # `no_data_needed` escape tool, if any. The engine uses both to decide whether the
+        # coordinator's summary may reach the composer (see engine.handle_message).
+        self.subagent_calls: list[str] = []
+        self.no_data_kind: str | None = None
 
     # -- group-scope delegation (keeps the tool-facing attribute surface unchanged) --
     @property

@@ -1,7 +1,7 @@
 """Token counts -> USD cost via a configurable per-model price table.
 
 The price table (``evals/price_table.yaml``) is keyed by the same ``provider/model`` string
-the app uses for ``AGENT_<NAME>_MODEL`` (bare model => provider ``openai``). Prices are USD
+the app uses in model profiles (bare model => provider ``openai``). Prices are USD
 per 1M tokens (the unit vendors publish), split into input and output. A model absent from
 the table is reported as ``unpriced`` (cost ``None``) rather than silently costed at zero, so
 gaps surface in the report instead of hiding.

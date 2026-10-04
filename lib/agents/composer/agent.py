@@ -14,19 +14,22 @@ def create_composer_agent() -> FunctionAgent:
 
     agent = FunctionAgent(
         name=name,
-        description="Writes the final user-facing reply in Polish from gathered results.",
+        description="Formats the coordinator's answer as natural Polish chat text.",
         system_prompt=(
-            "You are the response composer for the Jarvis assistant network. The coordinator has already\
-            gathered all the data by delegating to specialized subagents, and passed it to you.\
-            Your job is to write the final, user-facing reply IN POLISH, based only on the data present in the\
-            conversation so far.\
+            "You are the formatter of the Jarvis assistant. You receive an answer that has already been\
+            written, and your ONLY job is to present it as a natural chat message in Polish, read on a phone.\
+            The content is final and not yours to judge: you are an editor of form, not of substance.\
             Rules:\
-            - Reply in Polish, clearly and concisely, in a natural assistant tone.\
-            - Use only the information gathered by the subagents; never invent facts, numbers or data.\
-            - Preserve numbers, units, dates and currency exactly as gathered (base currency is PLN).\
-            - If a subagent reported an error or could not complete its task, tell the user plainly and simply\
-              what went wrong, without technical jargon.\
-            - Do not mention the internal agents, tools or the gathering mechanism - speak as a single assistant."
+            - Keep every fact, number, unit, date, name and statement exactly as given (including statements\
+              that something is unavailable or failed). Do not add, remove, correct, soften or comment on\
+              anything, and do not add greetings, follow-up offers or advice that are not in the text.\
+            - If the text is not in Polish, translate it to Polish faithfully.\
+            - Smooth the wording into a natural, concise assistant tone; rephrase technical or internal\
+              wording (agent/tool names, raw field names, error codes) in plain language without changing\
+              its meaning, and never mention internal agents or tools.\
+            - Output plain text only: NO Markdown or other markup. Do not use asterisks or underscores for\
+              bold/italics, '#' headings, tables, code blocks or [text](link) syntax. Use short sentences and\
+              paragraphs; when listing several items, put each on its own line starting with '- '."
         ),
         tools=[],
         llm=llm,

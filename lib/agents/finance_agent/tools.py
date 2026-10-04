@@ -12,6 +12,7 @@ from llama_index.core.workflow import Context
 from lib.core import tool_ownership, function_tool, app_context
 from lib.agents.finance_agent.fx import validate_currency_code
 from lib.agents.finance_agent import history as _history
+from lib.agents.finance_agent import symbols as _symbols
 from lib.domain import observations as _observations
 
 logger = logging.getLogger(__name__)
@@ -107,11 +108,9 @@ async def get_stock_quote(ctx: Context, symbol: str) -> dict:
         Context in which the tool operates
 
     symbol: str
-        The Yahoo Finance ticker of the instrument.
-        - Polish (GPW) stocks: the ticker with a '.WA' suffix, e.g. 'PKO.WA',
-          'KGH.WA', 'CDR.WA', 'PKN.WA'.
-        - Non-Polish stocks: the plain ticker, e.g. 'AAPL', 'MSFT'.
-        - Indices: prefix with '^', e.g. '^GSPC' (S&P 500), '^WIG20' (WIG20).
+        The exact Yahoo Finance ticker of the instrument. Tickers are NOT guessable
+        (e.g. WIG20 is 'WIG20.WA', S&P 500 is '^GSPC', KGHM is 'KGH.WA') — unless you are
+        certain of the symbol, look it up first with search_ticker and pass its result here.
         The symbol is case-insensitive.
 
     Output:
@@ -145,10 +144,9 @@ async def get_stock_quote(ctx: Context, symbol: str) -> dict:
     if chart.get("error") or not chart.get("result"):
         return {
             "error": f"Unknown or unsupported symbol '{symbol}'.",
-            "tip": "For GPW stocks add the '.WA' suffix (e.g. 'PKO.WA'). For indices prefix with '^' (e.g. '^WIG20'). "
-                   "Do NOT keep guessing ticker variants: Yahoo does not carry every instrument — many "
-                   "ETFs listed on GPW have no '.WA' symbol at all. If the symbol isn't known for sure, "
-                   "stop after one or two attempts and report that the quote is unavailable; if the user "
+            "tip": "Do NOT guess ticker variants: call search_ticker with the instrument's name to get "
+                   "the exact symbol, then retry once with it. Yahoo does not carry every instrument — if "
+                   "search_ticker finds no fitting match, report that the quote is unavailable; if the user "
                    "or the request names a specific listing (e.g. a Euronext/Xetra cross-listing), use "
                    "that and convert the currency with get_exchange_rate.",
         }
@@ -168,6 +166,64 @@ async def get_stock_quote(ctx: Context, symbol: str) -> dict:
         "quote_time": datetime.fromtimestamp(quote_time).isoformat() if quote_time else None,
         "source": "Yahoo Finance",
     }
+
+
+@tool_ownership("finance_agent")
+@function_tool
+async def search_ticker(ctx: Context, query: str, limit: int = 5, asset_type: str = "") -> dict:
+    """
+    Description:
+        Looks up Yahoo Finance ticker symbols by instrument name, so get_stock_quote can be
+        called with the exact symbol. Yahoo symbols are not guessable (WIG20 -> 'WIG20.WA',
+        mWIG40 -> 'MWIG40.WA', S&P 500 -> '^GSPC', CD Projekt -> 'CDR.WA'), so use this
+        whenever you are not certain of a symbol, BEFORE calling get_stock_quote.
+
+    Parameters:
+    ctx : Context
+        Context in which the tool operates.
+
+    query: str
+        The instrument's name or a ticker fragment, e.g. 'WIG20', 'KGHM', 'S&P 500',
+        'Amundi S&P 500'. Use the international/English name: Polish common nouns are not
+        matched (gold -> 'gold', not 'złoto'; silver -> 'silver').
+
+    limit: int
+        How many best matches to return (default 5, max 10).
+
+    asset_type: str
+        Optional filter on the instrument type: one of 'INDEX', 'EQUITY', 'ETF', 'FUTURE',
+        'CURRENCY', 'MUTUALFUND', 'CRYPTOCURRENCY'. Leave empty to search all types. Use
+        'INDEX' for a market index so ETFs tracking it don't crowd the results.
+
+    Output:
+        JSON object with `matches`: a list of {symbol, name, type, exchange, match_score},
+        best first. Pick the match whose name, type and exchange fit the request (Polish
+        instruments trade on 'WSE' with a '.WA' suffix) and pass its `symbol` to
+        get_stock_quote. An empty list means Yahoo does not carry the instrument.
+    """
+    query = (query or "").strip()
+    logging.info(f"Searching ticker for {query!r} (type={asset_type or 'any'})")
+    if not query:
+        return {"error": "Empty query.", "tip": "Pass the instrument's name, e.g. 'WIG20'."}
+    kind = asset_type.strip().upper() or None
+    if kind and kind not in _symbols.ASSET_TYPES:
+        return {"error": f"Unknown asset_type '{asset_type}'.",
+                "tip": f"Use one of {', '.join(_symbols.ASSET_TYPES)} or leave it empty."}
+
+    try:
+        quotes = await asyncio.to_thread(_symbols.fetch_candidates, query)
+    except Exception as e:
+        logging.warning(f"Yahoo ticker search failed for {query!r}: {e}")
+        return {"message": f"Ticker search for '{query}' is temporarily unavailable.",
+                "error": str(e),
+                "tip": "Report that the quote is unavailable instead of guessing symbols."}
+
+    matches = _symbols.rank_matches(query, quotes, limit=min(max(limit, 1), 10), asset_type=kind)
+    result = {"query": query, "matches": matches, "source": "Yahoo Finance search"}
+    if not matches:
+        result["tip"] = ("No instrument found. Try the English name or drop asset_type; if still "
+                         "nothing, report that the instrument is unavailable.")
+    return result
 
 
 # Cap on how many daily points a history response returns verbatim; longer ranges are

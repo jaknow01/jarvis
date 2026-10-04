@@ -10,6 +10,8 @@ Schema::
     name: composer-comparison        # report/run name
     role: composer                   # the role being swept
     judge_model: gpt-4o              # constant judge (bare = OpenAI; provider/model = adapter)
+    profile: prod                    # OPTIONAL: base model profile (config/models/<name>.yaml;
+                                     #   default: MODEL_PROFILE) — every role not swept/baselined
     mock: true                       # deterministic, side-effect-free tools (default true)
     dataset: labeled                 # goldens file under evals/datasets/ (default "labeled")
     composer_threshold: 0.7          # pass threshold for composer_quality_pl
@@ -27,7 +29,6 @@ Schema::
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,12 +61,13 @@ class SweepConfig:
     dataset: str | None = "labeled"   # goldens file (single/multi-hop); None => no goldens
     conversations: str | None = None  # scripted conversations file (multi-turn); None => none
     simulations: str | None = None    # simulation scenarios file (dynamic); None => none
-    simulator_model: str | None = None  # LLM that role-plays the user (default: DEFAULT_MODEL)
+    simulator_model: str | None = None  # LLM that role-plays the user (default: the base profile's default model)
     max_turns: int = 6                # cap on simulated user turns
     composer_threshold: float = 0.7
     limit: int | None = None
     only_ids: list[str] | None = None
     baseline: dict[str, str] = field(default_factory=dict)
+    profile: str | None = None        # base model profile (config/models/<name>.yaml); None => MODEL_PROFILE
     timeout: float = 180.0            # per-item wall-clock cap (s); a hang becomes a run_error
 
     @classmethod
@@ -112,6 +114,7 @@ class SweepConfig:
             limit=raw.get("limit"),
             only_ids=raw.get("only_ids"),
             baseline=raw.get("baseline", {}) or {},
+            profile=raw.get("profile"),
             timeout=raw.get("timeout", 180.0),
         )
 
@@ -121,7 +124,7 @@ class SweepConfig:
 
     def baseline_config(self) -> EvalConfig:
         overrides = {r: RoleModel(role=r, model=m) for r, m in self.baseline.items()}
-        return EvalConfig(label=f"{self.name}:baseline", overrides=overrides)
+        return EvalConfig(label=f"{self.name}:baseline", overrides=overrides, base_profile=self.profile)
 
     def select_goldens(self) -> list[EvalGolden]:
         if not self.dataset:
@@ -147,7 +150,7 @@ class SweepConfig:
         label = f"{self.role}={cand.model}" + (f"@{cand.reasoning_effort}" if cand.reasoning_effort else "")
         overrides = dict(self.baseline_config().overrides)
         overrides[self.role] = cand
-        return label, EvalConfig(label=label, overrides=overrides)
+        return label, EvalConfig(label=label, overrides=overrides, base_profile=self.profile)
 
 
 async def run_sweep_from_config(
@@ -193,7 +196,7 @@ def run_simulations_from_config(
 
     table = table or PriceTable.load()
     scenarios = cfg.select_simulations()
-    sim_model = cfg.simulator_model or os.getenv("DEFAULT_MODEL")
+    sim_model = cfg.simulator_model or cfg.baseline_config().profile().default.model
     judge = cfg.judge()
 
     # phase 1 (sync): drive the simulator per candidate x scenario, collecting ConversationRuns

@@ -6,8 +6,10 @@ a conversation id and the user's text, it:
 
 1. binds the shared per-run `Ctx` for the turn (contextvar; reachable from every tool),
 2. loads the full prior history for the conversation and replays it as `chat_history`,
-3. runs the coordinator (LlamaIndex `FunctionAgent`) to gather results,
-4. runs the composer deterministically to write the final Polish reply,
+3. runs the coordinator (LlamaIndex `FunctionAgent`), which gathers results from the
+   sub-agents and writes the answer's content,
+4. runs the composer deterministically to format that answer as plain Polish chat text
+   (form only — it never changes the content),
 5. persists the user message + the assistant reply (stamped with the MLflow trace id).
 
 Conversation continuity is owned by us now (Postgres/JSON via
@@ -67,17 +69,44 @@ def coordinator_timeout_seconds() -> int:
 
 
 def _partial_gather(results: list[tuple[str, str]], timeout: int) -> str:
-    """The composer input used when the coordinator hit its deadline: the sub-agent
-    results that did arrive, plus an explicit note that the rest is missing."""
-    header = (
-        f"UWAGA: zbieranie danych przekroczyło limit {timeout} s i zostało przerwane. "
-        "Poniżej są tylko wyniki, które zdążyły wrócić — napisz odpowiedź z nich i wyraźnie "
-        "zaznacz, których informacji nie udało się pobrać."
-    )
+    """The answer used when the coordinator hit its deadline (it wrote no answer): a fixed
+    notice plus the sub-agent results that did arrive. The content comes from code and
+    the sub-agents, so the composer only has to format it."""
+    logger.warning("Coordinator hit its %ss deadline; answering from partial results", timeout)
     if not results:
-        return header + "\n\n(Żaden podagent nie zdążył zwrócić wyników.)"
-    body = "\n\n".join(f"[{name}]\n{output}" for name, output in results)
-    return header + "\n\n" + body
+        return (
+            "Nie udało mi się zebrać potrzebnych informacji w wyznaczonym czasie. "
+            "Spróbuj zapytać ponownie za chwilę."
+        )
+    body = "\n\n".join(output for _name, output in results)
+    return (
+        "Nie zdążyłem zebrać wszystkich informacji w wyznaczonym czasie, więc część odpowiedzi "
+        "może być niepełna. Oto, co udało się ustalić:\n\n" + body
+    )
+
+
+# Fixed answers for a turn where the coordinator only declared the message conversational
+# (`no_data_needed`) and ran no sub-agent. The content comes from code — not from an LLM —
+# so this path has nothing it could invent; the composer just formats it.
+_NO_DATA_ANSWERS = {
+    "greeting": "Cześć! W czym mogę pomóc?",
+    "thanks": "Nie ma za co!",
+    "small_talk": "Jestem do dyspozycji. W czym mogę pomóc?",
+    "acknowledgement": "Jasne.",
+    "farewell": "Do usłyszenia!",
+}
+_NO_DATA_DEFAULT = "Jestem do dyspozycji. W czym mogę pomóc?"
+
+
+def _guard_no_data_turn(turn_ctx: Ctx, answer: str) -> str:
+    """Replace the coordinator's answer on a turn where it only called the `no_data_needed`
+    escape tool (no sub-agent ran): nothing was gathered, so any facts in that text would be
+    the model's own invention. A fixed answer for the declared kind is used instead, so
+    misuse of the escape tool yields a generic reply, never fabricated data."""
+    if turn_ctx.no_data_kind and not turn_ctx.subagent_calls:
+        logger.info("No-data turn (kind=%s): coordinator answer replaced", turn_ctx.no_data_kind)
+        return _NO_DATA_ANSWERS.get(turn_ctx.no_data_kind, _NO_DATA_DEFAULT)
+    return answer
 
 
 async def _gather_with_progress_ping(handler, notify, want_ping, timeout: int = 0):
@@ -98,7 +127,7 @@ async def _gather_with_progress_ping(handler, notify, want_ping, timeout: int = 
     underlying workflow task is cancelled too — not just this awaiter — so the in-flight
     LLM call actually stops rather than finishing detached.
 
-    Returns the handler's result (the coordinator's gathered summary).
+    Returns the handler's result (the coordinator's answer).
     """
     done_labels: list[str] = []
     results: list[tuple[str, str]] = []
@@ -241,7 +270,7 @@ async def handle_message(
         history = await build_chat_history(conversation_id)
         input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
 
-        # 1) Coordinator gathers results from the subagent tools (never writes the reply).
+        # 1) Coordinator gathers results from the subagent tools and writes the answer.
         #    On a live user turn with a notify callback we watch its event stream so a
         #    slow turn pushes one interim "still working" ping (naming the subagents
         #    already done). Ordering is race-free: the transport sends the final reply
@@ -251,22 +280,19 @@ async def handle_message(
             user_msg=input_text, chat_history=history, ctx=Context(coordinator)
         )
         want_ping = notify is not None and origin == "user" and progress.ping_enabled()
-        gathered = str(await _gather_with_progress_ping(
+        answer = str(await _gather_with_progress_ping(
             handler, notify, want_ping, timeout=coordinator_timeout_seconds()
         ))
+        answer = _guard_no_data_turn(turn_ctx, answer)
 
-        # 2) Composer writes the final user-facing reply, deterministically (always runs).
+        # 2) Composer formats the coordinator's answer, deterministically (always runs). It
+        #    gets ONLY that answer — no user message, no history — so it can't add content.
         composer = create_composer_agent()
         composer_input = (
-            "Wiadomość użytkownika:\n" + text + "\n\n"
-            "Zebrane dane od podagentów (użyj TYLKO ich, nie wymyślaj):\n" + gathered + "\n\n"
-            "Napisz teraz ostateczną odpowiedź dla użytkownika po polsku."
+            "Sformatuj poniższą odpowiedź jako zwykły tekst wiadomości po polsku, bez zmiany "
+            "jej treści:\n\n" + answer
         )
-        reply = str(
-            await composer.run(
-                user_msg=composer_input, chat_history=history, ctx=Context(composer)
-            )
-        )
+        reply = str(await composer.run(user_msg=composer_input, ctx=Context(composer)))
 
         # 3) Persist the turn (user msg + assistant reply), stamping the MLflow trace id.
         trace_id = last_trace_id()

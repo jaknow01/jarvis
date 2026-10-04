@@ -1,0 +1,11 @@
+# Named model servers: custom providers usable as the prefix of a model string, e.g.
+#   gpu-server/RedHatAI/Qwen3.8-27B-INT4   → that model on that machine.
+# Schema: lib/core/custom_providers.py. Built-in providers (openai, anthropic, openrouter,
+# groq, xai, openai-compat) need no entry and cannot be redefined. Never put keys here —
+# only the NAME of the env var holding one (omit it for an unauthenticated local server).
+
+gpu-server:
+  type: openai-compat
+  base_url: http://192.168.0.211:8000/v1
+  api_key_env: OPENAI_COMPAT_API_KEY
+  description: vLLM on the home GPU server (one model at a time; see the local-models repo)

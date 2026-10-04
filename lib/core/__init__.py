@@ -26,6 +26,16 @@ from lib.core.cache import (
     reset_app_context,
 )
 from lib.core.llm import bind_model_overrides, reset_model_overrides
+from lib.core.model_profiles import (
+    ModelProfile,
+    AgentModel,
+    ModelProfileError,
+    active_profile,
+    active_profile_name,
+    available_profiles,
+    load_profile,
+    using_profile,
+)
 from lib.core.agent_tool import agent_as_tool
 from lib.core.tooling import function_tool
 from lib.core.env import environment_preamble, TIMEZONE, BASE_CURRENCY, LOCALE
@@ -55,6 +65,14 @@ __all__ = [
     "reset_app_context",
     "bind_model_overrides",
     "reset_model_overrides",
+    "ModelProfile",
+    "AgentModel",
+    "ModelProfileError",
+    "active_profile",
+    "active_profile_name",
+    "available_profiles",
+    "load_profile",
+    "using_profile",
     "agent_as_tool",
     "function_tool",
     "environment_preamble",

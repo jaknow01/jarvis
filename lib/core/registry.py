@@ -70,7 +70,7 @@ class _LLMRegistry(dict):
     Explicit `@llm_usage` entries are stored directly and win. For any agent WITHOUT
     an explicit entry, a config-driven default resolver — bound once by
     `lib.core.llm` via `bind_default_llm_resolver` — is used, so every agent resolves
-    a model from its `AGENT_<NAME>_MODEL` config without needing a hand-written
+    a model from the active model profile (config/models/*.yaml) without needing a hand-written
     factory. This is the "least surprising hook" chosen in the design's Open Questions:
     the registry stays the single public surface and no agent lookup ever misses.
     """

@@ -2,7 +2,7 @@ import logging
 
 from llama_index.core.agent.workflow import FunctionAgent
 
-from lib.core import LLM_BY_AGENT, agents_decorator, agent_enabled, agent_as_tool
+from lib.core import LLM_BY_AGENT, agents_decorator, agent_enabled, agent_as_tool, env_flag
 from lib.domain import memory
 from lib.domain.profile import Profile
 
@@ -18,6 +18,8 @@ from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
 from lib.agents.math_agent import create_math_agent
 from lib.agents.calendar_agent import create_calendar_agent
+
+from lib.agents.coordinator.no_data import TOOL_NAME as NO_DATA_TOOL, no_data_tool
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,14 @@ def subagent_catalog() -> list[tuple]:
         ("math_agent", create_math_agent, "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."),
         ("calendar_agent", create_calendar_agent, "Reads and manages the owner's Apple (iCloud) calendar: list events in a time window ('co mam jutro/w tym tygodniu', 'czy jestem wolny...'), add events ('dodaj do kalendarza...'), edit them, and delete them (deletion is confirmed with the user first)."),
     ]
+
+
+def force_tool_choice() -> bool:
+    """``COORDINATOR_FORCE_TOOL`` (default on): force the coordinator's first LLM step to
+    call a tool (``initial_tool_choice="required"``), so it delegates instead of answering
+    from the conversation history. Weaker/local models otherwise skip delegation on
+    follow-up questions and invent figures. Adds the ``no_data_needed`` escape tool."""
+    return env_flag("COORDINATOR_FORCE_TOOL", True)
 
 
 def subagent_names() -> list[str]:
@@ -68,12 +78,37 @@ def create_coordinator_agent(profile: Profile | None = None) -> FunctionAgent:
         Your tool-subagents can be run in parallel if the query requires multidomain knowledge.\
         You can also run the same tool-subagent multiple times in parallel if the query justifies it - it is especially helpful with news-agent.\
         \
-        IMPORTANT: You do NOT write the final answer to the user yourself. Your only job is to gather everything needed\
-        (including any error messages from failed tool calls) by calling the subagent tools. A separate composer step\
-        writes the final user-facing reply from what you gathered, so do not craft the user's answer, and do not\
-        apologize or converse - just gather. When you are done gathering, return a concise summary of the collected\
-        results (and any errors) for the composer to turn into the reply. If a tool call fails, include what went wrong\
-        so the composer can inform the user."
+        IMPORTANT: when you are done gathering, YOU write the answer to the user's message, in Polish. You own its\
+        entire content: which facts and numbers it contains, what could not be obtained and why, what was done.\
+        A separate formatting step only polishes the wording and layout of your text for a chat on a phone; it\
+        adds nothing, removes nothing and fixes no mistakes - so your answer must be complete and correct as is.\
+        Answer content rules:\
+        - Use only facts, numbers, units and dates returned by subagents in THIS turn, exactly as returned.\
+        - Answer every part of the user's message. If a part could not be obtained (a subagent failed, timed\
+          out or returned something unusable), say plainly that this part is unavailable right now, without\
+          technical jargon, instead of filling it in.\
+        - Report an action (reminder, lights, memory, calendar) as done only if the subagent confirmed it.\
+        - Speak as a single assistant: do not mention subagents, tools or how the data was gathered."
+    )
+
+    instructions += (
+        "\n\nMandatory delegation rules:\n"
+        "- EVERY user message that asks for information or an action MUST be answered by calling at "
+        "least one subagent in THIS turn. This applies to follow-up questions too ('a funt?', 'a jutro?', "
+        "'a tam?'): resolve what they refer to from the conversation, then call the subagent again.\n"
+        "- Never answer from the conversation history, the running summary, the user's long-term memory "
+        "or your own knowledge. Earlier values are stale: exchange rates, quotes and indices, weather, "
+        "news, routes, device states, FPL data, calendar events and scheduled jobs must be fetched fresh "
+        "every turn, even if the same value appeared a moment ago.\n"
+        "- Actions (reminders, lights, saving to memory, calendar changes) happen ONLY through the "
+        "matching subagent.\n"
+        "- Never write numbers, prices or facts into your answer that no subagent returned in this turn.\n"
+        "- Long-term memory tells you HOW to personalize (preferences, saved places); it is not a "
+        "source of current data.\n"
+        "- If a subagent's result is clearly unrelated to what you asked (wrong currency, ticker, place "
+        "or date), you may call it once more with a more precise request. If it is still wrong, do not "
+        "loop: report that this part is unavailable.\n"
+        "- If no subagent can handle the request, say so plainly in your answer rather than answering from your own knowledge."
     )
 
     # The roster (which subagents are exposed as tools) is decided per principal by the
@@ -113,8 +148,9 @@ def create_coordinator_agent(profile: Profile | None = None) -> FunctionAgent:
         mem_profile = memory.summary(user_id=user_id)
         if mem_profile:
             instructions += (
-                "\n\nWhat you already know about the user (long-term memory — use it to personalize, "
-                "and prefer it over asking the user again):\n" + mem_profile
+                "\n\nWhat you already know about the user (long-term memory — use it to personalize "
+                "and to fill in details instead of asking the user again; it never replaces calling "
+                "the subagents for current data or actions):\n" + mem_profile
             )
 
     tools = []
@@ -124,13 +160,24 @@ def create_coordinator_agent(profile: Profile | None = None) -> FunctionAgent:
         else:
             logger.info(f"Subagent '{sub_name}' not in roster; not exposed to coordinator")
 
+    force = force_tool_choice()
+    if force:
+        tools.append(no_data_tool())
+        instructions += (
+            f"\n\nYou must call at least one tool on every message. If, and only if, the message is pure "
+            f"conversation that needs no data and no action (greeting, thanks, small talk, a bare 'ok', "
+            f"farewell), call `{NO_DATA_TOOL}` instead of a subagent. Never use it for a question, a "
+            f"follow-up or a request — those always go to a subagent."
+        )
+
     agent = FunctionAgent(
         name=name,
-        description="Routes user requests to specialized subagents and gathers their results.",
+        description="Routes user requests to specialized subagents and writes the answer from their results.",
         system_prompt=instructions,
         tools=tools,
         llm=llm,
         allow_parallel_tool_calls=True,
+        initial_tool_choice="required" if force else None,
     )
     logger.info(f"Coordinator initiated with {len(tools)} subagent tool(s)")
 
