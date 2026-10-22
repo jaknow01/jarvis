@@ -73,6 +73,7 @@ lib/domain/            Shared stateful stores (used by agents AND runtime)
   scheduler.py         Scheduled-jobs store (JSON or Postgres backend)
   conversation.py      Conversation-history store + rolling-window summary (JSON or Postgres)
   observations.py      Daily time-series store for external readings (JSON or Postgres; see docs/OBSERVATIONS.md)
+  mcp_keys.py          Self-service MCP API keys (sha256 only; one active per FPL entry; JSON or Postgres)
 
 lib/agents/            Coordinator + one feature subpackage per agent
   __init__.py          Aggregator: imports every subpackage (registration), public surface
@@ -100,7 +101,8 @@ lib/runtime/           TOP layer — wires the network to a transport / runs job
   tracing.py           MLflow tracing setup + last_trace_id()
   mcp_server.py        public MCP tool servers: API-key gateway + EXPOSABLE (code-only
                          allowlist: today fpl) over Streamable HTTP
-  mcp_keys.py          API-key holders (config/mcp_clients.yaml, hashes only) + rate limit
+  mcp_keys.py          API-key registry: config/mcp_clients.yaml + self-service keys, rate limit
+  mcp_join.py          /mcp/join self-service page: league-member check → key (+ owner ping)
 
 app/db/                Postgres access layer: connection, schema, repos, migration
                          (incl. conversation_repo.py — conversations + messages;
@@ -178,7 +180,7 @@ the coordinator. This is a technical window into the running service from the ph
 (`/stop` to cancel the in-flight turn, `/status`, `/logs`, `/errors`, `/jobs [all]` (tags
 each item's kind — cron vs one-shot vs repeating/one-shot watch — for verification; `all`
 also shows completed/cancelled),
-`/fire <id>`, `/scheduler pause|resume`, `/collect [finance|fpl]` (run the daily observation
+`/fire <id>`, `/scheduler pause|resume`, `/mcp [revoke <id>]` (MCP API keys), `/collect [finance|fpl]` (run the daily observation
 collectors now), `/user`, `/group`, `/profile <user>` (multi-user management — see
 docs/MULTI_USER.md), `/agents`, `/models`, `/env` with masked secrets,
 `/memory`, `/summary`, `/reset confirm`, `/last`, `/window`, `/version`, `/probe`, `/help`).
@@ -401,7 +403,12 @@ affects agent behavior. See `docs/TRACING.md`.
 `MCP_TOOL_TIMEOUT_SECONDS` (90); client side `MCP_TOOLS_TTL_SECONDS` (300),
 `MCP_RETRY_SECONDS` (30), `MCP_LIST_TIMEOUT_SECONDS` (10), `MCP_CALL_TIMEOUT_SECONDS` (100).
 The server runs as the compose `mcp` service behind Caddy's `/mcp/*`, with access logging off
-(keys may ride in the URL). Only agents in `EXPOSABLE` (code) can be served. See `docs/MCP.md`.
+(keys may ride in the URL). Only agents in `EXPOSABLE` (code) can be served. League managers
+get their own key at `/mcp/join` (no ownership proof by design — league membership only; one
+active key per entry, owner pinged on Messenger, admin `/mcp` / `/mcp revoke <id>`):
+`MCP_JOIN_ENABLED`, `MCP_JOIN_LEAGUE_IDS` (default `FPL_LEAGUE_ID`), `MCP_PUBLIC_URL`,
+`MCP_JOIN_PER_HOUR` (10), `MCP_JOIN_ROSTER_TTL_SECONDS` (600), `MCP_KEYS_REFRESH_SECONDS` (15).
+See `docs/MCP.md`.
 
 **Per-subagent toggles:** each subagent is enabled by default and can be hidden from
 the coordinator by setting `AGENT_<NAME>_ENABLED` to a falsy value (0/false/no/off) —

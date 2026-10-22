@@ -24,6 +24,7 @@ Jarvis (agent) ───┘   /mcp/*                 └─ /mcp/health
 | `POST https://<domena>/mcp/fpl` | nagłówek `Authorization: Bearer jvk_…` (albo `X-API-Key`) |
 | `POST https://<domena>/mcp/fpl/jvk_…` | w ścieżce — dla klientów, które nie ustawiają nagłówków (custom connectors w aplikacjach Claude) |
 | `GET https://<domena>/mcp/health` | bez klucza |
+| `GET/POST https://<domena>/mcp/join` | bez klucza — strona samoobsługi (niżej) |
 
 Błędy bramki: brak/zły klucz → **401**, klucz bez dostępu do serwera → **403**, nieznany
 serwer → **404**. Serwer jest bezstanowy (`stateless_http`, odpowiedzi JSON) — każde
@@ -40,9 +41,41 @@ właścicielem klucza i jakie ma domyślne id).
 Dodanie kolejnego serwera (np. `finance`) = wpis w `EXPOSABLE` (+ ewentualnie `bind_client`,
 jeśli narzędzia mają dane „właściciela”) i nazwa w `servers:` u klientów.
 
-## Klucze API
+## Samoobsługa: strona `/mcp/join`
 
-Klienci są w `config/mcp_clients.yaml` (gitignored; wzór: `config/mcp_clients.example.yaml`,
+Znajomi nie potrzebują Ciebie, żeby dostać klucz. Wchodzą na
+`https://ogarniacz.duckdns.org/mcp/join`, wpisują **ID drużyny, nazwę drużyny albo swoje imię
+i nazwisko** i dostają klucz od razu powiązany z ich drużyną i ligą, razem z gotowym
+URL-em connectora i poleceniem dla Claude Code.
+
+- **Kto może:** tylko drużyny z ligi `MCP_JOIN_LEAGUE_IDS` (lista po przecinku; domyślnie
+  `FPL_LEAGUE_ID`). Dopasowanie nazw ignoruje wielkość liter i polskie znaki; kilka trafień →
+  lista do wyboru. Skład ligi jest cache'owany 10 min (`MCP_JOIN_ROSTER_TTL_SECONDS`), a przy
+  nietrafieniu odświeżany od razu (najwyżej raz na minutę) — nowa osoba w lidze nie czeka.
+- **Bez dowodu tożsamości — świadomie.** Tabela ligi jest publiczna, więc to brama
+  „tylko nasza liga”, nie uwierzytelnianie. „Moja drużyna” to tylko domyślny parametr,
+  a dane FPL i tak są publiczne. Zabezpieczenia:
+  - **jeden aktywny klucz na drużynę** — nowy unieważnia poprzedni (tak też odzyskuje się
+    zgubiony klucz); gdy drużyna ma już klucz, strona najpierw prosi o potwierdzenie;
+  - **powiadomienie na Messengerze** o każdym wydanym kluczu (do właściciela, tagiem
+    `HUMAN_AGENT`), z gotowym `/mcp revoke <ID>`;
+  - limit **10 prób na godzinę z jednego IP** (`MCP_JOIN_PER_HOUR`).
+- Klucz jest pokazywany **raz**; strona ma `Cache-Control: no-store`, `Referrer-Policy:
+  no-referrer`, CSP bez zewnętrznych zasobów, a nazwy drużyn (wpisywane przez użytkowników
+  FPL) są escapowane.
+- Klucze z samoobsługi trzyma tabela `mcp_api_keys` w Postgresie (tylko SHA-256; bez
+  `DATABASE_URL` → `data/mcp_data/keys.json`). Serwer MCP odczytuje je co
+  `MCP_KEYS_REFRESH_SECONDS` (15 s) — tyle trwa, zanim zadziała odwołanie z innego procesu.
+- Adres w instrukcjach: `MCP_PUBLIC_URL` (np. `https://ogarniacz.duckdns.org`), a bez niego
+  wyliczany z nagłówków proxy. Wyłączenie strony: `MCP_JOIN_ENABLED=false`.
+
+Admin (Messenger): `/mcp` — lista kluczy (samoobsługa + plik), `/mcp revoke <ID drużyny>` —
+odwołanie klucza z samoobsługi.
+
+## Klucze API w pliku (ręczne)
+
+Klucze dla Jarvisa, Twojego Claude Code i wyjątków (np. ktoś spoza ligi) są w
+`config/mcp_clients.yaml` (gitignored; wzór: `config/mcp_clients.example.yaml`,
 ścieżka zmienialna przez `MCP_CLIENTS_CONFIG`). Plik trzyma **tylko SHA-256** klucza —
 wyciek pliku nie daje dostępu. Zmiany są czytane w locie (mtime), bez restartu; zepsuty plik
 zostawia w mocy poprzednią poprawną wersję (i loguje błąd), brak pliku = nikt nie wchodzi.
@@ -111,9 +144,9 @@ Lokalnie: `poetry run python -m app.mcp_server` (port `MCP_PORT`, domyślnie 801
 claude mcp add --transport http jarvis-fpl https://ogarniacz.duckdns.org/mcp/fpl --header "Authorization: Bearer jvk_..."
 ```
 
-**Aplikacje Claude (znajomi):** na claude.ai (web/desktop) → *Settings → Connectors → Add
-custom connector* → URL z kluczem w ścieżce `https://ogarniacz.duckdns.org/mcp/fpl/jvk_…`,
-bez OAuth. Po dodaniu connector jest dostępny także w aplikacji mobilnej. Połączenie robią
+**Aplikacje Claude (znajomi):** wyślij im link do `/mcp/join` — strona da gotowy URL. Ręcznie:
+na claude.ai (web/desktop) → *Settings → Connectors → Add custom connector* → URL z kluczem
+w ścieżce `https://ogarniacz.duckdns.org/mcp/fpl/jvk_…`, bez OAuth. Po dodaniu connector jest dostępny także w aplikacji mobilnej. Połączenie robią
 serwery Anthropic, nie telefon — dlatego serwer musi być publiczny (jest, przez Caddy).
 
 **Jarvis** (`.env`):

@@ -71,6 +71,7 @@ from lib.domain.scheduler import (
     VALID_STATUSES,
     VALID_CHANNELS,
 )
+from lib.domain.mcp_keys import mcp_keys, McpKeyStore
 
 __all__ = [
     "conversations",
@@ -122,4 +123,6 @@ __all__ = [
     "VALID_KINDS",
     "VALID_STATUSES",
     "VALID_CHANNELS",
+    "mcp_keys",
+    "McpKeyStore",
 ]

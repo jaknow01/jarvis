@@ -25,6 +25,7 @@ from lib.agents.fpl_agent import (
     FplIdentity,
     current_fpl_identity,
     using_fpl_identity,
+    list_league_managers,
 )
 from lib.agents.math_agent import create_math_agent
 from lib.agents.calendar_agent import create_calendar_agent
@@ -48,6 +49,7 @@ __all__ = [
     "FplIdentity",
     "current_fpl_identity",
     "using_fpl_identity",
+    "list_league_managers",
     "create_math_agent",
     "create_calendar_agent",
 ]

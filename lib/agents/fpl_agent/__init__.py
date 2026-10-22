@@ -8,5 +8,7 @@ from lib.agents.fpl_agent.identity import (
     current_fpl_identity,
     using_fpl_identity,
 )
+from lib.agents.fpl_agent.fpl_api import list_league_managers
 
-__all__ = ["create_fpl_agent", "FplIdentity", "current_fpl_identity", "using_fpl_identity"]
+__all__ = ["create_fpl_agent", "FplIdentity", "current_fpl_identity", "using_fpl_identity",
+           "list_league_managers"]

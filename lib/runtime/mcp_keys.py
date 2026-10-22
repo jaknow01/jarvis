@@ -56,6 +56,7 @@ class McpClient:
     rate_limit_per_minute: Optional[int] = None
     # Per-server defaults, e.g. settings["fpl"] == {"entry_id": 1, "league_id": 2}.
     settings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    source: str = "config"  # "config" (YAML file) or "join" (self-service page)
 
     def allows(self, server: str) -> bool:
         return server in self.servers
@@ -117,19 +118,62 @@ def parse_clients(raw: Any, known_servers: Optional[set[str]] = None) -> dict[st
     return by_hash
 
 
-class McpClientRegistry:
-    """Looks up clients by API key; re-reads the YAML file when it changes.
+def client_from_issued(row: dict) -> McpClient:
+    """A self-service key (``lib.domain.mcp_keys`` row) as a client: its FPL defaults are
+    the entry and league it was issued for."""
+    entry = int(row["entry_id"])
+    name = row.get("manager_name") or f"FPL {entry}"
+    if row.get("team_name"):
+        name = f"{name} ({row['team_name']})"
+    return McpClient(
+        client_id=f"fpl-{entry}",
+        name=name,
+        key_sha256=str(row["key_sha256"]).lower(),
+        servers=frozenset(row.get("servers") or ["fpl"]),
+        settings={"fpl": {"entry_id": entry, "league_id": row.get("league_id")}},
+        source="join",
+    )
 
-    A broken file keeps the last good version in force (and logs the error) rather than
-    locking everyone out or — worse — letting everyone in.
+
+class McpClientRegistry:
+    """Looks up clients by API key, from two sources:
+
+    * the YAML file (hand-managed; re-read when it changes) — a broken file keeps the last
+      good version in force rather than locking everyone out or letting everyone in;
+    * optionally a store of self-service keys (``store.active()`` rows), cached for
+      ``MCP_KEYS_REFRESH_SECONDS`` (default 15) — so a revocation made from another
+      process (the admin ``/mcp revoke``) takes effect within that window.
     """
 
-    def __init__(self, path: Optional[Path] = None, known_servers: Optional[set[str]] = None):
+    def __init__(self, path: Optional[Path] = None, known_servers: Optional[set[str]] = None,
+                 store: Any = None):
         self._path = path
         self._known = known_servers
         self._mtime: Optional[float] = None
         self._by_hash: dict[str, McpClient] = {}
         self._lock = threading.Lock()
+        self._store = store
+        self._issued: dict[str, McpClient] = {}
+        self._issued_at: Optional[float] = None
+
+    def invalidate(self) -> None:
+        """Force the next lookup to re-read the self-service store (after an issue/revoke)."""
+        self._issued_at = None
+
+    def _reload_issued(self) -> None:
+        if self._store is None:
+            return
+        now = time.monotonic()
+        ttl = env_int("MCP_KEYS_REFRESH_SECONDS", 15, minimum=0)
+        if self._issued_at is not None and now - self._issued_at < ttl:
+            return
+        self._issued_at = now
+        try:
+            rows = self._store.active()
+        except Exception as e:  # DB down: keep the previous set rather than fail open/closed
+            logger.error("MCP key store unavailable, keeping the previous key set: %s", e)
+            return
+        self._issued = {c.key_sha256: c for c in map(client_from_issued, rows)}
 
     @property
     def path(self) -> Path:
@@ -163,11 +207,16 @@ class McpClientRegistry:
         if not key or not key.startswith(KEY_PREFIX) or len(key) > 256:
             return None
         self._reload_if_changed()
-        return self._by_hash.get(hash_key(key))
+        digest = hash_key(key)
+        if digest in self._by_hash:
+            return self._by_hash[digest]
+        self._reload_issued()
+        return self._issued.get(digest)
 
     def clients(self) -> list[McpClient]:
         self._reload_if_changed()
-        return sorted(self._by_hash.values(), key=lambda c: c.client_id)
+        self._reload_issued()
+        return sorted([*self._by_hash.values(), *self._issued.values()], key=lambda c: c.client_id)
 
 
 class RateLimiter:

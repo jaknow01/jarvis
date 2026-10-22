@@ -52,6 +52,7 @@ from lib.domain import (
     DEFAULT_GROUP_NAME,
     GROUP_SCOPE,
     USER_SCOPE,
+    mcp_keys,
 )
 
 logger = logging.getLogger(__name__)
@@ -455,6 +456,46 @@ async def _cmd_collect(args, *, conversation_id, channel) -> str:
     return "\n".join(lines)
 
 
+# =================================== MCP keys =====================================
+
+async def _cmd_mcp(args, *, conversation_id, channel) -> str:
+    """List MCP API keys (self-service + config file) or revoke a self-service one."""
+    import asyncio
+
+    from lib.runtime.mcp_keys import McpClientRegistry
+
+    sub = args[0].lower() if args else "list"
+    if sub == "revoke":
+        if len(args) < 2 or not args[1].isdigit():
+            return f"⚠️ Użycie: {PREFIX}mcp revoke <ID drużyny FPL>"
+        n = await asyncio.to_thread(mcp_keys.revoke_entry, int(args[1]))
+        if not n:
+            return f"ℹ️ Drużyna {args[1]} nie ma aktywnego klucza z samoobsługi."
+        return (f"🚫 Odwołano klucz drużyny {args[1]}. Serwer MCP przestanie go przyjmować w "
+                "ciągu ~15 s. (Klucze z config/mcp_clients.yaml odwołujesz w pliku.)")
+    if sub != "list":
+        return f"⚠️ Użycie: {PREFIX}mcp [list] | {PREFIX}mcp revoke <ID drużyny>"
+
+    rows = await asyncio.to_thread(mcp_keys.active)
+    lines = ["🔑 KLUCZE MCP", "", f"Z samoobsługi ({len(rows)}):"]
+    for r in rows:
+        since = str(r.get("created_at") or "")[:10]
+        lines.append(f"• {r.get('team_name') or '?'} — {r.get('manager_name') or '?'} "
+                     f"(ID {r.get('entry_id')}) · od {since}")
+    if not rows:
+        lines.append("• brak")
+    try:
+        configured = await asyncio.to_thread(lambda: McpClientRegistry().clients())
+        lines += ["", f"Z pliku config ({len(configured)}): "
+                  + (", ".join(c.client_id for c in configured) or "brak")]
+    except Exception as e:  # noqa: BLE001
+        lines += ["", f"Z pliku config: nie da się odczytać ({type(e).__name__})"]
+    base = (os.getenv("MCP_PUBLIC_URL") or "").rstrip("/")
+    lines += ["", f"Strona: {base + '/mcp/join' if base else '/mcp/join na domenie serwera'}",
+              f"Odwołanie: {PREFIX}mcp revoke <ID>"]
+    return "\n".join(lines)
+
+
 # ================================ configuration ===================================
 
 def _agent_names() -> list[str]:
@@ -791,6 +832,8 @@ _COMMANDS: dict[str, _Cmd] = {
     "scheduler": _Cmd(_cmd_scheduler, "Scheduler", "/scheduler [pause|resume]", "wstrzymaj/wznów odpalanie zadań"),
     # Kolektory
     "collect": _Cmd(_cmd_collect, "Kolektory", "/collect [finance|fpl]", "ręcznie zbierz dzienne dane (obserwacje)"),
+    # MCP
+    "mcp": _Cmd(_cmd_mcp, "MCP", "/mcp [list|revoke <ID>]", "klucze API serwerów MCP (samoobsługa + plik) i odwoływanie"),
     # Użytkownicy (multi-user)
     "user": _Cmd(_cmd_user, "Użytkownicy", "/user [list|add|assign]", "użytkownicy + whitelista tożsamości i przypisania do grup"),
     "group": _Cmd(_cmd_group, "Użytkownicy", "/group [list|add|priority|agents]", "grupy: priorytet i konfiguracja rostera agentów"),
@@ -810,7 +853,7 @@ _COMMANDS: dict[str, _Cmd] = {
     "window": _Cmd(_cmd_window, "Diagnostyka", "/window", "szacunek okna 24h Messengera"),
 }
 
-_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Kolektory", "Użytkownicy", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
+_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Kolektory", "MCP", "Użytkownicy", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
 
 
 async def _cmd_help(args, *, conversation_id, channel) -> str:

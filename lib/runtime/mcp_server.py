@@ -219,13 +219,21 @@ class _Gateway:
 
 def build_mcp_app(servers: Optional[list[str]] = None,
                   registry: Optional[McpClientRegistry] = None,
-                  limiter: Optional[RateLimiter] = None) -> Starlette:
-    """The ASGI app serving every exposed server (default: all of :data:`EXPOSABLE`)."""
+                  limiter: Optional[RateLimiter] = None,
+                  key_store: Any = None,
+                  join_options: Optional[dict] = None) -> Starlette:
+    """The ASGI app serving every exposed server (default: all of :data:`EXPOSABLE`) plus,
+    when ``fpl`` is served, the self-service key page ``/mcp/join``.
+
+    ``key_store`` holds the self-service keys (default: ``lib.domain.mcp_keys``);
+    ``join_options`` are passed to the join page (tests inject a roster / notifier)."""
     names = servers or list(EXPOSABLE)
     unknown = [n for n in names if n not in EXPOSABLE]
     if unknown:
         raise ValueError(f"not exposable: {unknown} (allowed: {sorted(EXPOSABLE)})")
-    registry = registry or McpClientRegistry(known_servers=set(EXPOSABLE))
+    if key_store is None:
+        from lib.domain import mcp_keys as key_store
+    registry = registry or McpClientRegistry(known_servers=set(EXPOSABLE), store=key_store)
     limiter = limiter or RateLimiter()
 
     # Stateless + JSON responses: every POST is self-contained, so the server keeps no
@@ -249,7 +257,9 @@ def build_mcp_app(servers: Optional[list[str]] = None,
     async def health(_request):
         return JSONResponse({"ok": True, "servers": names})
 
-    return Starlette(
-        routes=[Route("/mcp/health", health), Mount("/mcp", app=_Gateway(apps, registry))],
-        lifespan=lifespan,
-    )
+    routes: list = [Route("/mcp/health", health)]
+    if "fpl" in names:  # the join page hands out fpl keys for the owner's league
+        from lib.runtime.mcp_join import build_join_routes
+        routes += build_join_routes(registry, key_store, **(join_options or {}))
+    routes.append(Mount("/mcp", app=_Gateway(apps, registry)))
+    return Starlette(routes=routes, lifespan=lifespan)

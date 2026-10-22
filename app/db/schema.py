@@ -305,6 +305,25 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (league_id, snapshot_date)
     )
     """,
+    # Self-service MCP API keys (docs/MCP.md): issued by the /mcp/join page to managers of
+    # the owner's FPL league. Only the key's SHA-256 is stored. One active key per FPL entry
+    # (a re-issue revokes the previous one). Hand-managed keys stay in config/mcp_clients.yaml.
+    """
+    CREATE TABLE IF NOT EXISTS mcp_api_keys (
+        key_sha256   TEXT PRIMARY KEY,
+        entry_id     BIGINT NOT NULL,
+        league_id    BIGINT,
+        manager_name TEXT,
+        team_name    TEXT,
+        servers      JSONB NOT NULL DEFAULT '["fpl"]'::jsonb,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        revoked_at   TIMESTAMPTZ
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS mcp_api_keys_active_by_entry
+        ON mcp_api_keys (entry_id) WHERE revoked_at IS NULL
+    """,
 ]
 
 
