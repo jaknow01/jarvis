@@ -17,6 +17,7 @@ conversation keeps its own continuity.
 """
 
 import asyncio
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -37,11 +38,8 @@ from lib.runtime import (
     verify_signature,
     run_scheduler_loop,
     scheduler_enabled,
-    run_fpl_cache_loop,
-    fpl_cache_refresh_enabled,
-    run_observations_loop,
-    observations_enabled,
     setup_tracing,
+    owner_messenger_id,
 )
 
 load_dotenv()
@@ -91,28 +89,13 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Scheduler disabled via SCHEDULER_ENABLED")
 
-    # Warm the owner's FPL mini-league squad cache periodically so league-ownership
-    # questions are served from Postgres instead of a slow live API scan.
-    fpl_cache_task = None
-    if fpl_cache_refresh_enabled():
-        fpl_cache_task = asyncio.create_task(run_fpl_cache_loop())
-        logger.info("FPL cache refresh loop task started")
-    else:
-        logger.info("FPL cache refresh disabled via FPL_CACHE_REFRESH_ENABLED")
-
-    # Daily time-series collectors (finance @23:00, FPL league snapshot @04:00) that populate
-    # the observations store so the assistant can analyze data over time, not just snapshots.
-    observations_task = None
-    if observations_enabled():
-        observations_task = asyncio.create_task(run_observations_loop())
-        logger.info("Observations collector loop task started")
-    else:
-        logger.info("Observations collectors disabled via OBSERVATIONS_ENABLED")
+    # (FPL cache warming and the daily finance/FPL collectors now run inside the mcp-fpl and
+    # mcp-finance services as CronJobs — see docs/MCP.md.)
 
     logger.info("Messenger webhook ready")
     yield
 
-    for task in (scheduler_task, fpl_cache_task, observations_task):
+    for task in (scheduler_task,):
         if task:
             task.cancel()
             try:
@@ -127,6 +110,33 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/internal/notify")
+async def internal_notify(request: Request) -> Response:
+    """Forward a short text from a tool server to the owner on Messenger.
+
+    Used by mcp-fpl's /mcp/join (every self-service key issued). Bearer-protected with
+    ``INTERNAL_NOTIFY_TOKEN``; meant to be reached inside the cluster only (no Ingress path).
+    """
+    token = os.getenv("INTERNAL_NOTIFY_TOKEN", "")
+    auth = request.headers.get("authorization", "")
+    if not token or not hmac.compare_digest(auth, f"Bearer {token}"):
+        return Response(status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=400)
+    text = str((body or {}).get("text") or "").strip()[:1500]
+    if not text:
+        return Response(status_code=400)
+    source = str((body or {}).get("source") or "tool server")[:40]
+    psid = owner_messenger_id()
+    if not (PAGE_ACCESS_TOKEN and psid):
+        logger.warning("Notify from %s not delivered (Messenger not configured): %s", source, text)
+        return Response(status_code=202)
+    await send_message(PAGE_ACCESS_TOKEN, psid, f"[{source}] {text}", messaging_type="MESSAGE_TAG", tag="HUMAN_AGENT")
+    return Response(status_code=204)
 
 
 @app.get("/webhook")

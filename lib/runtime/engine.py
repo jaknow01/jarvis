@@ -36,6 +36,8 @@ from lib.core import (
     group_scope_for,
     env_int,
     refresh_mcp_toolsets,
+    bind_mcp_principal,
+    reset_mcp_principal,
 )
 from lib.domain import (
     conversations,
@@ -261,6 +263,9 @@ async def handle_message(
     )
     token = bind_app_context(turn_ctx)
     override_token = bind_model_overrides(overrides)
+    # Tool servers holding personal data get the person / household this turn acts for
+    # (X-On-Behalf-Of, per each sub-agent's `identity` in config/subagents.yaml).
+    principal_token = bind_mcp_principal(user_id, group_id)
     started = time.monotonic()
     try:
         # Bounded, context-engineered history: last N pairs verbatim, prefixed by an
@@ -268,9 +273,9 @@ async def handle_message(
         # lib/runtime/history_window.py). Read-only and LLM-free — the summary fold runs
         # off the critical path (scheduled after the reply below). Falls back to full
         # history when disabled.
-        # Alongside it: refresh remote (MCP) tool listings for agents set to use them —
-        # agent factories are sync, so the listing must be cached before the coordinator
-        # is built. A no-op while fresh; never raises (see lib/core/mcp_client.py).
+        # Alongside it: refresh the tool servers' listings — agent factories are sync, so
+        # the listing must be cached before the coordinator is built. A no-op while fresh;
+        # never raises (see lib/core/mcp_client.py).
         history, _ = await asyncio.gather(build_chat_history(conversation_id), refresh_mcp_toolsets())
         input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
 
@@ -309,5 +314,6 @@ async def handle_message(
         schedule_summary_fold(conversation_id)
         return reply
     finally:
+        reset_mcp_principal(principal_token)
         reset_app_context(token)
         reset_model_overrides(override_token)

@@ -8,10 +8,16 @@
 }
 
 ogarniacz.duckdns.org {
-	# Public MCP tool servers (docs/MCP.md): /mcp/health, /mcp/<server>[/<key>].
+	# The one public MCP server (docs/MCP.md): friends' Claude apps use /mcp/fpl[/<key>]
+	# and get keys at /mcp/join. Every other tool server stays on the compose network.
 	# No `log` directive on purpose — an access log would record keys sent in the URL.
-	handle /mcp/* {
-		reverse_proxy mcp:8010
+	@fpl path /mcp/fpl /mcp/fpl/* /mcp/join
+	handle @fpl {
+		reverse_proxy mcp-fpl:8010
+	}
+	# Server-to-Jarvis endpoints (e.g. /internal/notify) are for the compose network only.
+	handle /internal/* {
+		respond 404
 	}
 	handle {
 		reverse_proxy agent:8002

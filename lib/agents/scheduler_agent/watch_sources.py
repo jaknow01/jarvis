@@ -1,8 +1,8 @@
 """Named data-source registry for conditional watches (three-state reads).
 
 Maps a ``source-id`` to a deterministic fetcher returning a ``dict``. A watch source is
-just one of the assistant's **read-only external-API tools** reused as a pollable data
-feed — **no LLM/agent run is involved**, only the tool's underlying coroutine. The catalog
+just one of the assistant's **read-only tools** (on its MCP server) reused as a pollable
+data feed — **no LLM/agent run is involved**, only the tool call. The catalog
 is therefore intended to be *as broad as the assistant's data tools*: adding a new source
 is one row in ``_WATCHABLE`` (a read-only tool → a source-id + a short predicate-writing
 hint), not a bespoke fetcher. Mutating tools (smart-home on/off, memory writes, the
@@ -14,18 +14,15 @@ scheduler itself) are deliberately **not** exposed — a watch polls, it never a
     ("unknown", None)   - unknown source, the fetch raised, or it returned an error dict
                           (e.g. {"Error": ...}); never mistaken for a `false` predicate
 
-The ``ctx`` argument of the underlying tools is decorative (``app_context`` reads a
-contextvar, not the argument), so tools are called with ``ctx=None``.
-
-This module lives in the ``agents`` layer (alongside the ``scheduler_agent`` that owns
-watches) because it reuses other agents' data fetchers — an agents->agents import — and is
+Each source calls a tool on the corresponding sub-agent's MCP server (config/subagents.yaml),
+forwarding the acting user/household bound with ``using_mcp_principal``. This module is
 consumed both by the watch tools (agents) and the scheduler runner (runtime). The catalog
 of valid source-ids is **owned here** (dynamic, derived from the registered tools) and is
 the single source of truth for source validation and for what the model is told exists.
 """
 from __future__ import annotations
 
-import inspect
+import json
 import logging
 from typing import Awaitable, Callable, Optional
 
@@ -126,81 +123,51 @@ _WATCHABLE: list[tuple[str, str, str, str]] = [
 ]
 
 
-def _resolve_tool(agent_name: str, tool_name: str):
-    """Find a registered FunctionTool by name in an agent's tool list."""
-    from lib.core import TOOLS_BY_AGENT
+def _mcp_fetcher(agent_name: str, tool_name: str) -> Fetcher:
+    """A params->dict fetcher that calls ``tool_name`` on ``agent_name``'s MCP server.
 
-    for t in TOOLS_BY_AGENT.get(agent_name, []):
-        if t.metadata.name == tool_name:
-            return t
-    raise KeyError(f"{agent_name}.{tool_name}")
-
-
-def _tool_fetcher(tool) -> Fetcher:
-    """Wrap a tool's coroutine as a params->dict fetcher (ctx is decorative -> None).
+    The acting user/household is whatever is bound with ``using_mcp_principal`` (the turn
+    when a watch is prepared; the watch owner when the scheduler polls it).
 
     Params come from an LLM-authored watch, so they may include plausible-but-unsupported
-    keys (e.g. a ``league_id`` on ``fpl.live``, which only takes ``gameweek``/``entry_id``).
-    Splatting those straight in would raise ``TypeError`` and fail every poll — and the
-    prepare_watch smoke test — turning the whole watch "unavailable". So we keep only the
-    keys the tool's signature actually accepts (unless it declares ``**kwargs``), dropping
-    the rest with a warning rather than crashing.
+    keys; when the server's listing is known, keys outside the tool's input schema are
+    dropped with a warning instead of failing every poll.
     """
-    fn = tool.async_fn
-    tool_name = tool.metadata.name
-    try:
-        sig = inspect.signature(fn)
-        accepts_var_kw = any(
-            p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-        )
-        # First param is the injected ctx; everything else is a real tool param.
-        allowed = {
-            name
-            for name, p in sig.parameters.items()
-            if name != "ctx"
-            and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-        }
-    except (ValueError, TypeError):  # pragma: no cover - signature always introspectable here
-        accepts_var_kw, allowed = True, None
 
     async def fetch(params: dict) -> dict:
+        from lib.agents.mcp_subagents import toolset_for
+
+        toolset = toolset_for(agent_name)
+        if toolset is None:
+            return {"Error": f"no tool server configured for {agent_name}"}
+        await toolset.refresh()
         kwargs = dict(params or {})
-        if not accepts_var_kw and allowed is not None:
+        remote = {t.name: t for t in (toolset.remote_tools() or [])}
+        schema = remote[tool_name].input_schema if tool_name in remote else None
+        if schema and not schema.get("additionalProperties"):
+            allowed = set((schema.get("properties") or {}).keys())
             unknown = [k for k in kwargs if k not in allowed]
             if unknown:
-                logger.warning(
-                    "watch source '%s': ignoring unsupported param(s) %s "
-                    "(tool accepts %s)",
-                    tool_name, unknown, sorted(allowed),
-                )
+                logger.warning("watch source %s.%s: ignoring unsupported param(s) %s (tool accepts %s)",
+                               agent_name, tool_name, unknown, sorted(allowed))
                 kwargs = {k: v for k, v in kwargs.items() if k in allowed}
-        return await fn(None, **kwargs)
+        text = await toolset.call(tool_name, kwargs)
+        if text.startswith("ERROR"):
+            return {"Error": text}
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return {"Error": "tool returned non-JSON output"}
+        return data if isinstance(data, dict) else {"result": data}
+
     return fetch
 
 
 def _register_default_sources() -> None:
-    """Register every watchable source from ``_WATCHABLE``.
-
-    The underlying agent packages must be imported so their tools are in TOOLS_BY_AGENT;
-    we import them explicitly here (registration side effect) rather than relying on the
-    order lib.agents wires subpackages, so this works no matter who imports us first.
-    """
-    import lib.agents.finance_agent  # noqa: F401
-    import lib.agents.weather_agent  # noqa: F401
-    import lib.agents.fpl_agent      # noqa: F401
-    import lib.agents.news_agent     # noqa: F401
-    import lib.agents.maps_agent     # noqa: F401
-
+    """Register every watchable source from ``_WATCHABLE`` as an MCP-backed fetcher. A source
+    whose server is down simply reads as 'unknown' when polled."""
     for source_id, agent_name, tool_name, hint in _WATCHABLE:
-        try:
-            tool = _resolve_tool(agent_name, tool_name)
-        except KeyError:
-            logger.error(
-                "watchable tool %s.%s not found; watch source '%s' skipped",
-                agent_name, tool_name, source_id,
-            )
-            continue
-        register_source(source_id, _tool_fetcher(tool), hint)
+        register_source(source_id, _mcp_fetcher(agent_name, tool_name), hint)
 
 
 _register_default_sources()

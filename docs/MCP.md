@@ -1,177 +1,115 @@
-# MCP — narzędzia Jarvisa jako serwery MCP po HTTP
+# MCP — narzędzia Jarvisa jako niezależne serwery
 
-Wybrane narzędzia Jarvisa (na razie: **FPL**) są wystawione jako serwer MCP
-(Streamable HTTP), z którego mogą korzystać:
-
-- **sam Jarvis** — `fpl_agent` z `FPL_TOOLS_SOURCE=mcp` bierze narzędzia z serwera zamiast
-  z procesu;
-- **Claude Code** — `claude mcp add --transport http …`;
-- **aplikacje Claude znajomych** (web / desktop / mobile) — jako *custom connector*.
-
-Dostęp mają tylko posiadacze **kluczy API** (`jvk_…`), a każdy klucz ma przypisane własne
-domyślne `entry_id` / `league_id` — „moja drużyna” u znajomego to *jego* drużyna.
+Wszystkie narzędzia Jarvisa działają jako **osobne serwery MCP w osobnych publicznych
+repozytoriach**. Jarvis jest jednym z ich klientów — obok Claude Code właściciela i aplikacji
+Claude znajomych (FPL). Każdy serwer można postawić gdziekolwiek; Jarvis łączy się po HTTP.
 
 ```
-Claude (znajomi) ─┐                          ┌─ /mcp/fpl ──► narzędzia z TOOLS_BY_AGENT["fpl_agent"]
-Claude Code ──────┼─► Caddy (TLS) ─► mcp:8010│     (klucz → klient → domyślne id FPL)
-Jarvis (agent) ───┘   /mcp/*                 └─ /mcp/health
+github.com/jaknow01/
+├── jarvis           ← harness: coordinator, composer, silnik tury, historia, pamięć,
+│                      scheduler (+ watche), Messenger, admin. Klient MCP.
+├── jarvis-mcp-kit   ← biblioteka: klucze API, klienci, X-On-Behalf-Of, limity, logi bez kluczy
+├── mcp-fpl          ← FPL + strona /mcp/join + historia ligi (własna baza)   [publiczny]
+├── mcp-finance      ← kursy, notowania, tickery, historia cen (własna baza)
+├── mcp-weather      ← pogoda (OpenWeather) i prognoza (Open-Meteo)
+├── mcp-news         ← wyszukiwanie newsów (Tavily)
+├── mcp-math         ← dokładne obliczenia
+├── mcp-maps         ← trasy + zapisane miejsca per gospodarstwo
+├── mcp-calendar     ← kalendarz iCloud per użytkownik
+├── mcp-home         ← oświetlenie Tuya per gospodarstwo; działa W DOMU
+└── (mcp-web)        ← przeglądanie stron — po zmergowaniu gałęzi web-browsing
 ```
 
-## Adresy
+Spec i decyzje: `openspec/changes/extract-tools-to-mcp-servers/`.
 
-| Adres | Klucz |
-|---|---|
-| `POST https://<domena>/mcp/fpl` | nagłówek `Authorization: Bearer jvk_…` (albo `X-API-Key`) |
-| `POST https://<domena>/mcp/fpl/jvk_…` | w ścieżce — dla klientów, które nie ustawiają nagłówków (custom connectors w aplikacjach Claude) |
-| `GET https://<domena>/mcp/health` | bez klucza |
-| `GET/POST https://<domena>/mcp/join` | bez klucza — strona samoobsługi (niżej) |
+## Jarvis jako klient
 
-Błędy bramki: brak/zły klucz → **401**, klucz bez dostępu do serwera → **403**, nieznany
-serwer → **404**. Serwer jest bezstanowy (`stateless_http`, odpowiedzi JSON) — każde
-żądanie jest samodzielne, restart niczego nie gubi.
-
-## Co jest wystawione
-
-Tylko agenci z listy `EXPOSABLE` w `lib/runtime/mcp_server.py`. Lista jest **w kodzie, nie
-w konfiguracji** — agentów właściciela (światła, kalendarz, pamięć, mapy, scheduler) nie da
-się wystawić jedną zmienną env. Serwer `fpl` udostępnia wszystkie narzędzia `fpl_agent`
-(docstringi = opisy narzędzi MCP, wszystkie tylko do odczytu) plus `whoami` (kto jest
-właścicielem klucza i jakie ma domyślne id).
-
-Dodanie kolejnego serwera (np. `finance`) = wpis w `EXPOSABLE` (+ ewentualnie `bind_client`,
-jeśli narzędzia mają dane „właściciela”) i nazwa w `servers:` u klientów.
-
-## Samoobsługa: strona `/mcp/join`
-
-Znajomi nie potrzebują Ciebie, żeby dostać klucz. Wchodzą na
-`https://ogarniacz.duckdns.org/mcp/join`, wpisują **ID drużyny, nazwę drużyny albo swoje imię
-i nazwisko** i dostają klucz od razu powiązany z ich drużyną i ligą, razem z gotowym
-URL-em connectora i poleceniem dla Claude Code.
-
-- **Kto może:** tylko drużyny z ligi `MCP_JOIN_LEAGUE_IDS` (lista po przecinku; domyślnie
-  `FPL_LEAGUE_ID`). Dopasowanie nazw ignoruje wielkość liter i polskie znaki; kilka trafień →
-  lista do wyboru. Skład ligi jest cache'owany 10 min (`MCP_JOIN_ROSTER_TTL_SECONDS`), a przy
-  nietrafieniu odświeżany od razu (najwyżej raz na minutę) — nowa osoba w lidze nie czeka.
-- **Bez dowodu tożsamości — świadomie.** Tabela ligi jest publiczna, więc to brama
-  „tylko nasza liga”, nie uwierzytelnianie. „Moja drużyna” to tylko domyślny parametr,
-  a dane FPL i tak są publiczne. Zabezpieczenia:
-  - **jeden aktywny klucz na drużynę** — nowy unieważnia poprzedni (tak też odzyskuje się
-    zgubiony klucz); gdy drużyna ma już klucz, strona najpierw prosi o potwierdzenie;
-  - **powiadomienie na Messengerze** o każdym wydanym kluczu (do właściciela, tagiem
-    `HUMAN_AGENT`), z gotowym `/mcp revoke <ID>`;
-  - limit **10 prób na godzinę z jednego IP** (`MCP_JOIN_PER_HOUR`).
-- Klucz jest pokazywany **raz**; strona ma `Cache-Control: no-store`, `Referrer-Policy:
-  no-referrer`, CSP bez zewnętrznych zasobów, a nazwy drużyn (wpisywane przez użytkowników
-  FPL) są escapowane.
-- Klucze z samoobsługi trzyma tabela `mcp_api_keys` w Postgresie (tylko SHA-256; bez
-  `DATABASE_URL` → `data/mcp_data/keys.json`). Serwer MCP odczytuje je co
-  `MCP_KEYS_REFRESH_SECONDS` (15 s) — tyle trwa, zanim zadziała odwołanie z innego procesu.
-- Adres w instrukcjach: `MCP_PUBLIC_URL` (np. `https://ogarniacz.duckdns.org`), a bez niego
-  wyliczany z nagłówków proxy. Wyłączenie strony: `MCP_JOIN_ENABLED=false`.
-
-Admin (Messenger): `/mcp` — lista kluczy (samoobsługa + plik), `/mcp revoke <ID drużyny>` —
-odwołanie klucza z samoobsługi.
-
-## Klucze API w pliku (ręczne)
-
-Klucze dla Jarvisa, Twojego Claude Code i wyjątków (np. ktoś spoza ligi) są w
-`config/mcp_clients.yaml` (gitignored; wzór: `config/mcp_clients.example.yaml`,
-ścieżka zmienialna przez `MCP_CLIENTS_CONFIG`). Plik trzyma **tylko SHA-256** klucza —
-wyciek pliku nie daje dostępu. Zmiany są czytane w locie (mtime), bez restartu; zepsuty plik
-zostawia w mocy poprzednią poprawną wersję (i loguje błąd), brak pliku = nikt nie wchodzi.
+**Sub-agenci z konfiguracji** — `config/subagents.yaml` (commitowany, bez sekretów):
 
 ```yaml
-clients:
-  marek:
-    name: Marek
-    key_sha256: "3f1c…"
-    servers: [fpl]
-    rate_limit_per_minute: 30      # opcjonalnie (domyślnie MCP_RATE_LIMIT_PER_MINUTE=60)
-    fpl:
-      entry_id: 1234567            # jego drużyna FPL
-      league_id: 765432            # jego domyślna mini-liga
+subagents:
+  maps_agent:
+    description: "…"          # co coordinator wie o tym sub-agencie
+    url_env: MCP_MAPS_URL     # adres serwera
+    key_env: MCP_MAPS_KEY     # klucz Jarvisa na tym serwerze (`trusted: true`)
+    identity: group           # none | user | group → X-On-Behalf-Of
+    persona: ""               # opcjonalnie, ponad przewodnik serwera
+    max_calls_per_turn: {}    # opcjonalne budżety wywołań na turę
 ```
 
-Nowy klucz:
+Nazwy sub-agentów (`fpl_agent`, `iot_operator`, …) zostały — rostery w `principals.yaml`
+i profile modeli działają bez zmian. Dodanie serwera = wpis w tym pliku + URL/klucz w `.env`.
 
-```bash
-docker compose exec mcp poetry run python -m scripts.mcp_key new marek --name Marek --entry-id 1234567 --league-id 765432
-```
+- **Przewodnik po narzędziach jest przy serwerze**: prompt sub-agenta = preambuła środowiska +
+  `instructions` serwera + `persona` + reguły narzędzi. Zmiana na serwerze zmienia agenta.
+- **Listing w cache** (`MCP_TOOLS_TTL_SECONDS`=300) odświeżany przed turą, równolegle z
+  historią. Serwer, który nigdy nie odpowiedział → sub-agenta **nie ma w tej turze**; serwer,
+  który padł później → wywołania zwracają `ERROR: … unavailable` i odpowiedź mówi, że danych
+  brak. Nie ma już narzędzi lokalnych.
+- **Tożsamość**: silnik wiąże na turę `user_id` i gospodarstwo (`group_id`); klient MCP
+  wysyła `X-On-Behalf-Of` wg `identity`. Serwer uznaje nagłówek tylko od klucza `trusted`.
+  Mapy i oświetlenie → gospodarstwo (wspólny „Dom” i wspólne lampy), kalendarz → osoba.
+- **Watche** (`scheduler_agent/watch_sources.py`) wołają te same narzędzia przez MCP — te same
+  identyfikatory źródeł (`finance.fx`, `fpl.live`, …), właściciel watcha jako principal.
+- **`/mcp`** (admin): stan serwerów; `/mcp keys` i `/mcp revoke <ID>` — klucze FPL z
+  samoobsługi (narzędzia admina `mcp-fpl`; klucz Jarvisa tam musi mieć `admin: true`).
+- **`POST /internal/notify`** (Bearer `INTERNAL_NOTIFY_TOKEN`): serwery wysyłają tu krótkie
+  komunikaty dla właściciela (np. `mcp-fpl` przy każdym nowym kluczu) → Messenger.
+- **Evale** nie potrzebują serwerów: `evals/fixtures/mcp_tools.json` to snapshot listingów
+  (odśwież: `poetry run python -m evals.snapshot_tools`), wywołania zwracają fixtury.
 
-Skrypt wypisuje klucz **raz** (nigdzie go nie zapisuje) i blok YAML do wklejenia.
-Odwołanie: usuń blok albo ustaw `enabled: false`. Podgląd: `scripts.mcp_key list`.
+## Wdrożenie dziś: serwer domowy (docker compose)
 
-### Kolejność rozstrzygania „mojej” drużyny / ligi (`fpl_agent/identity.py`)
-
-1. jawny argument narzędzia (`entry_id`, `league_id`) — np. „pokaż drużynę rywala”;
-2. domyślne id przypisane do klucza (serwer MCP wiąże je na czas wywołania);
-3. `FPL_ENTRY_ID` / `FPL_LEAGUE_ID` z env — **tylko w procesie Jarvisa**, gdy nic nie jest
-   związane. Na serwerze MCP związana tożsamość jest rozstrzygająca: klient bez `entry_id`
-   dostaje wskazówkę „podaj entry_id”, nigdy drużynę właściciela.
-
-## Bezpieczeństwo
-
-- **Klucz w URL-u** to „hasło w linku”: działa wszędzie, ale trafia wszędzie tam, gdzie
-  trafia URL. Dlatego: uvicorn działa **bez access logu**, Caddy nie ma dyrektywy `log`,
-  aplikacja loguje wywołania po `client_id` (nigdy po kluczu), a klient Jarvisa redaguje
-  `jvk_…` w logach i komunikatach. Gdy wariant z URL-em przestanie wystarczać, kolejny krok
-  to OAuth (patrz niżej) — narzędzia się nie zmieniają.
-- **Limit zapytań** per klient (okno 1 min, w pamięci procesu) chroni nieoficjalne API FPL.
-- **Timeout** jednego wywołania: `MCP_TOOL_TIMEOUT_SECONDS` (domyślnie 90 s — skany lig).
-- Błąd narzędzia wraca do klienta jako `ERROR: <tool> failed (<Typ>)` — bez treści wyjątku.
-- Ochrona przed DNS rebinding w SDK jest wyłączona świadomie: każde żądanie wymaga klucza,
-  a za proxy nagłówek `Host` to publiczna domena.
-
-## Wdrożenie
-
-`docker-compose.yml` ma usługę `mcp` (ten sam obraz, osobny proces — awaria tu nie dotyka
-webhooka), a `Caddyfile` kieruje `/mcp/*` do `mcp:8010`. Postgres jest współdzielony, więc
-cache FPL (referencje, skany lig) działa dla wszystkich klientów.
-
-```bash
-cp config/mcp_clients.example.yaml config/mcp_clients.yaml   # i wyczyść przykłady
-docker compose up -d --build mcp caddy
-curl https://ogarniacz.duckdns.org/mcp/health
-```
-
-Lokalnie: `poetry run python -m app.mcp_server` (port `MCP_PORT`, domyślnie 8010).
-
-## Podłączanie klientów
-
-**Claude Code** (nagłówek):
-
-```bash
-claude mcp add --transport http jarvis-fpl https://ogarniacz.duckdns.org/mcp/fpl --header "Authorization: Bearer jvk_..."
-```
-
-**Aplikacje Claude (znajomi):** wyślij im link do `/mcp/join` — strona da gotowy URL. Ręcznie:
-na claude.ai (web/desktop) → *Settings → Connectors → Add custom connector* → URL z kluczem
-w ścieżce `https://ogarniacz.duckdns.org/mcp/fpl/jvk_…`, bez OAuth. Po dodaniu connector jest dostępny także w aplikacji mobilnej. Połączenie robią
-serwery Anthropic, nie telefon — dlatego serwer musi być publiczny (jest, przez Caddy).
-
-**Jarvis** (`.env`):
+`docker-compose.yml` podnosi Jarvisa i wszystkie serwery z obrazów `ghcr.io/jaknow01/mcp-*`.
+Konfiguracja serwerów leży w `mcp-config/<serwer>/` (gitignored):
 
 ```
-FPL_TOOLS_SOURCE=mcp
-FPL_MCP_URL=http://mcp:8010/mcp/fpl      # w sieci compose, bez TLS
-FPL_MCP_API_KEY=jvk_...                  # klient z entry_id/league_id właściciela
+mcp-config/
+├── fpl/       .env (DATABASE_URL, FPL_LEAGUES, MCP_PUBLIC_URL, JOIN_NOTIFY_*), clients.yaml
+├── finance/   .env (DATABASE_URL, OBSERVATIONS_*), clients.yaml
+├── weather/   .env (OPENWEATHER_API_KEY), clients.yaml
+├── news/      .env (TAVILY_API_KEY), clients.yaml
+├── math/      clients.yaml
+├── maps/      .env (GOOGLE_MAPS_API_KEY), clients.yaml, places.yaml
+├── calendar/  .env (ICLOUD_CALDAV_USER, ICLOUD_APP_PASSWORD), clients.yaml, accounts.yaml
+└── home/      clients.yaml, home.yaml       (urządzenia z data/smart_device_data/)
 ```
 
-Silnik przed każdą turą odświeża listę zdalnych narzędzi (`refresh_mcp_toolsets`, równolegle
-z ładowaniem historii; cache `MCP_TOOLS_TTL_SECONDS`=300 s). Gdy serwer nie odpowiada, lista
-z poprzedniego odczytu zostaje, kolejna próba po `MCP_RETRY_SECONDS`=30 s, a jeśli listy nigdy
-nie było — `fpl_agent` **wraca do narzędzi lokalnych** (warning w logu). Każde wywołanie to
-krótkie połączenie HTTP (3 POST-y na wywołanie w obecnym SDK) — pomijalne przy czasach LLM.
+1. **Klucze Jarvisa** — dla każdego serwera (CLI jest w każdym obrazie):
+   `docker compose run --rm --no-deps --entrypoint jarvis-mcp-keys mcp-<serwer> new jarvis --servers <serwer> --trusted`
+   (dla `fpl` dodaj `--admin`). Wydrukowany blok wklej do `mcp-config/<serwer>/clients.yaml`,
+   a klucz do `.env` Jarvisa jako `MCP_<SERWER>_KEY`. Twój stary klucz FPL i klucze znajomych z `/mcp/join`
+   trzeba wydać ponownie (stara tabela `mcp_api_keys` jest w bazie Jarvisa).
+2. **Dane osobiste**: `mcp-maps import-legacy data/maps_data/maps_memory.json --principals <id gospodarstwa>`
+   → `places.yaml`; `accounts.yaml` i `home.yaml` wg przykładów w repo serwerów.
+   Id gospodarstwa to `group_id` z `principals` (np. `default`) — zobacz `/group list`.
+3. **Bazy**: `deploy/postgres/README.md` (osobna baza i login dla FPL i finansów), potem
+   `docker compose run --rm mcp-fpl backfill` i `docker compose run --rm mcp-finance backfill`.
+4. **Kolektory** — crontab hosta:
+   ```
+   0 4 * * *    cd /ścieżka/jarvis && docker compose run --rm mcp-fpl collect
+   15 */3 * * * cd /ścieżka/jarvis && docker compose run --rm mcp-fpl warm-cache
+   0 23 * * *   cd /ścieżka/jarvis && docker compose run --rm mcp-finance collect
+   ```
+5. `docker compose up -d` — Caddy wystawia na zewnątrz tylko `/mcp/fpl` i `/mcp/join`;
+   `/mcp` w Messengerze pokazuje, czy wszystkie serwery odpowiadają.
 
-Ograniczenie pilota: Jarvis łączy się jednym kluczem, więc w trybie `mcp` „moja drużyna”
-oznacza drużynę z tego klucza dla wszystkich użytkowników Jarvisa — tak samo jak dziś
-`FPL_ENTRY_ID` w trybie lokalnym. Per-użytkownik: przypisać id w profilu i przekazywać je
-jawnie jako argument.
+## Docelowo: k3s
 
-## Następne kroki
+- Serwery: `deploy/kubernetes.yaml` w każdym repo (Deployment + Service; FPL i finance z
+  CronJobami; FPL z Ingressem). Sekrety per serwis jako k8s Secret.
+- Postgres: jedna instancja, bazy/loginy jak w `deploy/postgres/`.
+- Jarvis: `deploy/k8s/jarvis.yaml` (namespace `jarvis`, etykieta `app: jarvis` — wymagana
+  przez NetworkPolicy bramki domowej).
+- Oświetlenie: `mcp-home` zostaje na Raspberry (docker, sieć hosta), klaster dochodzi do niego
+  przez pod `home-gateway` z WireGuardem do routera; router wpuszcza tylko Pi:8010, a
+  NetworkPolicy tylko Jarvisa — patrz README `mcp-home`.
 
-- **OAuth** zamiast klucza w URL-u (SDK `mcp` ma `AuthSettings`/`TokenVerifier`): ekran
-  logowania prosi raz o klucz, a dalej idzie token — klucz nie żyje w URL-u.
-- Kolejne serwery (`finance`, `weather`, `math`) — ich narzędzia nie używają `Ctx`.
-- Per-użytkownik FPL w Jarvisie (patrz wyżej) i komenda admina `/mcp` (klienci, ostatnie
-  wywołania, stan toolsetów).
+## Bezpieczeństwo (skrót)
+
+- Klucze tylko jako SHA-256 po stronie serwerów; klucz w URL-u działa, ale logi go nie widzą
+  (access log wyłączony, redakcja `jvk_…` w loggerach — także `httpx2` w Jarvisie).
+- Sekrety zewnętrznych API są wyłącznie przy serwerach; Jarvis ma tylko klucze MCP.
+- Serwery z danymi osobistymi zwracają aliasy/nazwy, nigdy adresów czy kluczy urządzeń, i
+  dane wyłącznie danego principala; nieznany principal dostaje nic.
+- Błędy z narzędzi wracają jako typ wyjątku, bez treści (która potrafiła zawierać URL z kluczem).

@@ -56,36 +56,6 @@ SCHEMA_STATEMENTS = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
-    # Fantasy Premier League reference data (the bootstrap-static snapshot: teams,
-    # players, positions, gameweeks). Cached wholesale as JSONB with a fetch timestamp
-    # so the fpl_agent can resolve player/team ids without hitting the API every turn.
-    """
-    CREATE TABLE IF NOT EXISTS fpl_reference (
-        id         TEXT PRIMARY KEY,
-        data       JSONB NOT NULL,
-        fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-    """,
-    # Cached mini-league squad snapshots (one JSONB blob per league+gameweek). Scanning a
-    # league's ownership means fetching every manager's picks — dozens of API calls — which
-    # is the fpl_agent's biggest latency cost and is asked about repeatedly ("who else has
-    # X", "how many own Y"). Picks for a gameweek are frozen once its deadline passes, so a
-    # snapshot is safe to reuse; a fetch timestamp drives TTL-based refresh. `complete` marks
-    # whether the whole league was captured (vs capped at `max_managers`) so a later, larger
-    # scan knows whether the cache still suffices. National/global leagues are never warmed in
-    # the background (see lib/runtime/fpl_cache_runner.py); they only land here if queried.
-    """
-    CREATE TABLE IF NOT EXISTS fpl_league_squads (
-        league_id    BIGINT NOT NULL,
-        gameweek     INTEGER NOT NULL,
-        league_name  TEXT,
-        max_managers INTEGER NOT NULL,
-        complete     BOOLEAN NOT NULL DEFAULT FALSE,
-        data         JSONB NOT NULL,
-        fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (league_id, gameweek)
-    )
-    """,
     # Scheduled jobs written by the scheduler_agent: a natural-language prompt for
     # Jarvis, when to run it (one-shot run_at or a cron_expr), and where to deliver
     # the reply (channel + target). The runner fires due jobs out of band. `until` is
@@ -184,30 +154,6 @@ SCHEMA_STATEMENTS = [
     """
     ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary_upto INTEGER NOT NULL DEFAULT 0
     """,
-    # Generic daily time-series of external readings (the "observations" store). Every row is
-    # one metric on one day: `series` is a stable key ('fx:USD/PLN', 'index:^GSPC',
-    # 'index:sp500_pln', 'metal:GC=F'), `obs_date` the calendar day of the reading (the
-    # source's own quote date, so weekends/holidays never create bogus rows), `value` the
-    # primary scalar (for cheap SQL MIN/MAX/AVG/window), and `payload` the fuller reading
-    # (OHLC, volume, currency…). PK (series, obs_date) makes daily collection and backfill
-    # idempotent (re-running upserts the same day). Written by the finance collector
-    # (lib/runtime/observations_runner.py) and scripts/backfill_finance.py; read by
-    # finance_agent's history tool. See docs/OBSERVATIONS.md.
-    """
-    CREATE TABLE IF NOT EXISTS observations (
-        series     TEXT NOT NULL,
-        obs_date   DATE NOT NULL,
-        value      DOUBLE PRECISION,
-        payload    JSONB,
-        source     TEXT,
-        fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (series, obs_date)
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS observations_by_series
-        ON observations (series, obs_date)
-    """,
     # ---- multi-user network: identities, users, groups, membership, layered config ----
     # A user is the stable principal (cognition owner). Identities map a channel-specific
     # sender to a user; the (channel, external_id) PK IS the whitelist — an inbound pair
@@ -286,43 +232,6 @@ SCHEMA_STATEMENTS = [
     """,
     """
     CREATE INDEX IF NOT EXISTS scheduled_jobs_by_user ON scheduled_jobs (user_id)
-    """,
-    # Permanent daily FPL mini-league history (distinct from the TTL cache in
-    # fpl_league_squads, which is overwritten): one append-only snapshot per (league, day)
-    # capturing every manager's standing (rank + points) AND their squad (which footballers
-    # they had) for that day's current gameweek. `data` JSONB holds
-    # {gameweek, league_name, managers:[{entry, name, manager, rank, total, event_total,
-    # picks:[{element, name, position, multiplier, is_captain}]}]}. Written daily at 04:00 by
-    # the FPL collector (lib/runtime/observations_runner.py); read by fpl_agent's history tool.
-    """
-    CREATE TABLE IF NOT EXISTS fpl_league_history (
-        league_id     BIGINT NOT NULL,
-        snapshot_date DATE NOT NULL,
-        gameweek      INTEGER,
-        league_name   TEXT,
-        data          JSONB NOT NULL,
-        fetched_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (league_id, snapshot_date)
-    )
-    """,
-    # Self-service MCP API keys (docs/MCP.md): issued by the /mcp/join page to managers of
-    # the owner's FPL league. Only the key's SHA-256 is stored. One active key per FPL entry
-    # (a re-issue revokes the previous one). Hand-managed keys stay in config/mcp_clients.yaml.
-    """
-    CREATE TABLE IF NOT EXISTS mcp_api_keys (
-        key_sha256   TEXT PRIMARY KEY,
-        entry_id     BIGINT NOT NULL,
-        league_id    BIGINT,
-        manager_name TEXT,
-        team_name    TEXT,
-        servers      JSONB NOT NULL DEFAULT '["fpl"]'::jsonb,
-        created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-        revoked_at   TIMESTAMPTZ
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS mcp_api_keys_active_by_entry
-        ON mcp_api_keys (entry_id) WHERE revoked_at IS NULL
     """,
 ]
 

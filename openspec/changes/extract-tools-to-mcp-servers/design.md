@@ -189,7 +189,7 @@ key); node-level WireGuard (every pod on the node could reach home).
 
 Namespaces `jarvis` (Jarvis, home-gateway) and `mcp` (all other servers), Postgres in its
 own namespace. Only `mcp-fpl` gets an Ingress (Traefik + cert-manager) at the public domain
-with paths `/mcp/fpl…` and `/join`; all others are ClusterIP. Per-service k8s Secrets hold
+with paths `/mcp/fpl…` and `/mcp/join`; all others are ClusterIP. Per-service k8s Secrets hold
 external-API credentials and the clients file. Images are built by GitHub Actions in each repo
 to `ghcr.io/jaknow01/<repo>:<tag>`.
 

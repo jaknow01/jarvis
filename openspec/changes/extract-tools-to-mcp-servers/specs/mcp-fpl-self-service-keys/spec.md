@@ -2,7 +2,7 @@
 
 ### Requirement: League members get a key without the owner
 
-`mcp-fpl` SHALL serve a `/join` page where a person enters an FPL entry id, team name or
+`mcp-fpl` SHALL serve a `/mcp/join` page where a person enters an FPL entry id, team name or
 manager name; if it matches exactly one manager of a configured league, the server SHALL
 issue an API key linked to that entry and league and show it once together with a
 ready-to-paste connector URL and a Claude Code command. Name matching SHALL be case- and

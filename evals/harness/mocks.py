@@ -22,6 +22,8 @@ Usage::
 from __future__ import annotations
 
 import contextlib
+import json
+from pathlib import Path
 
 from llama_index.core.tools import FunctionTool
 
@@ -125,24 +127,57 @@ def _make_mock(original: FunctionTool) -> FunctionTool:
     return FunctionTool.from_defaults(async_fn=_stub, tool_metadata=original.metadata)
 
 
+SNAPSHOT = Path(__file__).resolve().parents[1] / "fixtures" / "mcp_tools.json"
+
+
+def load_snapshot() -> dict:
+    """The committed MCP tool-schema snapshot ({sub-agent: {instructions, tools}})."""
+    return json.loads(SNAPSHOT.read_text(encoding="utf-8"))["servers"]
+
+
 @contextlib.contextmanager
 def mock_tools(agents: list[str] | None = None):
     """Swap every agent's real tools for deterministic mocks for the duration.
 
-    Because the app builds agents fresh each turn from ``TOOLS_BY_AGENT``, replacing the
-    registry entries here means any agent built inside the enclosed ``handle_message`` picks
-    up the mocks. Originals are restored on exit.
+    * Harness agents (memory, scheduler) keep in-process tools: their ``TOOLS_BY_AGENT``
+      entries are replaced by mocks with identical metadata.
+    * Tool sub-agents (config/subagents.yaml) get their tools from the committed MCP
+      schema snapshot (refresh with ``python -m evals.snapshot_tools``) with fixture
+      bodies — the model sees exactly the production tools and server instructions, and
+      no server needs to run.
+
+    Agents are built fresh each turn, so anything built inside the block uses the mocks.
+    Originals are restored on exit.
 
     Args:
-        agents: restrict mocking to these agent names; default mocks all registered agents.
+        agents: restrict mocking to these agent names; default mocks all of them.
     """
-    names = agents if agents is not None else list(TOOLS_BY_AGENT.keys())
+    from lib.agents import MCP_SUBAGENTS, toolset_for
+    from lib.core import RemoteTool
+
+    names = agents if agents is not None else [*TOOLS_BY_AGENT.keys(), *MCP_SUBAGENTS.keys()]
+    snapshot = load_snapshot()
     saved: dict[str, list] = {}
+    saved_sets: dict[str, tuple] = {}
     try:
         for name in names:
-            saved[name] = TOOLS_BY_AGENT[name]
-            TOOLS_BY_AGENT[name] = [_make_mock(t) for t in saved[name]]
+            if name in MCP_SUBAGENTS:
+                entry = snapshot.get(name)
+                if entry is None:
+                    continue
+                ts = toolset_for(name)
+                saved_sets[name] = (ts._remote, ts._tools, ts.instructions, ts._loaded_at, ts._enabled)
+                ts.load_snapshot([RemoteTool(**t) for t in entry["tools"]], entry.get("instructions"),
+                                 call=lambda tool, args: json.dumps(_fixture_for(tool), ensure_ascii=False))
+                ts._enabled = lambda: False  # no live refresh while mocked
+            elif name in TOOLS_BY_AGENT:
+                saved[name] = TOOLS_BY_AGENT[name]
+                TOOLS_BY_AGENT[name] = [_make_mock(t) for t in saved[name]]
         yield
     finally:
         for name, original in saved.items():
             TOOLS_BY_AGENT[name] = original
+        for name, (remote, tools, instructions, loaded_at, enabled) in saved_sets.items():
+            ts = toolset_for(name)
+            ts._remote, ts._tools, ts.instructions, ts._loaded_at, ts._enabled = (
+                remote, tools, instructions, loaded_at, enabled)

@@ -1,4 +1,9 @@
 
+x-mcp-server: &mcp-server
+  restart: unless-stopped
+  environment:
+    MCP_CLIENTS_CONFIG: /config/clients.yaml
+
 services:
   agent:
     build: .
@@ -10,8 +15,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./lib:/app/lib
-      # Device DB, maps memory, and JSON stores live here — without this mount the
-      # container has no smart_devices.json ("baza świateł niedostępna").
+      # JSON stores (memory/scheduler/conversations) when DATABASE_URL is unset.
       - ./data:/app/data
       # Declarative principals config (users/groups/rosters). Gitignored + holds PSIDs,
       # so it is NOT baked into the image — it must be mounted from the host. Without this
@@ -33,6 +37,16 @@ services:
       # inside the compose network the MLflow server is reachable at host "mlflow"
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MLFLOW_EXPERIMENT: jarvis
+      # Tool servers on the compose network (keys: MCP_<NAME>_KEY in .env).
+      MCP_FPL_URL: http://mcp-fpl:8010/mcp/fpl
+      MCP_FINANCE_URL: http://mcp-finance:8010/mcp/finance
+      MCP_WEATHER_URL: http://mcp-weather:8010/mcp/weather
+      MCP_NEWS_URL: http://mcp-news:8010/mcp/news
+      MCP_MATH_URL: http://mcp-math:8010/mcp/math
+      MCP_MAPS_URL: http://mcp-maps:8010/mcp/maps
+      MCP_CALENDAR_URL: http://mcp-calendar:8010/mcp/calendar
+      MCP_HOME_URL: http://host.docker.internal:8011/mcp/home
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
       redis:
         condition: service_started
@@ -41,30 +55,78 @@ services:
       mlflow:
         condition: service_started
 
-  mcp:
-    # Public MCP tool servers (docs/MCP.md) — same image, separate process, so a restart
-    # or crash here never touches the Messenger webhook. Caddy routes /mcp/* here.
-    build: .
-    container_name: jarvis_mcp
+  # ── MCP tool servers (docs/MCP.md) ─────────────────────────────────────────────
+  # One container per server, from the published images. Each reads its own env file and
+  # config dir under ./mcp-config/<server>/ (gitignored): .env (secrets), clients.yaml
+  # (API-key holders, incl. Jarvis's trusted key) and server-specific files. Only Caddy's
+  # /mcp/fpl and /mcp/join routes are public; Jarvis reaches the rest on this network.
+  mcp-fpl:
+    <<: *mcp-server
+    image: ghcr.io/jaknow01/mcp-fpl:v0.1.0
+    container_name: mcp_fpl
+    env_file: ./mcp-config/fpl/.env          # DATABASE_URL (mcp_fpl db), FPL_LEAGUES, JOIN_NOTIFY_*
+    volumes: ["./mcp-config/fpl:/config:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+
+  mcp-finance:
+    <<: *mcp-server
+    image: ghcr.io/jaknow01/mcp-finance:v0.1.0
+    container_name: mcp_finance
+    env_file: ./mcp-config/finance/.env      # DATABASE_URL (mcp_finance db), OBSERVATIONS_*
+    volumes: ["./mcp-config/finance:/config:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+
+  mcp-weather:
+    <<: *mcp-server
+    image: ghcr.io/jaknow01/mcp-weather:v0.1.0
+    container_name: mcp_weather
+    env_file: ./mcp-config/weather/.env      # OPENWEATHER_API_KEY
+    volumes: ["./mcp-config/weather:/config:ro"]
+
+  mcp-news:
+    <<: *mcp-server
+    image: ghcr.io/jaknow01/mcp-news:v0.1.0
+    container_name: mcp_news
+    env_file: ./mcp-config/news/.env         # TAVILY_API_KEY
+    volumes: ["./mcp-config/news:/config:ro"]
+
+  mcp-math:
+    <<: *mcp-server
+    image: ghcr.io/jaknow01/mcp-math:v0.1.0
+    container_name: mcp_math
+    volumes: ["./mcp-config/math:/config:ro"]
+
+  mcp-maps:
+    <<: *mcp-server
+    image: ghcr.io/jaknow01/mcp-maps:v0.1.0
+    container_name: mcp_maps
+    env_file: ./mcp-config/maps/.env         # GOOGLE_MAPS_API_KEY
+    environment: {MCP_CLIENTS_CONFIG: /config/clients.yaml, MCP_PLACES_CONFIG: /config/places.yaml}
+    volumes: ["./mcp-config/maps:/config:ro"]
+
+  mcp-calendar:
+    <<: *mcp-server
+    image: ghcr.io/jaknow01/mcp-calendar:v0.1.0
+    container_name: mcp_calendar
+    env_file: ./mcp-config/calendar/.env     # ICLOUD_CALDAV_USER, ICLOUD_APP_PASSWORD
+    environment: {MCP_CLIENTS_CONFIG: /config/clients.yaml, MCP_CALENDAR_ACCOUNTS: /config/accounts.yaml}
+    volumes: ["./mcp-config/calendar:/config:ro"]
+
+  mcp-home:
+    # This box is inside the home network, so the lighting server can run here: host
+    # networking for Tuya's UDP discovery, on :8011 of the host (Jarvis reaches it via
+    # host.docker.internal). On the k3s target it moves to the Pi (see mcp-home README).
+    image: ghcr.io/jaknow01/mcp-home:v0.1.0
+    container_name: mcp_home
     restart: unless-stopped
-    command: ["poetry", "run", "python", "-m", "app.mcp_server"]
-    volumes:
-      - ./app:/app/app
-      - ./lib:/app/lib
-      - ./scripts:/app/scripts   # for: docker compose exec mcp poetry run python -m scripts.mcp_key …
-      - ./data:/app/data
-      # API-key holders (config/mcp_clients.yaml, gitignored) — re-read on change.
-      - ./config:/app/config:ro
-    env_file: .env
-    ports:
-      - "127.0.0.1:8010:8010"   # local debugging only; the public path is via Caddy
+    network_mode: host
     environment:
-      MCP_PORT: "8010"
-      # Shares the FPL reference/league caches with the agent.
-      DATABASE_URL: postgresql://jarvis:jarvis@postgres:5432/jarvis
-    depends_on:
-      postgres:
-        condition: service_healthy
+      MCP_PORT: "8011"
+      MCP_CLIENTS_CONFIG: /config/clients.yaml
+      MCP_HOME_CONFIG: /config/home.yaml
+    volumes:
+      - ./mcp-config/home:/config:ro
+      - ./data/smart_device_data:/data:ro    # home.yaml: devices_file: /data/smart_devices.json
 
   caddy:
     image: caddy:2
@@ -79,7 +141,7 @@ services:
       - caddy_config:/config
     depends_on:
       - agent
-      - mcp
+      - mcp-fpl
 
   redis:
     image: redis:7
@@ -117,6 +179,9 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Fresh volumes only: creates the mcp_fpl / mcp_finance databases and logins
+      # (existing volume: run it once by hand — see deploy/postgres/README.md).
+      - ./deploy/postgres/init-mcp-databases.sh:/docker-entrypoint-initdb.d/20-mcp.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U jarvis -d jarvis"]
       interval: 5s

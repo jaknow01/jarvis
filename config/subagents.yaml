@@ -1,0 +1,70 @@
+# Tool sub-agents backed by MCP servers (docs/MCP.md). Committed: no secrets here — the
+# server URL and Jarvis's API key for each server come from the env vars named below.
+#
+# Per sub-agent:
+#   description         what the coordinator is told this sub-agent can do (its tool description)
+#   url_env / key_env   env vars holding the server URL (e.g. http://mcp-fpl.mcp.svc/mcp/fpl)
+#                       and Jarvis's key for it (a `trusted: true` client on that server)
+#   identity            who Jarvis acts for: none | user (the person) | group (their household);
+#                       sent as X-On-Behalf-Of
+#   persona             optional extra instructions on top of the server's own tool guide
+#   max_calls_per_turn  optional per-tool call budget within one user turn
+#
+# The tool guide itself comes from the server (`instructions`), so updating a server updates
+# the sub-agent. Agent names match principals.yaml rosters and model profiles.
+subagents:
+  iot_operator:
+    description: "Controls smart devices (lighting) in the household."
+    url_env: MCP_HOME_URL
+    key_env: MCP_HOME_KEY
+    identity: group
+
+  weather_agent:
+    description: "Checks current weather and weather forecast at a given location."
+    url_env: MCP_WEATHER_URL
+    key_env: MCP_WEATHER_KEY
+    identity: none
+
+  finance_agent:
+    description: "Retrieves and analyzes financial data: FX rates, stock/index quotes, ticker search and price history."
+    url_env: MCP_FINANCE_URL
+    key_env: MCP_FINANCE_KEY
+    identity: none
+
+  maps_agent:
+    description: "Controls access to maps and navigation. Can calculate routes between the user's saved places, stops and landmarks."
+    url_env: MCP_MAPS_URL
+    key_env: MCP_MAPS_KEY
+    identity: group
+
+  news_agent:
+    description: "Summarizes current world and financial-market news."
+    url_env: MCP_NEWS_URL
+    key_env: MCP_NEWS_KEY
+    identity: none
+    persona: "You are a news reporter: summarize events from reputable sources and cite where facts come from."
+
+  fpl_agent:
+    description: "Fantasy Premier League: upcoming fixtures, live matches, PL teams and players, the owner's squad, mini-league standings, ownership and history."
+    url_env: MCP_FPL_URL
+    key_env: MCP_FPL_KEY
+    identity: none
+
+  math_agent:
+    description: "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."
+    url_env: MCP_MATH_URL
+    key_env: MCP_MATH_KEY
+    identity: none
+
+  calendar_agent:
+    description: "Reads and manages the owner's Apple (iCloud) calendar: list events in a time window ('co mam jutro/w tym tygodniu', 'czy jestem wolny...'), add events ('dodaj do kalendarza...'), edit them, and delete them (deletion is confirmed with the user first)."
+    url_env: MCP_CALENDAR_URL
+    key_env: MCP_CALENDAR_KEY
+    identity: user
+
+  # web_agent: added when mcp-web is extracted (needs the web-browsing branch merged)
+  #   description: "Opens and reads web pages (incl. links the user shares), searches the web, follows links."
+  #   url_env: MCP_WEB_URL
+  #   key_env: MCP_WEB_KEY
+  #   identity: none
+  #   max_calls_per_turn: {read_page: 6, open_url: 6, follow_link: 6, web_search: 4}

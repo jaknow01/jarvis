@@ -46,18 +46,25 @@ tool-calling fidelity; left in place to avoid extra lockfile churn.)
 Each layer's `__init__.py` is its public surface: import across layers/features from
 the package `__init__`, never from a submodule directly.
 
+**Tools live outside this repo.** Every tool domain is its own MCP server in its own public
+repo (`mcp-fpl`, `mcp-finance`, `mcp-weather`, `mcp-news`, `mcp-math`, `mcp-maps`,
+`mcp-calendar`, `mcp-home`; `mcp-web` pending), built on the shared `jarvis-mcp-kit`
+library. Jarvis is the **harness** and one MCP client among others (Claude Code, friends'
+Claude apps). See `docs/MCP.md` and `openspec/changes/extract-tools-to-mcp-servers/`.
+
 ```
 app/main.py            Entry point: load env, configure logging, run the chatbot loop
-app/mcp_server.py      Entry point for the public MCP tool servers (uvicorn, port 8010; docs/MCP.md)
+app/webhook.py         Messenger webhook + POST /internal/notify (tool servers → owner)
 
 lib/core/              LEAF layer — no imports from elsewhere in lib
   registry.py          The 3 registries (TOOLS_BY_AGENT/AGENTS/LLM_BY_AGENT) + decorators
-  cache.py             Ctx (shared run context) + Cache (Redis; now idle/optional) +
+  cache.py             Ctx (shared run context; incl. per-turn `scratch`) + Cache (Redis; idle) +
                          app_context()/bind_app_context() contextvar accessors
   agent_tool.py        agent_as_tool() — wrap a sub-agent as a coordinator FunctionTool
   tooling.py           function_tool — LlamaIndex analogue of the old @function_tool
-  mcp_client.py        McpToolset: a remote MCP server's tools as FunctionTools (cached
-                         listing, refresh_mcp_toolsets() per turn; see docs/MCP.md)
+  mcp_client.py        McpToolset: a remote MCP server's tools as FunctionTools — cached listing
+                         + server instructions, X-On-Behalf-Of per identity mode, per-turn call
+                         budgets, ERROR strings on failure; refresh_mcp_toolsets() per turn
   env.py               environment_preamble() — date/time/locale block for every agent
   llm.py               Provider-agnostic LLM resolution: model-prefix parser +
                          PROVIDER_BUILDERS + build_llm(agent_name) config resolution
@@ -72,49 +79,40 @@ lib/domain/            Shared stateful stores (used by agents AND runtime)
   memory.py            Long-term memory store (JSON or Postgres backend; see app/db)
   scheduler.py         Scheduled-jobs store (JSON or Postgres backend)
   conversation.py      Conversation-history store + rolling-window summary (JSON or Postgres)
-  observations.py      Daily time-series store for external readings (JSON or Postgres; see docs/OBSERVATIONS.md)
-  mcp_keys.py          Self-service MCP API keys (sha256 only; one active per FPL entry; JSON or Postgres)
+  principals*.py, profile.py, agent_config.py   multi-user identity, groups, rosters
 
-lib/agents/            Coordinator + one feature subpackage per agent
-  __init__.py          Aggregator: imports every subpackage (registration), public surface
-  coordinator/         create_coordinator_agent (wires subagents in as tools; gathers + writes the answer content)
+lib/agents/            Coordinator, composer, harness sub-agents, config-defined tool sub-agents
+  __init__.py          Aggregator (registration side effects), public surface
+  coordinator/         create_coordinator_agent (wires subagents in as tools; writes the answer content)
   composer/            create_composer_agent (deterministic final step: formats the answer, form only)
-  <agent>/agent.py     the create_*_agent() factory (returns a FunctionAgent)
-  <agent>/tools.py     that agent's @tool_ownership function-tools
-  <agent>/<helper>.py  that agent's private helpers, e.g.
-                         iot_operator/{device,tuya_link}.py (Tuya model + link),
-                         maps_agent/directions.py, weather_agent/forecast.py,
-                         finance_agent/{fx.py, history.py},
-                         fpl_agent/{fpl_api.py, identity.py (whose "my squad/league")},
-                         math_agent/ (deterministic calc tools; no data source of its own)
+  memory_operator/     long-term memory sub-agent (in-repo tools)
+  scheduler_agent/     reminders/briefs/conditional watches (in-repo tools; watch_sources.py
+                         polls tools on the MCP servers)
+  mcp_subagents/       tool sub-agents from config/subagents.yaml: one McpToolset + one
+                         FunctionAgent factory per entry; prompt = server instructions + persona
 
 lib/runtime/           TOP layer — wires the network to a transport / runs jobs
-  engine.py            transport-agnostic handle_message(conversation_id, text, ctx)
+  engine.py            transport-agnostic handle_message(conversation_id, text, ctx); binds the
+                         turn's user/household for MCP calls
   history_window.py    rolling-window context: last N pairs verbatim + incremental summary
   chatbot.py           REPL loop
   messenger.py         Messenger webhook adapter (signature, send)
-  scheduler_runner.py  in-process loop that fires due jobs out of band
-  observations_runner.py daily time-series collectors (finance @23:00, FPL league @04:00)
+  scheduler_runner.py  in-process loop that fires due jobs out of band (watch polls act as the owner)
+  notify.py            owner_messenger_id() for /internal/notify
   progress.py          interim "still working" ping helpers (labels + templated message)
   admin.py             owner-only "/" command surface (ops/diagnostics; bypasses agents)
   diag.py              leaf: in-memory diagnostic state (uptime, last-turn, inbound)
   tracing.py           MLflow tracing setup + last_trace_id()
-  mcp_server.py        public MCP tool servers: API-key gateway + EXPOSABLE (code-only
-                         allowlist: today fpl) over Streamable HTTP
-  mcp_keys.py          API-key registry: config/mcp_clients.yaml + self-service keys, rate limit
-  mcp_join.py          /mcp/join self-service page: league-member check → key (+ owner ping)
 
 app/db/                Postgres access layer: connection, schema, repos, migration
-                         (incl. conversation_repo.py — conversations + messages;
-                         observations_repo.py — daily time-series;
-                         fpl_history_repo.py — permanent daily FPL league snapshots)
-scripts/               One-shot ops scripts: backfill_finance.py (year of daily finance history),
-                         backfill_fpl_history.py (per-gameweek FPL league history),
-                         mcp_key.py (new/hash/list MCP API keys)
+                         (conversation, memory, scheduler, principals — the harness's own data)
+config/subagents.yaml  Tool sub-agents: description, url/key env vars, identity, persona, budgets
 config/models/         Model profiles (prod.yaml, local.yaml) — pick with MODEL_PROFILE
-config/mcp_clients.yaml MCP API-key holders (gitignored; example committed)
 config/providers.yaml  Named model servers (e.g. gpu-server → local vLLM URL)
-data/                  JSON "databases" (devices, preferences, maps memory, memory)
+mcp-config/<server>/   Per-server env + config for the compose deployment (gitignored)
+deploy/                postgres/ (per-service databases), k8s/jarvis.yaml
+evals/fixtures/mcp_tools.json   MCP tool-schema snapshot for offline evals
+data/                  JSON "databases" when DATABASE_URL is unset
 logs/                  Per-run log files
 ```
 
@@ -180,8 +178,8 @@ the coordinator. This is a technical window into the running service from the ph
 (`/stop` to cancel the in-flight turn, `/status`, `/logs`, `/errors`, `/jobs [all]` (tags
 each item's kind — cron vs one-shot vs repeating/one-shot watch — for verification; `all`
 also shows completed/cancelled),
-`/fire <id>`, `/scheduler pause|resume`, `/mcp [revoke <id>]` (MCP API keys), `/collect [finance|fpl]` (run the daily observation
-collectors now), `/user`, `/group`, `/profile <user>` (multi-user management — see
+`/fire <id>`, `/scheduler pause|resume`, `/mcp [keys|revoke <id>]` (tool-server status, FPL
+self-service keys), `/user`, `/group`, `/profile <user>` (multi-user management — see
 docs/MULTI_USER.md), `/agents`, `/models`, `/env` with masked secrets,
 `/memory`, `/summary`, `/reset confirm`, `/last`, `/window`, `/version`, `/probe`, `/help`).
 `/stop` works because the webhook runs each inbound message as its own task: a live turn
@@ -202,20 +200,19 @@ as `from lib.core import ...`); registration happens by **import-time side effec
 tool/agent module must be imported for its decorator to fire. `lib/agents/__init__.py`
 imports every feature subpackage precisely to trigger this. Follow them when adding things:
 
-- **Agents** — `@agents_decorator(name)` registers a factory into `AGENTS` and prepends
-  the environment preamble to the agent's `system_prompt`. Each sub-agent lives in
-  `lib/agents/<name>/agent.py` as a `create_*_agent()` factory returning a
-  LlamaIndex `FunctionAgent`; the coordinator wires them in via
-  `agent_as_tool(factory(), tool_name=, tool_description=)`. A new agent needs a package
-  with `agent.py` + `tools.py` + an `__init__.py` (importing `.tools` for the side effect
-  and re-exporting the factory), plus one import line in `lib/agents/__init__.py` and the
-  coordinator's `subagents` list.
-- **Tools** — `@tool_ownership(agent_name)` **above** `@function_tool` (the LlamaIndex
-  one from `lib.core`) in that agent's `lib/agents/<name>/tools.py` appends the tool to
-  `TOOLS_BY_AGENT[agent_name]`. An agent picks up its tools with `tools = TOOLS_BY_AGENT[name]`.
-  Decorator order matters: `@tool_ownership` outermost, `@function_tool` innermost. Tool
-  functions take `ctx: Context` (the LlamaIndex workflow Context, auto-injected and hidden
-  from the model's schema) and reach shared run state via `app_context(ctx)`.
+- **Tool sub-agents (the usual case)** — **no Python code in this repo**: build an MCP server
+  in its own repo with `jarvis-mcp-kit` (tools = documented async functions; the tool guide
+  goes in the server's `instructions` and tool docstrings), then add an entry to
+  `config/subagents.yaml` (description, `url_env`, `key_env`, `identity`, optional `persona`
+  and `max_calls_per_turn`) and the URL/key to `.env`. `lib/agents/mcp_subagents` registers
+  an `McpToolset` and an `AGENTS` factory for it; the coordinator includes it when the
+  principal's roster enables it and its server has been listed.
+- **Harness agents** (memory, scheduler) — `@agents_decorator(name)` registers a factory into
+  `AGENTS` and prepends the environment preamble; the package has `agent.py` + `tools.py` +
+  `__init__.py`, plus an import in `lib/agents/__init__.py` and the coordinator catalog.
+- **Harness tools** — `@tool_ownership(agent_name)` **above** `@function_tool` appends the
+  tool to `TOOLS_BY_AGENT[agent_name]`. Tool functions take `ctx: Context` (auto-injected,
+  hidden from the model's schema) and reach shared run state via `app_context(ctx)`.
 - **Models** — every agent reads its LLM via `LLM_BY_AGENT[name]()` and passes it as
   `llm=`. There is **no per-agent factory to write**: `LLM_BY_AGENT` falls back to a
   config-driven resolver (`build_llm(agent_name)`, bound via `bind_default_llm_resolver`)
@@ -226,34 +223,35 @@ imports every feature subpackage precisely to trigger this. Follow them when add
 ### Shared context
 `Ctx` (`lib/core/cache.py`, imported as `from lib.core import Ctx`) is the per-turn
 shared state. `engine.handle_message` binds it for the turn with `bind_app_context(ctx)`
-(a contextvar), and every tool reaches it via `app = app_context(ctx)` — reading/writing
-`app.devices`, `app.devices_preferences`, `app.known_adresses`, `app.time_date_now`,
-`app.conversation_id`. The contextvar propagates to the coordinator's step-worker tasks
+(a contextvar), and every tool reaches it via `app = app_context(ctx)` — e.g.
+`app.user_id`, `app.conversation_id`, `app.scratch` (per-turn counters such as MCP call
+budgets). Device handles and saved addresses now live in the `mcp-home` / `mcp-maps`
+servers; the old `devices`/`known_adresses` group-scope fields are unused leftovers. The contextvar propagates to the coordinator's step-worker tasks
 and to every nested sub-agent run, so state written by one tool is visible to any later
 tool in the same turn. (The workflow `Context` itself is *not* used to carry `Ctx`: its
 store is serialized and `Ctx` — Redis client, live device handles — is not serializable,
-and arbitrary Context attributes don't reach the tool's injected Context.) `Ctx.devices`
-is typed as `dict[str, Any]` (not `SmartDevice`) on purpose, so `core` stays a leaf and
-never imports the iot domain. `Ctx` also holds a Redis `Cache`, which is now **idle**:
+and arbitrary Context attributes don't reach the tool's injected Context.) `Ctx` also holds a Redis `Cache`, which is now **idle**:
 its only user was the removed `previous_response_id` continuity, so Redis is optional
 (nothing calls its methods; a missing Redis no longer breaks a turn). It was left in
 place rather than removed.
 
 ## Agents & their status
 
-| Agent | Purpose | Tools / APIs | Status |
-|-------|---------|--------------|--------|
-| `coordinator` | Routes user requests, aggregates answers | sub-agents as tools | Working |
-| `iot_operator` | Smart lighting control | Tuya (tinytuya): state, on/off, mode, color, temp | Working (needs real device data in `data/smart_device_data/`) |
-| `maps_agent` | Routes & navigation | Google Maps Directions | Working |
-| `weather_agent` | Current weather + forecast | OpenWeather (current) + Open-Meteo (forecast) + date/time | Working |
-| `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
-| `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
-| `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools. **Also served as a public MCP server** (`/mcp/fpl`, API keys with per-key default entry/league — `fpl_agent/identity.py`; a bound key identity never falls back to the owner's env ids), and `FPL_TOOLS_SOURCE=mcp` makes Jarvis itself use that server (falls back to local tools while unreachable). See `docs/MCP.md` |
-| `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn (`memory.summary()`, cached with a short TTL — `MEMORY_SUMMARY_CACHE_TTL_SECONDS`, default 60s — and invalidated on writes, so it isn't a DB read on the hot path every turn). See `docs/MEMORY.md` |
-| `scheduler_agent` | Proactive cron jobs / reminders + conditional watches | JSON or Postgres store (`lib/domain/scheduler.py`): create/list/delete/update scheduled jobs; `create_watch` for conditional watches | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/runtime/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. **Conditional watches** (`kind="watch"`) poll a data source and notify on a false→true edge. The previous poll's reading is injected into the predicate as `data["_previous"]` (None first poll) so it can detect a CHANGE ("new points appeared"), and `repeating=True` keeps the watch armed to notify on every future edge (else one-shot). See `docs/SCHEDULER.md` |
-| `math_agent` | Deterministic calculations over numbers | Pure Python (`statistics`/`math`): `calculate_statistics`, `percentage_change`, `linear_trend`, `correlation` | Working — general-purpose calculator (no data source of its own); the coordinator feeds it figures gathered from other agents (e.g. a finance/FPL time-series) so arithmetic/stats are exact, not LLM-guessed |
-| `calendar_agent` | Owner's Apple (iCloud) calendar | CalDAV (`caldav`/`icalendar`) against iCloud: `list_calendar_events`, `create_calendar_event`, `update_calendar_event`, `delete_calendar_event` | Working — needs `ICLOUD_CALDAV_USER` + `ICLOUD_APP_PASSWORD` (an app-specific password from appleid.apple.com; optional `ICLOUD_CALDAV_URL`/`ICLOUD_CALENDAR_NAME`/`ICLOUD_READ_CALENDARS`) in `.env`. Credentials stay server-side in `calendar_agent/caldav_link.py` (like device keys / maps addresses) — the model sees only event summaries/times, the source calendar name, and opaque UIDs. **Read/write are separate**: new events are written to the single `ICLOUD_CALENDAR_NAME` calendar (**auto-created** on iCloud on first write if it doesn't exist yet — write path only, never on a read), but listing (and finding an event to edit/delete) spans **all** calendars by default — or the `ICLOUD_READ_CALENDARS` subset (always including the write calendar) — so it can write to "Asystent" yet still see "Dom". **Deletion is gated**: `delete_calendar_event` previews the event with `confirm=false` and only removes it with `confirm=true` after the user explicitly confirms in a later turn. Relative dates come from the environment preamble (no separate date tool) |
+| Agent | Where its tools run | Notes |
+|-------|---------------------|-------|
+| `coordinator` | — (sub-agents as tools) | Routes, gathers, writes the answer content |
+| `composer` | — | Deterministic final formatting step |
+| `memory_operator` | in-repo (`lib/domain/memory.py`) | Memory profile injected into the coordinator prompt (cached, `MEMORY_SUMMARY_CACHE_TTL_SECONDS`). See `docs/MEMORY.md` |
+| `scheduler_agent` | in-repo (`lib/domain/scheduler.py`) | Reminders, briefs, conditional watches (edge-triggered, `_previous` reading, `repeating`); due jobs fire via `scheduler_runner`; watch sources call MCP tools as the watch owner. See `docs/SCHEDULER.md` |
+| `fpl_agent` | `mcp-fpl` (public: `/mcp/fpl`, `/mcp/join`) | "My team/league" from the caller's key; own Postgres db (caches, daily league history, self-service keys); CronJobs `collect`/`warm-cache` |
+| `finance_agent` | `mcp-finance` | FX, quotes, ticker search, daily history (own db; `collect` CronJob) |
+| `weather_agent` | `mcp-weather` | OpenWeather + Open-Meteo |
+| `news_agent` | `mcp-news` | Tavily (official client) |
+| `math_agent` | `mcp-math` | Exact statistics over figures from other agents |
+| `maps_agent` | `mcp-maps` (`identity: group`) | Saved places per household, aliases only |
+| `calendar_agent` | `mcp-calendar` (`identity: user`) | iCloud CalDAV account per user; gated delete |
+| `iot_operator` | `mcp-home` on the home network (`identity: group`) | Tuya devices per household; reached via host networking (compose) or the WireGuard `home-gateway` (k3s) |
+| `web_agent` | pending `mcp-web` | Lives on the `web-browsing` branch until extracted |
 
 ## Running it
 
@@ -272,10 +270,11 @@ poetry install
 poetry run python app/main.py
 ```
 
-There is also a `Dockerfile` / `docker-compose.yml` (the app container is
-scaffolded; note the compose file exposes port 8002 for a future HTTP entry point
-that does not exist yet). When running the whole stack in Docker, switch the Redis
-URL in `lib/core/cache.py` from `redis://localhost:6379` to `redis://redis:6379`.
+`docker-compose.yml` runs the whole stack: Jarvis (Messenger webhook), Postgres, Redis,
+MLflow, Caddy and every MCP server from its published image (`ghcr.io/jaknow01/mcp-*`), with
+per-server config in `mcp-config/<server>/` — see `docs/MCP.md` for the setup steps (keys,
+databases, backfills, collector crontab). Without the tool servers, Jarvis still runs but its
+tool sub-agents are absent from the roster.
 
 ### Models / providers
 Each agent's model is a `provider/model` string; the provider is the part before the
@@ -336,16 +335,11 @@ ones you use are required; named servers read the env var their `api_key_env` na
 `OPENAI_COMPAT_API_KEY`; the ad-hoc `openai-compat` provider reads `OPENAI_COMPAT_BASE_URL` +
 `OPENAI_COMPAT_API_KEY`), `MODEL_PROFILE` (+ optional
 `MODEL_PROFILES_DIR`) selecting the model profile (see "Models / providers" above),
-`GOOGLE_MAPS_API_KEY`,
-`XAI_API_KEY`,
-`OPENWEATHER_API_KEY`, `TAVILY_API_KEY`, `DATABASE_URL` (Postgres; when unset the
-memory store falls back to the on-disk JSON file), `TRACING_ENABLED` +
-`MLFLOW_TRACKING_URI` + `MLFLOW_EXPERIMENT` (agent tracing; when the URI is unset or
-`TRACING_ENABLED` is falsy, tracing is a no-op). (Any
-Messenger/Telegram integration will add more.) `FPL_ENTRY_ID` + `FPL_LEAGUE_ID` (the
-owner's Fantasy Premier League manager id and default mini-league, used by
-`fpl_agent`'s "my squad"/"my league" tools; the FPL API itself is keyless). Note: the
-Yahoo Finance quote source, the Frankfurter FX source and the FPL API are keyless.
+`XAI_API_KEY`, `DATABASE_URL` (Postgres; when unset the stores fall back to on-disk JSON),
+`TRACING_ENABLED` + `MLFLOW_TRACKING_URI` + `MLFLOW_EXPERIMENT` (agent tracing; when the URI
+is unset or `TRACING_ENABLED` is falsy, tracing is a no-op). External tool API keys
+(OpenWeather, Tavily, Google Maps, iCloud, Tuya) and FPL/finance settings are **not** Jarvis
+env vars any more — they belong to the servers (`mcp-config/<server>/.env`).
 `SCHEDULER_ENABLED` + `SCHEDULER_TICK_SECONDS` + `SCHEDULER_TIMEZONE` (the proactive
 scheduler loop: master switch — same falsy-parsing as `agent_enabled()`, default on;
 tick interval in seconds, default 30; timezone for cron/`run_at`, default Europe/Warsaw.
@@ -370,20 +364,9 @@ declared kind (`_guard_no_data_turn`), so misuse can't leak invented data. The
 native Anthropic class is wrapped (`ToolChoiceAnthropic` in `lib/core/llm.py`) to translate
 `tool_choice` into Anthropic's `tool_required`. Every sub-agent prompt also gets
 `SUBAGENT_TOOL_RULES` appended by `agent_as_tool` (tools only, sanity-check results, retry
-once then report). Tools must not block the event loop: wrap blocking clients (`requests`, pyowm,
-googlemaps, Tavily) in `asyncio.to_thread` with a timeout. FPL tool failures go through
-`fpl_error()` (`fpl_agent/fpl_api.py`), which returns a `Hint` + `gameweek_calendar` so the
-agent can recover (e.g. a 404 on a not-yet-started gameweek's picks).
-`OBSERVATIONS_ENABLED` + `OBSERVATIONS_FINANCE_HOUR` + `OBSERVATIONS_FPL_HOUR` +
-`OBSERVATIONS_TICK_SECONDS` + `OBSERVATIONS_FX`/`OBSERVATIONS_EQUITIES`/`OBSERVATIONS_METALS`
-(the daily time-series collectors: master switch — same falsy-parsing as `agent_enabled()`,
-default on; local hours each collector fires, default 23 and 4, in `SCHEDULER_TIMEZONE`; clock
-check interval, default 300s; the finance watchlist — FX vs PLN, equities/metals as Yahoo
-tickers, defaults `USD,EUR,GBP,CHF` / `^GSPC` / `GC=F,SI=F`, plus `OBSERVATIONS_SP500_ETF`
-(default `SP5.PA`) — a EUR cross-listing of the owner's Amundi S&P 500 **distributing** ETF
-from which `index:sp500_pln` = ETF(EUR) × EUR/PLN is derived (Yahoo has no GPW PLN listing;
-must be the dist class to match the owner's fund). The FPL collector uses `FPL_LEAGUE_ID`.
-See `docs/OBSERVATIONS.md`).
+once then report). Harness tools must not block the event loop (`asyncio.to_thread` for
+blocking clients). Daily collectors (finance 23:00, FPL league snapshot 04:00, FPL cache
+warming) run inside `mcp-finance` / `mcp-fpl` as one-shot commands (cron / k8s CronJobs).
 
 **Agent tracing (dev observability):** setting `MLFLOW_TRACKING_URI` enables MLflow
 auto-tracing for the LlamaIndex runtime (`mlflow.llama_index.autolog()` in
@@ -397,18 +380,13 @@ falsy-parsing as `agent_enabled()`) is a master kill-switch that disables tracin
 even with a URI set. Tracing is out-of-band and failures are swallowed, so it never
 affects agent behavior. See `docs/TRACING.md`.
 
-**MCP tool servers:** `FPL_TOOLS_SOURCE` (`local` default / `mcp`) + `FPL_MCP_URL` +
-`FPL_MCP_API_KEY` (Jarvis as a client); server side `MCP_HOST`/`MCP_PORT` (0.0.0.0/8010),
-`MCP_SERVERS`, `MCP_CLIENTS_CONFIG`, `MCP_RATE_LIMIT_PER_MINUTE` (60),
-`MCP_TOOL_TIMEOUT_SECONDS` (90); client side `MCP_TOOLS_TTL_SECONDS` (300),
-`MCP_RETRY_SECONDS` (30), `MCP_LIST_TIMEOUT_SECONDS` (10), `MCP_CALL_TIMEOUT_SECONDS` (100).
-The server runs as the compose `mcp` service behind Caddy's `/mcp/*`, with access logging off
-(keys may ride in the URL). Only agents in `EXPOSABLE` (code) can be served. League managers
-get their own key at `/mcp/join` (no ownership proof by design — league membership only; one
-active key per entry, owner pinged on Messenger, admin `/mcp` / `/mcp revoke <id>`):
-`MCP_JOIN_ENABLED`, `MCP_JOIN_LEAGUE_IDS` (default `FPL_LEAGUE_ID`), `MCP_PUBLIC_URL`,
-`MCP_JOIN_PER_HOUR` (10), `MCP_JOIN_ROSTER_TTL_SECONDS` (600), `MCP_KEYS_REFRESH_SECONDS` (15).
-See `docs/MCP.md`.
+**MCP tool servers (Jarvis as client):** per server `MCP_<NAME>_URL` + `MCP_<NAME>_KEY`
+(names declared in `config/subagents.yaml`; compose sets the in-network URLs), plus
+`MCP_TOOLS_TTL_SECONDS` (300), `MCP_RETRY_SECONDS` (30), `MCP_LIST_TIMEOUT_SECONDS` (10),
+`MCP_CALL_TIMEOUT_SECONDS` (100), `SUBAGENTS_CONFIG`, and `INTERNAL_NOTIFY_TOKEN` (bearer for
+`POST /internal/notify`, which servers use to message the owner; blocked publicly by Caddy).
+Jarvis's key on each server must be `trusted: true` (and `admin: true` on mcp-fpl for
+`/mcp revoke`). See `docs/MCP.md`.
 
 **Per-subagent toggles:** each subagent is enabled by default and can be hidden from
 the coordinator by setting `AGENT_<NAME>_ENABLED` to a falsy value (0/false/no/off) —
@@ -417,11 +395,11 @@ coordinator tool (`agent_enabled()` in `lib/core/registry.py`, read at coordinat
 time). Disabling `memory_operator` also drops the memory profile injection.
 
 ### Testing
-`pytest` (dev dependency) with tests under `tests/`. Run `poetry run pytest`. Tests
-cover pure helpers and the decorator registries only — no network or API keys
-required. Anything that hits an external API (Yahoo, Tavily, Google Maps, OpenWeather)
-is intentionally left out of the suite for now; add mocked/integration tests as those
-grow.
+`pytest` (dev dependency) with tests under `tests/`. Run `poetry run pytest`. No network or
+API keys required; MCP sub-agents are tested with installed tool snapshots
+(`tests/conftest_mcp.py`). Tool behaviour is tested in each server's own repo (incl. a parity
+test against the pre-extraction tool schemas). Evals run against
+`evals/fixtures/mcp_tools.json` (refresh: `python -m evals.snapshot_tools`).
 
 ## Conventions & gotchas
 - **User-facing replies are in Polish**; tool/agent *instructions* and code are in
@@ -433,63 +411,25 @@ grow.
   factory methods should become async so all agents can be created concurrently.
 - **Logging, not prints.** `lib/core/logger.py` adds a custom `CONVERSATION` level
   (25) via `logger.conversation(...)`. Legacy `print()` calls still linger in
-  each agent's `tools.py` / `lib/agents/iot_operator/device.py` — prefer `logger` for new code and
+  older modules — prefer `logger` for new code and
   migrate prints when you touch them.
-- **Sensitive data stays server-side; the model uses handles, not raw values.**
-  - *Devices:* the model refers to smart devices only by **name**; ip / local_key /
-    dev_id never reach the LLM (`describe_as_json()` returns only name/room/zones; the
-    iot tools take device names and resolve them via `_resolve_devices`). Don't
-    reintroduce `SmartDevice` objects as tool parameters.
-  - *Maps:* the model refers to saved places only by **alias** (Home, work, …);
-    `get_maps_memory` returns aliases only, and `get_route_details` resolves an alias
-    to its real street address server-side (`_resolve_place`) and relabels the route
-    endpoints back to the alias. (Residual: turn-by-turn steps from Google can still
-    mention street names along the requested route — inherent to navigation.)
-- **Storage** — data lives in **Postgres** (docker-compose service) with the on-disk
-  JSON files under `data/` kept as the migration source / easy-to-eyeball copy. The
-  DB layer is isolated in `app/db/`; the `memory_operator` writes to Postgres when
-  `DATABASE_URL` is set (else the JSON file). The `fpl_agent` also caches its reference
-  data (players/teams) in Postgres via `app/db/fpl_repo.py` (table `fpl_reference`, a
-  JSONB snapshot of `bootstrap-static` with a `FPL_CACHE_TTL_SECONDS` freshness window),
-  falling back to an in-process memo + the live API when no DB is configured. Its
-  **mini-league squad scan** — the biggest latency cost (a picks fetch per manager,
-  behind the "who else has player X / how many own a player from team Y" questions) — is
-  cached the same way: `app/db/fpl_league_repo.py` (table `fpl_league_squads`, one JSONB
-  snapshot per `(league_id, gameweek)`, `FPL_LEAGUE_CACHE_TTL_SECONDS` default 3h), read
-  through by `load_league_squads()` in `fpl_agent/fpl_api.py` (L1 memo → Postgres → live
-  scan, write-through; a query on a stale/missing snapshot rescans on demand). A background
-  loop (`lib/runtime/fpl_cache_runner.py`, started in the webhook `lifespan`;
-  `FPL_CACHE_REFRESH_ENABLED` / `FPL_CACHE_REFRESH_INTERVAL_SECONDS`) warms the owner's
-  configured `FPL_LEAGUE_ID` every few hours; national/global leagues are never warmed in
-  the background (only cached lazily if explicitly queried).
-  The `scheduler_agent` likewise persists jobs to Postgres (table `scheduled_jobs`, via
-  `app/db/scheduler_repo.py`) when `DATABASE_URL` is set, else to
-  `data/scheduler_data/jobs.json` — same JSON/Postgres backend-selection pattern as memory.
-  **Conversation history** follows the same pattern: `lib/domain/conversation.py` +
-  `app/db/conversation_repo.py` persist `conversations` + `messages` (two rows per turn:
-  the user message and the assistant reply, the latter stamped with the MLflow trace id)
-  to Postgres when `DATABASE_URL` is set, else `data/conversation_data/conversations.json`.
-  Each conversation also carries the rolling-window `summary` + `summary_upto` coverage
-  pointer (see the context-window note under "How a turn flows"); on Postgres these are
-  two `ADD COLUMN IF NOT EXISTS` columns on `conversations`. The per-turn hot-path read
-  uses `load_history_and_summary()` — history + summary over a **single** connection —
-  rather than two separate `load_history`/`load_summary` round-trips.
-  **Time-series ("observations")** follow the same pattern: `lib/domain/observations.py` +
-  `app/db/observations_repo.py` persist a generic daily series (table `observations`, PK
-  `(series, obs_date)`, idempotent upsert) to Postgres when `DATABASE_URL` is set, else
-  `data/observations_data/observations.json`. The **FPL daily league history** (table
-  `fpl_league_history`, one append-only JSONB snapshot per `(league_id, snapshot_date)` —
-  every manager's rank, points and squad; distinct from the TTL squad *cache* in
-  `fpl_league_squads`) is **Postgres-only** via `app/db/fpl_history_repo.py`. Both are
-  written daily by the deterministic collectors in `lib/runtime/observations_runner.py`
-  (finance @23:00, FPL @04:00; started in the webhook `lifespan`) and read back by the
-  history tools inside `finance_agent` / `fpl_agent`. Seed history with
-  `python -m scripts.backfill_finance` (a year of daily finance) and
-  `python -m scripts.backfill_fpl_history` (per-gameweek FPL league snapshots); both are also
-  runnable on demand from the admin `/collect` command. See `docs/OBSERVATIONS.md`.
-  Migrate with `python -m app.db.migrate`.
-  See `docs/STORAGE.md`. JSON stores under `data/` are gitignored except `.gitkeep`.
-  Real device keys / preferences live there and are not committed.
+- **Sensitive data stays server-side; the model uses handles, not raw values.** Enforced
+  in the tool servers: `mcp-home` exposes devices by **name** only (no ip / local_key /
+  dev_id), `mcp-maps` saved places by **alias** only (addresses resolved and relabelled on
+  the server), `mcp-calendar` event summaries/UIDs only. Personal-data servers scope data to
+  the acting principal (`X-On-Behalf-Of` from Jarvis's trusted key; `identity` in
+  `config/subagents.yaml`); an unknown principal gets nothing. External API secrets live only
+  with their server; Jarvis holds just its MCP keys.
+- **Storage** — Jarvis's own data (conversations + rolling summary, memory, scheduled jobs,
+  principals) lives in **Postgres** (`jarvis` database) when `DATABASE_URL` is set, else in
+  JSON under `data/`; the DB layer is isolated in `app/db/` (same JSON/Postgres backend
+  selection everywhere). The per-turn hot-path read uses `load_history_and_summary()` (one
+  connection). Tool-server data lives in **their own databases** on the same instance
+  (`mcp_fpl`: FPL reference/league caches, daily league history, self-service keys;
+  `mcp_finance`: daily observations) — see `deploy/postgres/README.md`. The old `fpl_*`,
+  `observations` and `mcp_api_keys` tables in the `jarvis` database are unused and can be
+  dropped after the cut-over. Migrate with `python -m app.db.migrate`; see `docs/STORAGE.md`.
+  JSON stores under `data/` are gitignored except `.gitkeep`.
 - **`.venv/` and `venv/`** both exist in the working tree but are gitignored; the
   canonical dependency source of truth is `pyproject.toml` + `poetry.lock`.
 - **Don't churn dependencies casually** — the lockfile was painful to stabilize

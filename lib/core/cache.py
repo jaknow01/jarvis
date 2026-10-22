@@ -84,6 +84,9 @@ class Ctx():
         # coordinator's summary may reach the composer (see engine.handle_message).
         self.subagent_calls: list[str] = []
         self.no_data_kind: str | None = None
+        # Free-form per-turn scratch for tools that need turn-scoped counters/state (e.g.
+        # web_agent's page/search budget). Keys are namespaced by the owning feature.
+        self.scratch: dict[str, Any] = {}
 
     # -- group-scope delegation (keeps the tool-facing attribute surface unchanged) --
     @property

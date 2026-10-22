@@ -19,10 +19,6 @@ from lib.domain.conversation import (
     conversations,
     ConversationStore,
 )
-from lib.domain.observations import (
-    observations,
-    ObservationsStore,
-)
 from lib.domain.principals import (
     principals,
     PrincipalStore,
@@ -71,13 +67,10 @@ from lib.domain.scheduler import (
     VALID_STATUSES,
     VALID_CHANNELS,
 )
-from lib.domain.mcp_keys import mcp_keys, McpKeyStore
 
 __all__ = [
     "conversations",
     "ConversationStore",
-    "observations",
-    "ObservationsStore",
     "principals",
     "PrincipalStore",
     "new_user_id",
@@ -123,6 +116,4 @@ __all__ = [
     "VALID_KINDS",
     "VALID_STATUSES",
     "VALID_CHANNELS",
-    "mcp_keys",
-    "McpKeyStore",
 ]

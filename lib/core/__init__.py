@@ -38,10 +38,15 @@ from lib.core.model_profiles import (
 )
 from lib.core.agent_tool import agent_as_tool
 from lib.core.mcp_client import (
+    IDENTITY_MODES,
     McpToolset,
     MCP_TOOLSETS,
+    RemoteTool,
+    bind_mcp_principal,
     register_mcp_toolset,
     refresh_mcp_toolsets,
+    reset_mcp_principal,
+    using_mcp_principal,
 )
 from lib.core.tooling import function_tool
 from lib.core.env import environment_preamble, TIMEZONE, BASE_CURRENCY, LOCALE
@@ -80,8 +85,13 @@ __all__ = [
     "load_profile",
     "using_profile",
     "agent_as_tool",
+    "IDENTITY_MODES",
     "McpToolset",
     "MCP_TOOLSETS",
+    "RemoteTool",
+    "bind_mcp_principal",
+    "reset_mcp_principal",
+    "using_mcp_principal",
     "register_mcp_toolset",
     "refresh_mcp_toolsets",
     "function_tool",

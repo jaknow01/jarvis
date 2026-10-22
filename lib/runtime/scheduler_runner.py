@@ -18,9 +18,9 @@ import os
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Optional
 
-from lib.core import Cache, Ctx
+from lib.core import Cache, Ctx, using_mcp_principal
 from lib.domain import OWNER_USER_ID
-from lib.runtime.engine import handle_message
+from lib.runtime.engine import _resource_group_id, handle_message
 from lib.runtime.messenger import send_message
 from lib.agents.scheduler_agent import (
     PredicateEvaluator,
@@ -187,7 +187,11 @@ async def _run_watch(store, evaluator: PredicateEvaluator, deliver, job: dict,
         job["next_run_at"] = (now + timedelta(seconds=interval)).isoformat()
         store.save(job)
 
-    state, data = await fetch_source(job.get("source"), job.get("params"))
+    # The watch reads data as its owner (and their household) — tool servers holding
+    # personal data scope results to that principal.
+    owner = job.get("user_id") or OWNER_USER_ID
+    with using_mcp_principal(owner, _resource_group_id(owner)):
+        state, data = await fetch_source(job.get("source"), job.get("params"))
     result: Optional[bool] = None  # None == unknown
     if state == "ok":
         # Inject the previous reading so the predicate can detect a change (v2). We copy so

@@ -116,18 +116,37 @@ def test_explicit_base_profile(tmp_path, monkeypatch):
 
 # --------------------------------------------------------------- capture aggregation
 def test_mock_tools_swaps_and_restores():
-    from lib.core import TOOLS_BY_AGENT
-    from evals.harness.mocks import mock_tools
+    import asyncio
 
-    before = TOOLS_BY_AGENT["weather_agent"]
-    before_names = [t.metadata.name for t in before]
+    from lib.agents import create_mcp_subagent, toolset_for
+    from lib.core import TOOLS_BY_AGENT
+    from evals.harness.mocks import load_snapshot, mock_tools
+
+    before = TOOLS_BY_AGENT["memory_operator"]
+    weather = toolset_for("weather_agent")
+    weather_before = weather.tools()
     with mock_tools():
-        during = TOOLS_BY_AGENT["weather_agent"]
-        # same tools (names/schema preserved) but different (mocked) objects
-        assert [t.metadata.name for t in during] == before_names
-        assert during is not before
-    # restored to the exact original list object on exit
-    assert TOOLS_BY_AGENT["weather_agent"] is before
+        # harness agent: same tools (names/schema preserved), mocked objects
+        assert [t.metadata.name for t in TOOLS_BY_AGENT["memory_operator"]] == [t.metadata.name for t in before]
+        assert TOOLS_BY_AGENT["memory_operator"] is not before
+        # MCP sub-agent: built from the snapshot, with the server's tool guide, no server
+        agent = create_mcp_subagent("weather_agent")
+        names = [t.metadata.name for t in agent.tools]
+        assert names == [t["name"] for t in load_snapshot()["weather_agent"]["tools"]]
+        assert load_snapshot()["weather_agent"]["instructions"] in agent.system_prompt
+        current = next(t for t in agent.tools if t.metadata.name == "current_weather")
+        assert "Warszawa" in asyncio.run(current.acall()).raw_output
+    assert TOOLS_BY_AGENT["memory_operator"] is before
+    assert toolset_for("weather_agent").tools() is weather_before
+
+
+def test_snapshot_covers_every_configured_subagent():
+    from lib.agents import MCP_SUBAGENTS
+    from evals.harness.mocks import load_snapshot
+
+    snap = load_snapshot()
+    for name in MCP_SUBAGENTS:
+        assert name in snap and snap[name]["tools"], name
 
 
 def test_mock_fixture_lookup():

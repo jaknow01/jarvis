@@ -29,7 +29,6 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
 
 import lib.runtime.diag as diag
-import lib.runtime.observations_runner as observations_runner
 import lib.runtime.progress as progress
 import lib.runtime.scheduler_runner as scheduler_runner
 import lib.runtime.tracing as tracing
@@ -52,7 +51,6 @@ from lib.domain import (
     DEFAULT_GROUP_NAME,
     GROUP_SCOPE,
     USER_SCOPE,
-    mcp_keys,
 )
 
 logger = logging.getLogger(__name__)
@@ -437,62 +435,67 @@ async def _cmd_scheduler(args, *, conversation_id, channel) -> str:
     return f"⚠️ Nieznany argument '{sub}'. Użyj: pause / resume."
 
 
-# ================================== collectors ====================================
+# ================================ MCP tool servers ================================
 
-async def _cmd_collect(args, *, conversation_id, channel) -> str:
-    """Run the daily observation collectors NOW (finance and/or FPL), out of their schedule.
-    Useful to seed/refresh data on demand. Idempotent (upserts by date)."""
-    which = args[0].lower() if args else "all"
-    if which not in ("all", "finance", "fin", "fpl"):
-        return f"⚠️ Użycie: {PREFIX}collect [finance|fpl]  (bez argumentu = oba)"
-    lines = ["📥 KOLEKTORY (ręczne uruchomienie)", ""]
-    if which in ("all", "finance", "fin"):
-        n = await observations_runner.collect_finance_once()
-        lines.append(f"💹 finanse: zapisano {n} serii" if n else "💹 finanse: 0 (błąd/pusto — zob. /errors)")
-    if which in ("all", "fpl"):
-        ok = await observations_runner.collect_fpl_once()
-        lines.append("⚽ FPL: zapisano dzienny zrzut ligi" if ok else "⚽ FPL: pominięto (brak ligi/GW lub błąd)")
-    lines += ["", f"🕐 {_now_str()}"]
-    return "\n".join(lines)
+def _fpl_keys_toolset():
+    from lib.agents import toolset_for
 
+    return toolset_for("fpl_agent")
 
-# =================================== MCP keys =====================================
 
 async def _cmd_mcp(args, *, conversation_id, channel) -> str:
-    """List MCP API keys (self-service + config file) or revoke a self-service one."""
-    import asyncio
+    """Tool servers: listing status per sub-agent; FPL self-service keys via the server's
+    admin tools (Jarvis's FPL key must be `admin: true` on mcp-fpl)."""
+    import json
 
-    from lib.runtime.mcp_keys import McpClientRegistry
+    from lib.agents import MCP_SUBAGENTS, toolset_for
+    from lib.core import refresh_mcp_toolsets
 
     sub = args[0].lower() if args else "list"
     if sub == "revoke":
         if len(args) < 2 or not args[1].isdigit():
             return f"⚠️ Użycie: {PREFIX}mcp revoke <ID drużyny FPL>"
-        n = await asyncio.to_thread(mcp_keys.revoke_entry, int(args[1]))
+        ts = _fpl_keys_toolset()
+        if ts is None:
+            return "⚠️ Brak skonfigurowanego serwera FPL (config/subagents.yaml)."
+        out = await ts.call("revoke_issued_key", {"entry_id": int(args[1])})
+        if out.startswith("ERROR"):
+            return f"⚠️ Serwer FPL odmówił: {out[:200]}"
+        n = (json.loads(out) if out.startswith("{") else {}).get("revoked", 0)
         if not n:
             return f"ℹ️ Drużyna {args[1]} nie ma aktywnego klucza z samoobsługi."
-        return (f"🚫 Odwołano klucz drużyny {args[1]}. Serwer MCP przestanie go przyjmować w "
-                "ciągu ~15 s. (Klucze z config/mcp_clients.yaml odwołujesz w pliku.)")
-    if sub != "list":
-        return f"⚠️ Użycie: {PREFIX}mcp [list] | {PREFIX}mcp revoke <ID drużyny>"
+        return f"🚫 Odwołano klucz drużyny {args[1]}. Serwer FPL przestanie go przyjmować w ciągu ~15 s."
+    if sub not in ("list", "keys"):
+        return f"⚠️ Użycie: {PREFIX}mcp [list|keys] | {PREFIX}mcp revoke <ID drużyny>"
 
-    rows = await asyncio.to_thread(mcp_keys.active)
-    lines = ["🔑 KLUCZE MCP", "", f"Z samoobsługi ({len(rows)}):"]
-    for r in rows:
-        since = str(r.get("created_at") or "")[:10]
-        lines.append(f"• {r.get('team_name') or '?'} — {r.get('manager_name') or '?'} "
-                     f"(ID {r.get('entry_id')}) · od {since}")
-    if not rows:
-        lines.append("• brak")
-    try:
-        configured = await asyncio.to_thread(lambda: McpClientRegistry().clients())
-        lines += ["", f"Z pliku config ({len(configured)}): "
-                  + (", ".join(c.client_id for c in configured) or "brak")]
-    except Exception as e:  # noqa: BLE001
-        lines += ["", f"Z pliku config: nie da się odczytać ({type(e).__name__})"]
-    base = (os.getenv("MCP_PUBLIC_URL") or "").rstrip("/")
-    lines += ["", f"Strona: {base + '/mcp/join' if base else '/mcp/join na domenie serwera'}",
-              f"Odwołanie: {PREFIX}mcp revoke <ID>"]
+    if sub == "keys":
+        ts = _fpl_keys_toolset()
+        if ts is None:
+            return "⚠️ Brak skonfigurowanego serwera FPL."
+        out = await ts.call("list_issued_keys", {})
+        if out.startswith("ERROR"):
+            return f"⚠️ Serwer FPL: {out[:200]}"
+        data = json.loads(out) if out.startswith("{") else {}
+        lines = [f"🔑 KLUCZE FPL Z SAMOOBSŁUGI ({data.get('count', 0)})", ""]
+        for r in data.get("keys", []):
+            lines.append(f"• {r.get('team_name') or '?'} — {r.get('manager_name') or '?'} "
+                         f"(ID {r.get('entry_id')}) · od {str(r.get('created_at') or '')[:10]}")
+        lines += ["", f"Odwołanie: {PREFIX}mcp revoke <ID>"]
+        return "\n".join(lines)
+
+    await refresh_mcp_toolsets()
+    lines = ["🧰 SERWERY NARZĘDZI (MCP)", ""]
+    for name, cfg in MCP_SUBAGENTS.items():
+        ts = toolset_for(name)
+        tools = ts.tools() if ts else None
+        if not os.getenv(cfg.url_env):
+            state = f"⚪ brak {cfg.url_env}"
+        elif tools:
+            state = f"🟢 {len(tools)} narzędzi"
+        else:
+            state = f"🔴 niedostępny ({(ts.last_error or '?')[:60]})"
+        lines.append(f"{name:<15} {state} · identity={cfg.identity}")
+    lines += ["", f"Klucze FPL: {PREFIX}mcp keys · odwołanie: {PREFIX}mcp revoke <ID>"]
     return "\n".join(lines)
 
 
@@ -830,10 +833,8 @@ _COMMANDS: dict[str, _Cmd] = {
     "fire": _Cmd(_cmd_fire, "Scheduler", "/fire <id>", "odpal zadanie TERAZ (bez zmiany harmonogramu)"),
     "watch": _Cmd(_cmd_watch, "Scheduler", "/watch <id>", "szczegóły watcha: źródło, wynik, następny poll"),
     "scheduler": _Cmd(_cmd_scheduler, "Scheduler", "/scheduler [pause|resume]", "wstrzymaj/wznów odpalanie zadań"),
-    # Kolektory
-    "collect": _Cmd(_cmd_collect, "Kolektory", "/collect [finance|fpl]", "ręcznie zbierz dzienne dane (obserwacje)"),
     # MCP
-    "mcp": _Cmd(_cmd_mcp, "MCP", "/mcp [list|revoke <ID>]", "klucze API serwerów MCP (samoobsługa + plik) i odwoływanie"),
+    "mcp": _Cmd(_cmd_mcp, "MCP", "/mcp [list|keys|revoke <ID>]", "serwery narzędzi: stan, klucze FPL z samoobsługi i ich odwoływanie"),
     # Użytkownicy (multi-user)
     "user": _Cmd(_cmd_user, "Użytkownicy", "/user [list|add|assign]", "użytkownicy + whitelista tożsamości i przypisania do grup"),
     "group": _Cmd(_cmd_group, "Użytkownicy", "/group [list|add|priority|agents]", "grupy: priorytet i konfiguracja rostera agentów"),
@@ -853,7 +854,7 @@ _COMMANDS: dict[str, _Cmd] = {
     "window": _Cmd(_cmd_window, "Diagnostyka", "/window", "szacunek okna 24h Messengera"),
 }
 
-_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "Kolektory", "MCP", "Użytkownicy", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
+_GROUP_ORDER = ["Sterowanie", "Zdrowie", "Logi", "Scheduler", "MCP", "Użytkownicy", "Konfiguracja", "Rozmowa i pamięć", "Diagnostyka"]
 
 
 async def _cmd_help(args, *, conversation_id, channel) -> str:

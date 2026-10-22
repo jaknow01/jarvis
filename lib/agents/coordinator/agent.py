@@ -6,18 +6,12 @@ from lib.core import LLM_BY_AGENT, agents_decorator, agent_enabled, agent_as_too
 from lib.domain import memory
 from lib.domain.profile import Profile
 
-# Sibling factories, imported from their own feature packages (public surface). These
-# packages never import the coordinator, so there is no import cycle.
-from lib.agents.iot_operator import create_iot_agent
-from lib.agents.weather_agent import create_weather_agent
-from lib.agents.finance_agent import create_finance_agent
-from lib.agents.maps_agent import create_maps_agent
-from lib.agents.news_agent import create_news_agent
+# Harness sub-agents live in this repo; tool sub-agents come from config/subagents.yaml and
+# are backed by MCP servers (lib/agents/mcp_subagents). These packages never import the
+# coordinator, so there is no import cycle.
 from lib.agents.memory_operator import create_memory_agent
-from lib.agents.fpl_agent import create_fpl_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
-from lib.agents.math_agent import create_math_agent
-from lib.agents.calendar_agent import create_calendar_agent
+from lib.agents.mcp_subagents import mcp_subagent_catalog
 
 from lib.agents.coordinator.no_data import TOOL_NAME as NO_DATA_TOOL, no_data_tool
 
@@ -27,18 +21,12 @@ logger = logging.getLogger(__name__)
 # Canonical catalog of subagents (name, factory, tool description). The coordinator's
 # roster for a turn is the subset enabled by the acting principal's resolved profile
 # (see lib/domain/profile.py); with no profile it falls back to the global env toggles.
+# A tool sub-agent whose MCP server has never been listed is left out of the turn.
 def subagent_catalog() -> list[tuple]:
     return [
-        ("iot_operator", create_iot_agent, "Controls smart devices (lighting) in a houshold."),
-        ("weather_agent", create_weather_agent, "Checks current weather and weather forecast at a given location"),
-        ("finance_agent", create_finance_agent, "Retrieves and analyzes financial data."),
-        ("maps_agent", create_maps_agent, "Controls access to maps and navigation. Can calculate routes."),
-        ("news_agent", create_news_agent, "Summarizes current world and financial-market news."),
+        *mcp_subagent_catalog(),
         ("memory_operator", create_memory_agent, "Stores, retrieves and updates the user's long-term preferences and facts."),
-        ("fpl_agent", create_fpl_agent, "Fantasy Premier League: upcoming fixtures, PL teams, the owner's squad and mini-league standings."),
         ("scheduler_agent", create_scheduler_agent, "Schedules Jarvis to act on its own later: one-off reminders, recurring proactive briefs, AND conditional watches that poll live data and notify ONLY when a condition becomes true ('daj znać, gdy...', 'powiadom, kiedy...'); plus listing/cancelling them."),
-        ("math_agent", create_math_agent, "Performs exact calculations over numbers you provide: averages, min/max, sums, standard deviation, percentage change, linear trends and correlation. Use it whenever a request needs arithmetic/statistics over figures gathered from other agents (e.g. analyzing a financial or FPL time-series) instead of computing yourself."),
-        ("calendar_agent", create_calendar_agent, "Reads and manages the owner's Apple (iCloud) calendar: list events in a time window ('co mam jutro/w tym tygodniu', 'czy jestem wolny...'), add events ('dodaj do kalendarza...'), edit them, and delete them (deletion is confirmed with the user first)."),
     ]
 
 
@@ -155,10 +143,14 @@ def create_coordinator_agent(profile: Profile | None = None) -> FunctionAgent:
 
     tools = []
     for sub_name, factory, description in subagents:
-        if is_on(sub_name):
-            tools.append(agent_as_tool(factory(), tool_name=sub_name, tool_description=description))
-        else:
+        if not is_on(sub_name):
             logger.info(f"Subagent '{sub_name}' not in roster; not exposed to coordinator")
+            continue
+        agent = factory()
+        if agent is None:  # its MCP server has not been reachable yet
+            logger.warning(f"Subagent '{sub_name}' unavailable (tool server not listed); left out this turn")
+            continue
+        tools.append(agent_as_tool(agent, tool_name=sub_name, tool_description=description))
 
     force = force_tool_choice()
     if force:

@@ -1,5 +1,14 @@
 """Tests for env-controlled subagent enable/disable and coordinator wiring."""
+import pytest
+
 import lib.agents as agents
+from tests.conftest_mcp import listed_subagents
+
+
+@pytest.fixture(autouse=True)
+def _all_servers_listed():
+    with listed_subagents():
+        yield
 
 
 def test_agent_enabled_defaults_true_when_unset(monkeypatch):
@@ -60,8 +69,20 @@ def test_coordinator_does_not_expose_composer_and_has_no_handoffs(monkeypatch):
     assert not coord.can_handoff_to
 
 
+def test_coordinator_leaves_out_subagents_without_a_listing(monkeypatch):
+    from lib.agents import toolset_for
+
+    ts = toolset_for("fpl_agent")
+    saved, ts._tools = ts._tools, None
+    try:
+        names = {t.metadata.name for t in agents.create_coordinator_agent().tools}
+    finally:
+        ts._tools = saved
+    assert "fpl_agent" not in names and "weather_agent" in names
+
+
 def test_every_agent_gets_environment_preamble(monkeypatch):
-    for factory in (agents.create_composer_agent, agents.create_weather_agent, agents.create_coordinator_agent):
+    for factory in (agents.create_composer_agent, agents.AGENTS["weather_agent"], agents.create_coordinator_agent):
         agent = factory()
         assert isinstance(agent.system_prompt, str)
         assert "Environment context" in agent.system_prompt
