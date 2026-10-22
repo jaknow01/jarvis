@@ -2,9 +2,36 @@ import logging
 
 from llama_index.core.agent.workflow import FunctionAgent
 
-from lib.core import LLM_BY_AGENT, TOOLS_BY_AGENT, agents_decorator
+from lib.core import LLM_BY_AGENT, TOOLS_BY_AGENT, agents_decorator, env_str, register_mcp_toolset
 
 logger = logging.getLogger(__name__)
+
+
+def fpl_tools_source() -> str:
+    """``FPL_TOOLS_SOURCE``: ``local`` (default, in-process tools) or ``mcp`` (the FPL MCP
+    server at ``FPL_MCP_URL``, authenticated with ``FPL_MCP_API_KEY``)."""
+    return (env_str("FPL_TOOLS_SOURCE", "local") or "local").lower()
+
+
+# The remote twin of TOOLS_BY_AGENT["fpl_agent"]. The engine lists it before each turn
+# (refresh_mcp_toolsets) only while FPL_TOOLS_SOURCE=mcp. `whoami` is for people's
+# clients (Claude apps), not for this agent.
+FPL_MCP = register_mcp_toolset(
+    "fpl", url_env="FPL_MCP_URL", key_env="FPL_MCP_API_KEY",
+    enabled=lambda: fpl_tools_source() == "mcp", exclude=frozenset({"whoami"}),
+)
+
+
+def _fpl_tools(name: str) -> list:
+    if fpl_tools_source() == "mcp":
+        remote = FPL_MCP.tools()
+        if remote:
+            return remote
+        # Server unreachable or misconfigured: keep the agent working on the in-process
+        # tools rather than leaving it with nothing to call.
+        logger.warning("FPL tools: MCP source unavailable (%s) — falling back to local tools",
+                       FPL_MCP.last_error or "not loaded yet")
+    return TOOLS_BY_AGENT[name]
 
 
 @agents_decorator(name="fpl_agent")
@@ -58,7 +85,7 @@ def create_fpl_agent() -> FunctionAgent:
             set it - do not invent an id. Run independent tools in parallel when a question spans\
             several of these (e.g. fixtures + squad). Report ids, points and prices exactly as returned."
         ),
-        tools=TOOLS_BY_AGENT[name],
+        tools=_fpl_tools(name),
         llm=llm,
     )
 

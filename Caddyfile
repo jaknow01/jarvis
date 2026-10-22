@@ -8,5 +8,12 @@
 }
 
 ogarniacz.duckdns.org {
-	reverse_proxy agent:8002
+	# Public MCP tool servers (docs/MCP.md): /mcp/health, /mcp/<server>[/<key>].
+	# No `log` directive on purpose — an access log would record keys sent in the URL.
+	handle /mcp/* {
+		reverse_proxy mcp:8010
+	}
+	handle {
+		reverse_proxy agent:8002
+	}
 }

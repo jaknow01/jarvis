@@ -17,3 +17,6 @@ docker-compose.override.yml
 
 # Declarative principals config holds Messenger PSIDs — keep local (example is committed)
 config/principals.yaml
+
+# MCP API-key holders (key hashes + friends FPL ids): keep local, the example is committed
+config/mcp_clients.yaml

@@ -37,6 +37,7 @@ dependencies = [
     "llama-index-llms-openai (>=0.7,<0.8)",
     "llama-index-llms-anthropic (>=0.11,<0.12)",
     "llama-index-llms-openai-like (>=0.7,<0.8)",
+    "mcp (>=2.3,<3.0)",
 ]
 
 [tool.poetry]

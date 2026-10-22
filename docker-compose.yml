@@ -41,6 +41,31 @@ services:
       mlflow:
         condition: service_started
 
+  mcp:
+    # Public MCP tool servers (docs/MCP.md) — same image, separate process, so a restart
+    # or crash here never touches the Messenger webhook. Caddy routes /mcp/* here.
+    build: .
+    container_name: jarvis_mcp
+    restart: unless-stopped
+    command: ["poetry", "run", "python", "-m", "app.mcp_server"]
+    volumes:
+      - ./app:/app/app
+      - ./lib:/app/lib
+      - ./scripts:/app/scripts   # for: docker compose exec mcp poetry run python -m scripts.mcp_key …
+      - ./data:/app/data
+      # API-key holders (config/mcp_clients.yaml, gitignored) — re-read on change.
+      - ./config:/app/config:ro
+    env_file: .env
+    ports:
+      - "127.0.0.1:8010:8010"   # local debugging only; the public path is via Caddy
+    environment:
+      MCP_PORT: "8010"
+      # Shares the FPL reference/league caches with the agent.
+      DATABASE_URL: postgresql://jarvis:jarvis@postgres:5432/jarvis
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   caddy:
     image: caddy:2
     container_name: jarvis_caddy
@@ -54,6 +79,7 @@ services:
       - caddy_config:/config
     depends_on:
       - agent
+      - mcp
 
   redis:
     image: redis:7

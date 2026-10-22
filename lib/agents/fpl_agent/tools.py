@@ -8,13 +8,18 @@ deal with names, not raw ids."""
 
 import asyncio
 import logging
-import os
 from datetime import date, timedelta
 from typing import Literal, Optional
 
 from llama_index.core.workflow import Context
 
 from lib.core import tool_ownership, function_tool, app_context
+from lib.agents.fpl_agent.identity import (
+    resolve_entry_id,
+    resolve_league_id,
+    missing_entry_tip,
+    missing_league_tip,
+)
 from lib.agents.fpl_agent.fpl_api import (
     fetch_fpl,
     fetch_fpl_bootstrap,
@@ -32,22 +37,16 @@ from lib.agents.fpl_agent.fpl_api import (
 
 logger = logging.getLogger(__name__)
 
-# The owner's own manager ("entry") id and default league id are read from the env
-# (FPL_ENTRY_ID / FPL_LEAGUE_ID), like the other API config. Each tool also accepts an
-# explicit id override for ad-hoc lookups.
+# The owner's own manager ("entry") id and default league id: an explicit tool argument,
+# else the identity bound for this call (the MCP server binds the caller's API-key
+# defaults), else FPL_ENTRY_ID / FPL_LEAGUE_ID from the env. See identity.py.
 
 def _fpl_entry_id(override: Optional[int]) -> Optional[int]:
-    if override is not None:
-        return int(override)
-    raw = os.getenv("FPL_ENTRY_ID")
-    return int(raw) if raw and raw.strip().isdigit() else None
+    return resolve_entry_id(override)
 
 
 def _fpl_league_id(override: Optional[int]) -> Optional[int]:
-    if override is not None:
-        return int(override)
-    raw = os.getenv("FPL_LEAGUE_ID")
-    return int(raw) if raw and raw.strip().isdigit() else None
+    return resolve_league_id(override)
 
 
 @tool_ownership("fpl_agent")
@@ -250,8 +249,8 @@ async def get_my_fpl_squad(ctx: Context,
         Note: a squad only becomes public after that gameweek's deadline has passed.
 
     entry_id: Optional[int] = None
-        The FPL manager ("entry") id to look up. If omitted, the owner's own id from
-        the FPL_ENTRY_ID environment variable is used.
+        The FPL manager ("entry") id to look up. If omitted, the owner's
+        configured default manager id is used.
 
     Output:
         JSON object with the resolved gameweek, a per-gameweek summary (points, bank,
@@ -262,8 +261,7 @@ async def get_my_fpl_squad(ctx: Context,
     if eid is None:
         return {
             "Error": "No FPL manager id is configured.",
-            "Tip": "Set FPL_ENTRY_ID in the environment (your manager id, e.g. from the "
-                   "URL fantasy.premierleague.com/entry/<ID>/event/1) or pass entry_id explicitly.",
+            "Tip": missing_entry_tip(),
         }
     logger.info(f"Getting FPL squad for entry={eid}, gameweek={gameweek or 'current'}")
     bootstrap, gw = None, None  # referenced by the error hint if the try fails early
@@ -323,8 +321,8 @@ async def get_my_fpl_leagues(ctx: Context, entry_id: Optional[int] = None) -> di
         Context in which the tool operates
 
     entry_id: Optional[int] = None
-        The FPL manager ("entry") id. If omitted, the owner's own id from the
-        FPL_ENTRY_ID environment variable is used.
+        The FPL manager ("entry") id. If omitted, the owner's configured
+        default manager id is used.
 
     Output:
         JSON object with the manager's name and a list of their classic leagues
@@ -334,7 +332,7 @@ async def get_my_fpl_leagues(ctx: Context, entry_id: Optional[int] = None) -> di
     if eid is None:
         return {
             "Error": "No FPL manager id is configured.",
-            "Tip": "Set FPL_ENTRY_ID in the environment or pass entry_id explicitly.",
+            "Tip": missing_entry_tip(),
         }
     logger.info(f"Getting FPL leagues for entry={eid}")
     try:
@@ -371,8 +369,8 @@ async def get_fpl_league_standings(ctx: Context,
         Context in which the tool operates
 
     league_id: Optional[int] = None
-        The classic league id to fetch. If omitted, the owner's default league from the
-        FPL_LEAGUE_ID environment variable is used. Use get_my_fpl_leagues to discover
+        The classic league id to fetch. If omitted, the owner's configured
+        default league is used. Use get_my_fpl_leagues to discover
         league ids.
 
     limit: int = 25
@@ -386,8 +384,7 @@ async def get_fpl_league_standings(ctx: Context,
     if lid is None:
         return {
             "Error": "No FPL league id is configured.",
-            "Tip": "Set FPL_LEAGUE_ID in the environment, pass league_id explicitly, or call "
-                   "get_my_fpl_leagues to find your league ids.",
+            "Tip": missing_league_tip(),
         }
     logger.info(f"Getting FPL standings for league={lid}")
     try:
@@ -462,7 +459,7 @@ async def get_league_history(ctx: Context,
         for the whole league.
 
     league_id: Optional[int] = None
-        The classic league id. If omitted, the owner's default FPL_LEAGUE_ID is used.
+        The classic league id. If omitted, the owner's configured default league is used.
 
     Output:
         JSON with the resolved league/window and the requested view; or a message when no
@@ -473,7 +470,7 @@ async def get_league_history(ctx: Context,
     if lid is None:
         return {
             "Error": "No FPL league id is configured.",
-            "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
+            "Tip": missing_league_tip(),
         }
     try:
         days = max(1, int(days))
@@ -642,8 +639,8 @@ async def get_fpl_live(ctx: Context,
         to only get the match scores/events (e.g. when no manager id is configured).
 
     entry_id: Optional[int] = None
-        The FPL manager ("entry") id for the squad section. If omitted, the owner's own
-        id from FPL_ENTRY_ID is used.
+        The FPL manager ("entry") id for the squad section. If omitted, the owner's
+        configured default manager id is used.
 
     Output:
         JSON object with `any_live` (is any match in play), `live_matches` (in-progress
@@ -699,7 +696,7 @@ async def get_fpl_live(ctx: Context,
         if eid is None:
             result["my_players"] = {
                 "Error": "No FPL manager id is configured.",
-                "Tip": "Set FPL_ENTRY_ID in the environment or pass entry_id explicitly.",
+                "Tip": missing_entry_tip(),
             }
             return result
         try:
@@ -807,8 +804,8 @@ async def who_owns_player_in_league(ctx: Context,
         you can ask the user which one they meant.
 
     league_id: Optional[int] = None
-        The classic league to scan. If omitted, the owner's default league from
-        FPL_LEAGUE_ID is used. Use get_my_fpl_leagues to discover league ids.
+        The classic league to scan. If omitted, the owner's configured
+        default league is used. Use get_my_fpl_leagues to discover league ids.
 
     gameweek: Optional[int] = None
         The gameweek whose squads to check. If omitted, the current gameweek is used.
@@ -825,7 +822,7 @@ async def who_owns_player_in_league(ctx: Context,
     if lid is None:
         return {
             "Error": "No FPL league id is configured.",
-            "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
+            "Tip": missing_league_tip(),
         }
     logger.info(f"Scanning league {lid} for owners of '{player}'")
     bootstrap, gw = None, None  # referenced by the error hint if the try fails early
@@ -913,8 +910,8 @@ async def get_league_ownership(ctx: Context,
         Context in which the tool operates
 
     league_id: Optional[int] = None
-        The classic league to scan. If omitted, the owner's default league from
-        FPL_LEAGUE_ID is used.
+        The classic league to scan. If omitted, the owner's configured
+        default league is used.
 
     gameweek: Optional[int] = None
         The gameweek whose squads to aggregate. If omitted, the current gameweek is used.
@@ -934,7 +931,7 @@ async def get_league_ownership(ctx: Context,
     if lid is None:
         return {
             "Error": "No FPL league id is configured.",
-            "Tip": "Set FPL_LEAGUE_ID, pass league_id, or call get_my_fpl_leagues to find your league ids.",
+            "Tip": missing_league_tip(),
         }
     logger.info(f"Aggregating ownership for league {lid}")
     bootstrap, gw = None, None  # referenced by the error hint if the try fails early

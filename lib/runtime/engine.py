@@ -35,6 +35,7 @@ from lib.core import (
     reset_model_overrides,
     group_scope_for,
     env_int,
+    refresh_mcp_toolsets,
 )
 from lib.domain import (
     conversations,
@@ -267,7 +268,10 @@ async def handle_message(
         # lib/runtime/history_window.py). Read-only and LLM-free — the summary fold runs
         # off the critical path (scheduled after the reply below). Falls back to full
         # history when disabled.
-        history = await build_chat_history(conversation_id)
+        # Alongside it: refresh remote (MCP) tool listings for agents set to use them —
+        # agent factories are sync, so the listing must be cached before the coordinator
+        # is built. A no-op while fresh; never raises (see lib/core/mcp_client.py).
+        history, _ = await asyncio.gather(build_chat_history(conversation_id), refresh_mcp_toolsets())
         input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
 
         # 1) Coordinator gathers results from the subagent tools and writes the answer.

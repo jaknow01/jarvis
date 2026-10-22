@@ -37,6 +37,12 @@ from lib.core.model_profiles import (
     using_profile,
 )
 from lib.core.agent_tool import agent_as_tool
+from lib.core.mcp_client import (
+    McpToolset,
+    MCP_TOOLSETS,
+    register_mcp_toolset,
+    refresh_mcp_toolsets,
+)
 from lib.core.tooling import function_tool
 from lib.core.env import environment_preamble, TIMEZONE, BASE_CURRENCY, LOCALE
 from lib.core.logger import Logger
@@ -74,6 +80,10 @@ __all__ = [
     "load_profile",
     "using_profile",
     "agent_as_tool",
+    "McpToolset",
+    "MCP_TOOLSETS",
+    "register_mcp_toolset",
+    "refresh_mcp_toolsets",
     "function_tool",
     "environment_preamble",
     "TIMEZONE",

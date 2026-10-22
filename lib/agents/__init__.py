@@ -20,7 +20,12 @@ from lib.agents.news_agent import create_news_agent
 from lib.agents.maps_agent import create_maps_agent
 from lib.agents.memory_operator import create_memory_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
-from lib.agents.fpl_agent import create_fpl_agent
+from lib.agents.fpl_agent import (
+    create_fpl_agent,
+    FplIdentity,
+    current_fpl_identity,
+    using_fpl_identity,
+)
 from lib.agents.math_agent import create_math_agent
 from lib.agents.calendar_agent import create_calendar_agent
 from lib.agents.composer import create_composer_agent
@@ -40,6 +45,9 @@ __all__ = [
     "create_memory_agent",
     "create_scheduler_agent",
     "create_fpl_agent",
+    "FplIdentity",
+    "current_fpl_identity",
+    "using_fpl_identity",
     "create_math_agent",
     "create_calendar_agent",
 ]

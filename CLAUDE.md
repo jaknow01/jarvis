@@ -48,6 +48,7 @@ the package `__init__`, never from a submodule directly.
 
 ```
 app/main.py            Entry point: load env, configure logging, run the chatbot loop
+app/mcp_server.py      Entry point for the public MCP tool servers (uvicorn, port 8010; docs/MCP.md)
 
 lib/core/              LEAF layer — no imports from elsewhere in lib
   registry.py          The 3 registries (TOOLS_BY_AGENT/AGENTS/LLM_BY_AGENT) + decorators
@@ -55,6 +56,8 @@ lib/core/              LEAF layer — no imports from elsewhere in lib
                          app_context()/bind_app_context() contextvar accessors
   agent_tool.py        agent_as_tool() — wrap a sub-agent as a coordinator FunctionTool
   tooling.py           function_tool — LlamaIndex analogue of the old @function_tool
+  mcp_client.py        McpToolset: a remote MCP server's tools as FunctionTools (cached
+                         listing, refresh_mcp_toolsets() per turn; see docs/MCP.md)
   env.py               environment_preamble() — date/time/locale block for every agent
   llm.py               Provider-agnostic LLM resolution: model-prefix parser +
                          PROVIDER_BUILDERS + build_llm(agent_name) config resolution
@@ -80,7 +83,8 @@ lib/agents/            Coordinator + one feature subpackage per agent
   <agent>/<helper>.py  that agent's private helpers, e.g.
                          iot_operator/{device,tuya_link}.py (Tuya model + link),
                          maps_agent/directions.py, weather_agent/forecast.py,
-                         finance_agent/{fx.py, history.py}, fpl_agent/fpl_api.py,
+                         finance_agent/{fx.py, history.py},
+                         fpl_agent/{fpl_api.py, identity.py (whose "my squad/league")},
                          math_agent/ (deterministic calc tools; no data source of its own)
 
 lib/runtime/           TOP layer — wires the network to a transport / runs jobs
@@ -94,14 +98,19 @@ lib/runtime/           TOP layer — wires the network to a transport / runs job
   admin.py             owner-only "/" command surface (ops/diagnostics; bypasses agents)
   diag.py              leaf: in-memory diagnostic state (uptime, last-turn, inbound)
   tracing.py           MLflow tracing setup + last_trace_id()
+  mcp_server.py        public MCP tool servers: API-key gateway + EXPOSABLE (code-only
+                         allowlist: today fpl) over Streamable HTTP
+  mcp_keys.py          API-key holders (config/mcp_clients.yaml, hashes only) + rate limit
 
 app/db/                Postgres access layer: connection, schema, repos, migration
                          (incl. conversation_repo.py — conversations + messages;
                          observations_repo.py — daily time-series;
                          fpl_history_repo.py — permanent daily FPL league snapshots)
 scripts/               One-shot ops scripts: backfill_finance.py (year of daily finance history),
-                         backfill_fpl_history.py (per-gameweek FPL league history)
+                         backfill_fpl_history.py (per-gameweek FPL league history),
+                         mcp_key.py (new/hash/list MCP API keys)
 config/models/         Model profiles (prod.yaml, local.yaml) — pick with MODEL_PROFILE
+config/mcp_clients.yaml MCP API-key holders (gitignored; example committed)
 config/providers.yaml  Named model servers (e.g. gpu-server → local vLLM URL)
 data/                  JSON "databases" (devices, preferences, maps memory, memory)
 logs/                  Per-run log files
@@ -238,7 +247,7 @@ place rather than removed.
 | `weather_agent` | Current weather + forecast | OpenWeather (current) + Open-Meteo (forecast) + date/time | Working |
 | `finance_agent` | Financial data | Frankfurter (FX rates) + Yahoo Finance (stock/index quotes, incl. GPW via `.WA`) | Working |
 | `news_agent` | News & market news search | Tavily search (news + finance topics) | Working (uses `gpt-5-mini` reasoning model) |
-| `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools |
+| `fpl_agent` | Fantasy Premier League | Unofficial FPL API (keyless): fixtures + FDR, PL teams, owner's squad, mini-league standings | Working — needs `FPL_ENTRY_ID` (and optional `FPL_LEAGUE_ID`) in `.env` for the "my squad"/"my league" tools. **Also served as a public MCP server** (`/mcp/fpl`, API keys with per-key default entry/league — `fpl_agent/identity.py`; a bound key identity never falls back to the owner's env ids), and `FPL_TOOLS_SOURCE=mcp` makes Jarvis itself use that server (falls back to local tools while unreachable). See `docs/MCP.md` |
 | `memory_operator` | Long-term user memory (preferences/facts) | JSON store (`lib/domain/memory.py`): save/get/update/delete | Working — wired into the coordinator; a memory profile is injected into the coordinator prompt each turn (`memory.summary()`, cached with a short TTL — `MEMORY_SUMMARY_CACHE_TTL_SECONDS`, default 60s — and invalidated on writes, so it isn't a DB read on the hot path every turn). See `docs/MEMORY.md` |
 | `scheduler_agent` | Proactive cron jobs / reminders + conditional watches | JSON or Postgres store (`lib/domain/scheduler.py`): create/list/delete/update scheduled jobs; `create_watch` for conditional watches | Working — the coordinator delegates "remind me…/every morning…"; due jobs fire out of band via `lib/runtime/scheduler_runner.py` (started in the webhook `lifespan`) and are delivered on Messenger (tag HUMAN_AGENT) or the log. **Conditional watches** (`kind="watch"`) poll a data source and notify on a false→true edge. The previous poll's reading is injected into the predicate as `data["_previous"]` (None first poll) so it can detect a CHANGE ("new points appeared"), and `repeating=True` keeps the watch armed to notify on every future edge (else one-shot). See `docs/SCHEDULER.md` |
 | `math_agent` | Deterministic calculations over numbers | Pure Python (`statistics`/`math`): `calculate_statistics`, `percentage_change`, `linear_trend`, `correlation` | Working — general-purpose calculator (no data source of its own); the coordinator feeds it figures gathered from other agents (e.g. a finance/FPL time-series) so arithmetic/stats are exact, not LLM-guessed |
@@ -385,6 +394,14 @@ local store) on purpose, to avoid churning the lockfile. `TRACING_ENABLED` (same
 falsy-parsing as `agent_enabled()`) is a master kill-switch that disables tracing
 even with a URI set. Tracing is out-of-band and failures are swallowed, so it never
 affects agent behavior. See `docs/TRACING.md`.
+
+**MCP tool servers:** `FPL_TOOLS_SOURCE` (`local` default / `mcp`) + `FPL_MCP_URL` +
+`FPL_MCP_API_KEY` (Jarvis as a client); server side `MCP_HOST`/`MCP_PORT` (0.0.0.0/8010),
+`MCP_SERVERS`, `MCP_CLIENTS_CONFIG`, `MCP_RATE_LIMIT_PER_MINUTE` (60),
+`MCP_TOOL_TIMEOUT_SECONDS` (90); client side `MCP_TOOLS_TTL_SECONDS` (300),
+`MCP_RETRY_SECONDS` (30), `MCP_LIST_TIMEOUT_SECONDS` (10), `MCP_CALL_TIMEOUT_SECONDS` (100).
+The server runs as the compose `mcp` service behind Caddy's `/mcp/*`, with access logging off
+(keys may ride in the URL). Only agents in `EXPOSABLE` (code) can be served. See `docs/MCP.md`.
 
 **Per-subagent toggles:** each subagent is enabled by default and can be hidden from
 the coordinator by setting `AGENT_<NAME>_ENABLED` to a falsy value (0/false/no/off) —
