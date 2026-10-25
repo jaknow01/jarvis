@@ -9,7 +9,7 @@ github.com/jaknow01/
 ├── jarvis           ← harness: coordinator, composer, silnik tury, historia, pamięć,
 │                      scheduler (+ watche), Messenger, admin. Klient MCP.
 ├── jarvis-mcp-kit   ← biblioteka: klucze API, klienci, X-On-Behalf-Of, limity, logi bez kluczy
-├── mcp-fpl          ← FPL + strona /mcp/join + historia ligi (własna baza)   [publiczny]
+├── mcp-fpl          ← FPL + strona /join + historia ligi (własna baza)       [publiczny]
 ├── mcp-finance      ← kursy, notowania, tickery, historia cen (własna baza)
 ├── mcp-weather      ← pogoda (OpenWeather) i prognoza (Open-Meteo)
 ├── mcp-news         ← wyszukiwanie newsów (Tavily)
@@ -17,6 +17,7 @@ github.com/jaknow01/
 ├── mcp-maps         ← trasy + zapisane miejsca per gospodarstwo
 ├── mcp-calendar     ← kalendarz iCloud per użytkownik
 ├── mcp-home         ← oświetlenie Tuya per gospodarstwo; działa W DOMU
+├── homelab-gitops   ← (prywatne) manifesty k3s dla Argo CD
 └── (mcp-web)        ← przeglądanie stron — po zmergowaniu gałęzi web-browsing
 ```
 
@@ -58,52 +59,36 @@ i profile modeli działają bez zmian. Dodanie serwera = wpis w tym pliku + URL/
 - **Evale** nie potrzebują serwerów: `evals/fixtures/mcp_tools.json` to snapshot listingów
   (odśwież: `poetry run python -m evals.snapshot_tools`), wywołania zwracają fixtury.
 
-## Wdrożenie dziś: serwer domowy (docker compose)
+## Wdrożenie: k3s przez GitOps (Argo CD)
 
-`docker-compose.yml` podnosi Jarvisa i wszystkie serwery z obrazów `ghcr.io/jaknow01/mcp-*`.
-Konfiguracja serwerów leży w `mcp-config/<serwer>/` (gitignored):
+Klaster czyta stan z **prywatnego repo `jaknow01/homelab-gitops`** (app-of-apps dla Argo CD,
+Kustomize na każdą usługę, sekrety jako Sealed Secrets). Szczegóły i bootstrap: README tego repo.
 
 ```
-mcp-config/
-├── fpl/       .env (DATABASE_URL, FPL_LEAGUES, MCP_PUBLIC_URL, JOIN_NOTIFY_*), clients.yaml
-├── finance/   .env (DATABASE_URL, OBSERVATIONS_*), clients.yaml
-├── weather/   .env (OPENWEATHER_API_KEY), clients.yaml
-├── news/      .env (TAVILY_API_KEY), clients.yaml
-├── math/      clients.yaml
-├── maps/      .env (GOOGLE_MAPS_API_KEY), clients.yaml, places.yaml
-├── calendar/  .env (ICLOUD_CALDAV_USER, ICLOUD_APP_PASSWORD), clients.yaml, accounts.yaml
-└── home/      clients.yaml, home.yaml       (urządzenia z data/smart_device_data/)
+kod (publiczne repo) ──tag v*──► GitHub Actions ──► ghcr.io/jaknow01/<repo>:<tag> (prywatny)
+                                       └──commit "newTag"──► homelab-gitops ──► Argo CD ──► k3s
 ```
 
-1. **Klucze Jarvisa** — dla każdego serwera (CLI jest w każdym obrazie):
-   `docker compose run --rm --no-deps --entrypoint jarvis-mcp-keys mcp-<serwer> new jarvis --servers <serwer> --trusted`
-   (dla `fpl` dodaj `--admin`). Wydrukowany blok wklej do `mcp-config/<serwer>/clients.yaml`,
-   a klucz do `.env` Jarvisa jako `MCP_<SERWER>_KEY`. Twój stary klucz FPL i klucze znajomych z `/mcp/join`
-   trzeba wydać ponownie (stara tabela `mcp_api_keys` jest w bazie Jarvisa).
-2. **Dane osobiste**: `mcp-maps import-legacy data/maps_data/maps_memory.json --principals <id gospodarstwa>`
-   → `places.yaml`; `accounts.yaml` i `home.yaml` wg przykładów w repo serwerów.
-   Id gospodarstwa to `group_id` z `principals` (np. `default`) — zobacz `/group list`.
-3. **Bazy**: `deploy/postgres/README.md` (osobna baza i login dla FPL i finansów), potem
-   `docker compose run --rm mcp-fpl backfill` i `docker compose run --rm mcp-finance backfill`.
-4. **Kolektory** — crontab hosta:
-   ```
-   0 4 * * *    cd /ścieżka/jarvis && docker compose run --rm mcp-fpl collect
-   15 */3 * * * cd /ścieżka/jarvis && docker compose run --rm mcp-fpl warm-cache
-   0 23 * * *   cd /ścieżka/jarvis && docker compose run --rm mcp-finance collect
-   ```
-5. `docker compose up -d` — Caddy wystawia na zewnątrz tylko `/mcp/fpl` i `/mcp/join`;
-   `/mcp` w Messengerze pokazuje, czy wszystkie serwery odpowiadają.
+- **Namespace `mcp`**: wszystkie serwery poza oświetleniem; `mcp-fpl` i `mcp-finance` mają
+  **własne kontenery Postgresa** (StatefulSet + PVC) i CronJoby (`collect`, `warm-cache`).
+- **Namespace `jarvis`**: Jarvis z własnym Postgresem oraz `home-gateway` (WireGuard do routera
+  domowego → `mcp-home` na Raspberry; NetworkPolicy wpuszcza tylko Jarvisa).
+- **Wejście z internetu: Cloudflare Tunnel** (cloudflared w klastrze, hostnames w panelu):
+  `mcp-fpl.1nogaulica-2czerwonydywan.win` → `mcp-fpl.mcp.svc` (Claude znajomych: `/mcp/<klucz>`,
+  strona kluczy: `/join`) oraz `jarvis.1nogaulica-2czerwonydywan.win` ze ścieżką `^/webhook`
+  (Messenger). Reszta tylko w klastrze; `/internal/notify` nigdy nie jest publiczne.
+- **Jarvis łączy się z serwerami po DNS klastra** (`http://mcp-<x>.mcp.svc.cluster.local/mcp/<x>`),
+  klucze `MCP_<X>_KEY` są w sekrecie `jarvis-env`.
+- **Wydanie**: tag w repo usługi → CI buduje obraz i podbija tag w repo GitOps (sekret
+  `GITOPS_TOKEN` w repo usługi) → Argo wdraża. Wycofanie = `git revert` w repo GitOps.
 
-## Docelowo: k3s
+## Lokalnie: docker compose
 
-- Serwery: `deploy/kubernetes.yaml` w każdym repo (Deployment + Service; FPL i finance z
-  CronJobami; FPL z Ingressem). Sekrety per serwis jako k8s Secret.
-- Postgres: jedna instancja, bazy/loginy jak w `deploy/postgres/`.
-- Jarvis: `deploy/k8s/jarvis.yaml` (namespace `jarvis`, etykieta `app: jarvis` — wymagana
-  przez NetworkPolicy bramki domowej).
-- Oświetlenie: `mcp-home` zostaje na Raspberry (docker, sieć hosta), klaster dochodzi do niego
-  przez pod `home-gateway` z WireGuardem do routera; router wpuszcza tylko Pi:8010, a
-  NetworkPolicy tylko Jarvisa — patrz README `mcp-home`.
+`docker-compose.yml` podnosi Jarvisa i wszystkie serwery z obrazów GHCR na jednej maszynie
+(do testów). Konfiguracja serwerów w `mcp-config/<serwer>/` (gitignored: `.env`, `clients.yaml`,
+`places.yaml`, `accounts.yaml`, `home.yaml`), bazy wg `deploy/postgres/README.md`, kolektory
+przez `docker compose run --rm mcp-fpl collect` (cron). Klucz Jarvisa dla serwera:
+`docker compose run --rm --no-deps --entrypoint jarvis-mcp-keys mcp-<serwer> new jarvis --servers <serwer> --trusted`.
 
 ## Bezpieczeństwo (skrót)
 

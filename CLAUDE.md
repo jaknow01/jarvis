@@ -110,7 +110,7 @@ config/subagents.yaml  Tool sub-agents: description, url/key env vars, identity,
 config/models/         Model profiles (prod.yaml, local.yaml) — pick with MODEL_PROFILE
 config/providers.yaml  Named model servers (e.g. gpu-server → local vLLM URL)
 mcp-config/<server>/   Per-server env + config for the compose deployment (gitignored)
-deploy/                postgres/ (per-service databases), k8s/jarvis.yaml
+deploy/postgres/       per-service databases for the local compose stack
 evals/fixtures/mcp_tools.json   MCP tool-schema snapshot for offline evals
 data/                  JSON "databases" when DATABASE_URL is unset
 logs/                  Per-run log files
@@ -270,11 +270,13 @@ poetry install
 poetry run python app/main.py
 ```
 
-`docker-compose.yml` runs the whole stack: Jarvis (Messenger webhook), Postgres, Redis,
-MLflow, Caddy and every MCP server from its published image (`ghcr.io/jaknow01/mcp-*`), with
-per-server config in `mcp-config/<server>/` — see `docs/MCP.md` for the setup steps (keys,
-databases, backfills, collector crontab). Without the tool servers, Jarvis still runs but its
-tool sub-agents are absent from the roster.
+**Production runs on k3s via GitOps**: the private repo `jaknow01/homelab-gitops` (Argo CD
+app-of-apps, Kustomize per service, Sealed Secrets, Cloudflare Tunnel for the two public
+hostnames). A `v*` tag here builds `ghcr.io/jaknow01/jarvis:<tag>` (`.github/workflows/ci.yml`)
+and bumps its tag in that repo. The image is self-contained (code + committed `config/`);
+`principals.yaml` and env come from Secrets. `docker-compose.yml` is the local all-in-one
+stack (every MCP server from GHCR, config in `mcp-config/<server>/`). See `docs/MCP.md`.
+Without the tool servers, Jarvis still runs but its tool sub-agents are absent from the roster.
 
 ### Models / providers
 Each agent's model is a `provider/model` string; the provider is the part before the
@@ -424,9 +426,9 @@ test against the pre-extraction tool schemas). Evals run against
   principals) lives in **Postgres** (`jarvis` database) when `DATABASE_URL` is set, else in
   JSON under `data/`; the DB layer is isolated in `app/db/` (same JSON/Postgres backend
   selection everywhere). The per-turn hot-path read uses `load_history_and_summary()` (one
-  connection). Tool-server data lives in **their own databases** on the same instance
-  (`mcp_fpl`: FPL reference/league caches, daily league history, self-service keys;
-  `mcp_finance`: daily observations) — see `deploy/postgres/README.md`. The old `fpl_*`,
+  connection). Every service that needs a database runs **its own Postgres container** next to it
+  (on k3s: `jarvis-postgres`, `mcp-fpl-postgres`, `mcp-finance-postgres`; see homelab-gitops) —
+  FPL caches/history/self-service keys and finance observations live there. The old `fpl_*`,
   `observations` and `mcp_api_keys` tables in the `jarvis` database are unused and can be
   dropped after the cut-over. Migrate with `python -m app.db.migrate`; see `docs/STORAGE.md`.
   JSON stores under `data/` are gitignored except `.gitkeep`.

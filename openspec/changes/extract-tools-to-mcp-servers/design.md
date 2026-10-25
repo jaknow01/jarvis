@@ -129,10 +129,11 @@ the engine for the turn and read by the toolset when it opens the HTTP client.
 *Alternatives:* a key per user/household (Jarvis would hold N keys per server); signed JWTs
 from Jarvis (stronger, but over-engineered for one trusted caller inside the cluster).
 
-### D6. Per-service databases on a shared Postgres instance
+### D6. Each service that needs a database runs its own Postgres container
 
-One Postgres instance in the cluster with databases `jarvis`, `mcp_fpl`, `mcp_finance`, each
-with its own login granted only on its database. `mcp-fpl` tables: `fpl_reference`,
+*(Revised with the owner: maximum modularity.)* `jarvis`, `mcp-fpl` and `mcp-finance` each run
+their own Postgres StatefulSet (one database, one login, own PVC) next to the service, so any
+service can be moved, rebuilt or deleted without touching another's data. `mcp-fpl` tables: `fpl_reference`,
 `fpl_league_squads`, `fpl_league_history`, `mcp_api_keys`; `mcp-finance`: `observations`.
 Schemas are created by the service on start (`CREATE … IF NOT EXISTS`, as today).
 History is rebuilt by each service's `backfill` command (FPL per gameweek; finance a year of
@@ -140,8 +141,9 @@ daily rows). Granularity loss accepted: the FPL backfill restores one snapshot p
 not the previous daily snapshots. `mcp-maps` / `mcp-home` / `mcp-calendar` need no database:
 their per-principal registries are small config files/Secrets.
 
-*Alternatives:* SQLite per service (simpler, but the owner prefers Postgres and already runs
-it); a shared schema in Jarvis's DB (couples deployment and breaks "deploy anywhere").
+*Alternatives:* one shared instance with a database per service (fewer containers, but couples
+operations and failure domains — rejected by the owner); SQLite per service; a shared schema in
+Jarvis's DB (breaks "deploy anywhere").
 
 ### D7. Collectors as one-shot commands → k8s CronJobs
 
@@ -185,13 +187,32 @@ Secret. The Pi is not a cluster node and has no cluster credentials.
 `mcp-home` on a public port (light control reachable from the whole internet behind only a
 key); node-level WireGuard (every pod on the node could reach home).
 
-### D10. Exposure model in k3s
+### D10. Exposure model: Cloudflare Tunnel, two public hostnames
 
-Namespaces `jarvis` (Jarvis, home-gateway) and `mcp` (all other servers), Postgres in its
-own namespace. Only `mcp-fpl` gets an Ingress (Traefik + cert-manager) at the public domain
-with paths `/mcp/fpl…` and `/mcp/join`; all others are ClusterIP. Per-service k8s Secrets hold
-external-API credentials and the clients file. Images are built by GitHub Actions in each repo
-to `ghcr.io/jaknow01/<repo>:<tag>`.
+The cluster is reached from the internet only through the owner's Cloudflare Tunnel
+(`cloudflared` running as a pod, public hostnames managed in the Cloudflare dashboard) on
+`1nogaulica-2czerwonydywan.win`: `mcp-fpl.<domain>` → `mcp-fpl.mcp.svc` (friends' Claude apps
+use `/mcp/<key>`, the key page is `/join`; kit v0.3.0 adds these short paths) and
+`jarvis.<domain>` restricted to `^/webhook` (Messenger). TLS terminates at Cloudflare; no
+Ingress or cert-manager. Everything else is ClusterIP-only; `/internal/notify` is never public.
+Namespaces: `mcp` (servers) and `jarvis` (Jarvis, its Postgres, home-gateway).
+
+*Alternative:* Traefik Ingress + cert-manager — unnecessary with the tunnel already in place.
+
+### D14. GitOps: private manifests repo, CI bumps image tags, Sealed Secrets
+
+All manifests live in a private repo `jaknow01/homelab-gitops` (Argo CD app-of-apps, Kustomize
+per component), not in the public code repos: it holds cluster details and sealed secrets, and
+deploy commits stay out of code history. Each code repo's CI, on a `v*` tag, builds a multi-arch
+image into GHCR (private packages, pulled with a `ghcr-pull` secret per namespace) and commits
+the new `newTag` into the component's `kustomization.yaml` (repo secret `GITOPS_TOKEN`; skipped
+with a warning when absent). Secrets are SealedSecrets produced with `scripts/seal.sh`; the
+Sealed Secrets controller is itself an Argo application (sync wave 0).
+
+*Alternatives:* manifests in each code repo (public exposure of cluster details, CI committing
+into the repo it builds from); Argo CD Image Updater (fewer secrets in CI, but another
+controller and git write-back credentials in the cluster); SOPS / External Secrets (more moving
+parts for a single-owner cluster).
 
 ### D11. Watches call tools over MCP
 

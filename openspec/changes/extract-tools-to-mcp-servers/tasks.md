@@ -127,18 +127,18 @@
   tavily, trafilatura, …) and per-domain env vars from `.env_template`
 - [x] 10.5 Full test suite green; `grep` confirms no import of removed packages
 
-## 11. Deployment (k3s)
+## 11. Deployment (k3s via GitOps)
 
-- [ ] 11.1 Postgres: databases `jarvis`, `mcp_fpl`, `mcp_finance` with per-service logins
-  granted only on their own database; verify cross-database access is denied
-- [ ] 11.2 Namespaces `jarvis`, `mcp`; per-service Secrets (external API keys, clients files,
-  database URLs); Jarvis Secret with server keys (trusted) and notify token
-- [ ] 11.3 Deploy the eight cluster servers (Deployment + ClusterIP + probes)
-- [ ] 11.4 Ingress + cert-manager for `mcp-fpl` (`/mcp/fpl…`, `/mcp/join`) on the chosen hostname
-- [ ] 11.5 CronJobs: `mcp-fpl collect` (04:00), `mcp-fpl warm-cache` (every 3 h),
-  `mcp-finance collect` (23:00), all `concurrencyPolicy: Forbid`, `Europe/Warsaw`
-- [ ] 11.6 Run `mcp-fpl backfill` and `mcp-finance backfill`; check history tools answer
-- [ ] 11.7 Deploy Jarvis with `config/subagents.yaml` pointing at in-cluster URLs
+- [x] 11.1 Private repo `homelab-gitops`: Argo app-of-apps, Kustomize per component, own Postgres
+  StatefulSets for jarvis / mcp-fpl / mcp-finance, CronJobs, Sealed Secrets app, `scripts/seal.sh`
+- [x] 11.2 CI in every code repo: multi-arch image to GHCR on `v*`, bump `newTag` in homelab-gitops
+- [x] 11.3 Jarvis: self-contained image (fixed `COPY lib` path) and CI
+- [x] 11.4 Short public paths for mcp-fpl on its own subdomain (`/mcp/<key>`, `/join`; kit v0.3.0)
+- [ ] 11.5 Owner: Argo CD repo credentials, apply `bootstrap/root.yaml`
+- [ ] 11.6 Owner: GHCR packages private + `ghcr-pull` secrets; `GITOPS_TOKEN` in each code repo
+- [ ] 11.7 Owner: seal per-component secrets (SECRETS.md), incl. clients files with Jarvis's keys
+- [ ] 11.8 Owner: Cloudflare public hostnames (mcp-fpl, jarvis `^/webhook`), Messenger webhook URL
+- [ ] 11.9 Run `mcp-fpl backfill` and `mcp-finance backfill`; check history tools answer
 
 ## 12. Home network
 
@@ -146,9 +146,9 @@
   peer only to `<pi-lan-ip>:8010`, dropping everything else; document the rule
 - [ ] 12.2 Raspberry Pi: run `mcp-home` in Docker (restart policy, device registry file,
   clients file with Jarvis's trusted key)
-- [ ] 12.3 `home-gateway` pod: userspace WireGuard client + TCP forwarder to the Pi, WireGuard
-  key from a Secret; ClusterIP service `mcp-home` in namespace `jarvis`
-- [ ] 12.4 NetworkPolicy: only Jarvis pods may reach `home-gateway`
+- [x] 12.3 `home-gateway` pod: userspace WireGuard client + TCP forwarder to the Pi, WireGuard
+  key from a Secret; ClusterIP service `mcp-home` in namespace `jarvis` (manifests in homelab-gitops)
+- [x] 12.4 NetworkPolicy: only Jarvis pods may reach `home-gateway`
 - [ ] 12.5 Verify: Jarvis toggles a light; a pod in `mcp` cannot reach the gateway; from the
   tunnel peer, any other home address/port is unreachable; a request without key gets 401;
   with the router offline, other sub-agents still answer

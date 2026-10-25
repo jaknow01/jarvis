@@ -1,0 +1,16 @@
+.git
+.venv
+venv
+.env
+.claude
+**/__pycache__
+.pytest_cache
+data
+logs
+mcp-config
+sandbox
+evals
+tests
+smoke-tests
+openspec
+config/principals.yaml
