@@ -36,6 +36,11 @@ subagents:
     identity: group           # none | user | group → X-On-Behalf-Of
     persona: ""               # opcjonalnie, ponad przewodnik serwera
     max_calls_per_turn: {}    # opcjonalne budżety wywołań na turę
+    # opcjonalnie:
+    uds_env: MCP_X_UDS        # serwer jako sidecar w podzie: gniazdo Unix zamiast URL-a
+    admin_key_env: MCP_X_ADMIN_KEY  # drugi klucz (admin) — tylko dla komend `/`, nigdy dla modelu
+    admin_command: k          # `/k <narzędzie> [arg…]` woła narzędzia admina serwera
+    sensitive: true           # dane poza logami, historią i trace'ami (patrz niżej)
 ```
 
 Nazwy sub-agentów (`fpl_agent`, `iot_operator`, …) zostały — rostery w `principals.yaml`
@@ -53,7 +58,20 @@ i profile modeli działają bez zmian. Dodanie serwera = wpis w tym pliku + URL/
 - **Watche** (`scheduler_agent/watch_sources.py`) wołają te same narzędzia przez MCP — te same
   identyfikatory źródeł (`finance.fx`, `fpl.live`, …), właściciel watcha jako principal.
 - **`/mcp`** (admin): stan serwerów; `/mcp keys` i `/mcp revoke <ID>` — klucze FPL z
-  samoobsługi (narzędzia admina `mcp-fpl`; klucz Jarvisa tam musi mieć `admin: true`).
+  samoobsługi (narzędzia admina `mcp-fpl`, wołane kluczem `MCP_FPL_ADMIN_KEY`; dopóki go nie
+  ma, zwykłym kluczem sub-agenta — wtedy decyduje serwer).
+- **Narzędzia admina nigdy nie trafiają do modelu.** Serwer (jarvis-mcp-kit ≥ 0.4) ukrywa
+  narzędzia `admin_only` przed kluczem bez `admin: true` i odrzuca je jak nieistniejące; klient
+  Jarvisa dodatkowo wyrzuca z listingu dla agentów wszystko, co ma znacznik
+  `_meta["jarvis/admin_only"]`, niezależnie od klucza. Komendy `/` używają osobnego zestawu z
+  kluczem admina, który nie jest odświeżany dla agentów ani im przekazywany.
+- **`/k`** (admin, `admin_command: k` przy `cluster_agent`): `/k` = lista komend serwera
+  mcp-cluster, `/k <komenda> [arg…]` = wywołanie (argumenty pozycyjnie, w kolejności parametrów
+  narzędzia). Bez modelu; serwer zwraca gotowy tekst na telefon.
+- **Sub-agenci `sensitive`** (`cluster_agent`): działają tylko na żywej turze (nie w zadaniach z
+  harmonogramu), gdy `AGENT_<NAZWA>_ENABLED` jest jawnie włączone i tracing jest wyłączony. Tura,
+  w której zostali wywołani, trafia do historii jako notka zamiast treści (więc i do
+  podsumowania), a webhook loguje tylko długość odpowiedzi; to samo dla odpowiedzi `/k`.
 - **`POST /internal/notify`** (Bearer `INTERNAL_NOTIFY_TOKEN`): serwery wysyłają tu krótkie
   komunikaty dla właściciela (np. `mcp-fpl` przy każdym nowym kluczu) → Messenger.
 - **Evale** nie potrzebują serwerów: `evals/fixtures/mcp_tools.json` to snapshot listingów

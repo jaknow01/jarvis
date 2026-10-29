@@ -9,6 +9,13 @@
 #                       sent as X-On-Behalf-Of
 #   persona             optional extra instructions on top of the server's own tool guide
 #   max_calls_per_turn  optional per-tool call budget within one user turn
+#   uds_env             optional: env var with a Unix socket path — the server is a sidecar in
+#                       this pod and is reached over that socket, not the network (url_env optional)
+#   admin_key_env       optional: env var with Jarvis's ADMIN key for that server, used only by
+#                       `/` commands — the sub-agent (the model) always uses key_env, never this
+#   admin_command       optional: `/<name> <tool> [args]` calls the server's admin-only tools
+#   sensitive           optional: its data stays out of logs, stored history and traces; it runs
+#                       only on live turns with AGENT_<NAME>_ENABLED explicitly on and tracing off
 #
 # The tool guide itself comes from the server (`instructions`), so updating a server updates
 # the sub-agent. Agent names match principals.yaml rosters and model profiles.
@@ -48,6 +55,7 @@ subagents:
     description: "Fantasy Premier League: upcoming fixtures, live matches, PL teams and players, the owner's squad, mini-league standings, ownership and history."
     url_env: MCP_FPL_URL
     key_env: MCP_FPL_KEY
+    admin_key_env: MCP_FPL_ADMIN_KEY   # /mcp keys | revoke
     identity: none
 
   math_agent:
@@ -68,3 +76,12 @@ subagents:
   #   key_env: MCP_WEB_KEY
   #   identity: none
   #   max_calls_per_turn: {read_page: 6, open_url: 6, follow_link: 6, web_search: 4}
+
+  cluster_agent:
+    description: "Read-only view of the owner's k3s cluster where Jarvis and its tool servers run: which pods and deployments are up, restarts and their reasons, recent Kubernetes warnings, a component's recent logs, deployed versions and Argo CD sync/health. It cannot change anything — restarts are the owner's /k command."
+    uds_env: MCP_CLUSTER_UDS          # sidecar in the Jarvis pod; no network path
+    key_env: MCP_CLUSTER_KEY          # not admin: the model sees read-only tools only
+    admin_key_env: MCP_CLUSTER_ADMIN_KEY
+    admin_command: k                  # /k status | pods | logs | restart | db …
+    identity: user
+    sensitive: true

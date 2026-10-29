@@ -26,7 +26,7 @@ from typing import Awaitable, Callable
 from llama_index.core.agent.workflow import ToolCallResult
 from llama_index.core.workflow import Context
 
-from lib.agents import create_coordinator_agent, create_composer_agent, subagent_names
+from lib.agents import create_coordinator_agent, create_composer_agent, is_sensitive, subagent_names
 from lib.core import (
     Ctx,
     bind_app_context,
@@ -48,6 +48,7 @@ from lib.domain import (
     DEFAULT_GROUP_ID,
 )
 from lib.runtime import diag, progress
+from lib.runtime.reply import Reply
 from lib.runtime.history_window import build_chat_history, schedule_summary_fold
 from lib.runtime.tracing import last_trace_id
 
@@ -61,6 +62,14 @@ _SYSTEM_PROMPT_MARKER = (
     "[ZAPLANOWANE ZADANIE — to jest automatyczne wywołanie z harmonogramu, nie "
     "bieżąca wiadomość użytkownika. Wykonaj poniższe zadanie i przygotuj gotową "
     "wiadomość do użytkownika:]\n"
+)
+
+
+# Stored in the conversation history instead of a reply built from a sensitive sub-agent
+# (e.g. cluster state): the owner got the full text, but it is not kept in the database, in
+# the rolling summary or in later prompts.
+SENSITIVE_HISTORY_PLACEHOLDER = (
+    "[Odpowiedź zawierała dane poufne (np. stan klastra) — treść nie jest przechowywana w historii.]"
 )
 
 
@@ -241,7 +250,8 @@ async def handle_message(
             shared `Ctx` because one `Ctx` is reused across concurrent Messenger senders.
 
     Returns:
-        The composer's final natural-language reply (Polish).
+        The composer's final natural-language reply (Polish), as a :class:`Reply` (a ``str``)
+        whose ``sensitive`` flag tells the transport not to log its content.
     """
     # Resolve the acting principal's profile (roster + per-agent model/reasoning) and
     # compose a per-turn Ctx scoped to that principal: a cached group scope for shared
@@ -284,7 +294,9 @@ async def handle_message(
         #    slow turn pushes one interim "still working" ping (naming the subagents
         #    already done). Ordering is race-free: the transport sends the final reply
         #    only after this function returns, so any ping necessarily precedes it.
-        coordinator = create_coordinator_agent(profile)
+        # Sensitive sub-agents (cluster) only on a live turn of the person themself, never in a
+        # scheduled job that would run unattended.
+        coordinator = create_coordinator_agent(profile, allow_sensitive=(origin == "user"))
         handler = coordinator.run(
             user_msg=input_text, chat_history=history, ctx=Context(coordinator)
         )
@@ -303,16 +315,19 @@ async def handle_message(
         )
         reply = str(await composer.run(user_msg=composer_input, ctx=Context(composer)))
 
-        # 3) Persist the turn (user msg + assistant reply), stamping the MLflow trace id.
+        # 3) Persist the turn (user msg + assistant reply), stamping the MLflow trace id. A reply
+        #    built from a sensitive sub-agent is stored as a placeholder, never as its content.
+        sensitive = any(is_sensitive(name) for name in turn_ctx.subagent_calls)
+        stored = SENSITIVE_HISTORY_PLACEHOLDER if sensitive else reply
         trace_id = last_trace_id()
-        conversations.record_turn(conversation_id, text, reply, trace_id=trace_id)
+        conversations.record_turn(conversation_id, text, stored, trace_id=trace_id)
         diag.record_turn_stats(conversation_id, time.monotonic() - started, trace_id)
 
         # 4) Fold any freshly-evicted history into the running summary in the background,
         #    now that this turn is recorded — off the critical path, so the reply above was
         #    never blocked on the compressor LLM call. Coalesced per conversation.
         schedule_summary_fold(conversation_id)
-        return reply
+        return Reply(reply, sensitive=sensitive)
     finally:
         reset_mcp_principal(principal_token)
         reset_app_context(token)

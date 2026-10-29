@@ -438,9 +438,78 @@ async def _cmd_scheduler(args, *, conversation_id, channel) -> str:
 # ================================ MCP tool servers ================================
 
 def _fpl_keys_toolset():
-    from lib.agents import toolset_for
+    """mcp-fpl with Jarvis's FPL *admin* key (``admin_key_env``); the model's own key is not
+    admin. Falls back to the agent's toolset while no separate admin key is configured
+    (migration), in which case the server decides whether that key may manage keys."""
+    from lib.agents import admin_toolset_for, toolset_for
 
-    return toolset_for("fpl_agent")
+    return admin_toolset_for("fpl_agent") or toolset_for("fpl_agent")
+
+
+# ============================ server admin tools (/k …) ============================
+# A sub-agent entry with `admin_command: k` + `admin_key_env` makes `/k` call that server's
+# admin-only tools with the admin key: deterministic, no model involved. The server formats
+# each result as phone-ready text, so nothing here knows what the tools do.
+
+def _arg_types(schema: dict) -> list[tuple[str, str]]:
+    """(parameter name, JSON type) in declaration order."""
+    out = []
+    for name, spec in (schema.get("properties") or {}).items():
+        kinds = [spec.get("type")] + [s.get("type") for s in spec.get("anyOf") or [] if isinstance(s, dict)]
+        kind = next((k for k in kinds if k and k != "null"), "string")
+        out.append((name, kind))
+    return out
+
+
+def _coerce(raw: str, kind: str):
+    if kind == "integer":
+        return int(raw)
+    if kind == "number":
+        return float(raw)
+    if kind == "boolean":
+        return raw.strip().lower() in ("1", "true", "yes", "tak", "on")
+    return raw
+
+
+def _tool_usage(command: str, tool) -> str:
+    params = " ".join(f"[{n}]" if n not in (tool.input_schema.get("required") or []) else f"<{n}>"
+                      for n, _ in _arg_types(tool.input_schema))
+    summary = (tool.description or "").strip().splitlines()[0] if tool.description else ""
+    summary = re.sub(r"^Admin:\s*", "", summary)
+    return f"{PREFIX}{command} {tool.name}{(' ' + params) if params else ''} — {summary}"
+
+
+async def _cmd_server_admin(command: str, args, *, conversation_id, channel) -> str:
+    from lib.agents import admin_command_target, admin_toolset_for
+    from lib.runtime.reply import Reply
+
+    cfg = admin_command_target(command)
+    toolset = admin_toolset_for(cfg.name) if cfg else None
+    if toolset is None:
+        return f"⚠️ {PREFIX}{command}: brak klucza admina ({cfg.admin_key_env if cfg else '?'})."
+    sensitive = cfg.sensitive
+    try:
+        tools = {t.name: t for t in await toolset.list_admin_tools()}
+    except Exception as e:
+        logger.warning("%s%s: listing admin tools failed (%s)", PREFIX, command, type(e).__name__)
+        return Reply(f"⚠️ Serwer {cfg.name} niedostępny ({type(e).__name__}).", sensitive=sensitive)
+    if not args or args[0] in ("help", "?"):
+        lines = [f"🛠️ {PREFIX}{command} — {cfg.name}", ""] + [_tool_usage(command, t) for t in tools.values()]
+        return Reply("\n".join(lines) if tools else "Serwer nie udostępnia komend admina.", sensitive=sensitive)
+    tool = tools.get(args[0])
+    if tool is None:
+        return Reply(f"❓ Nieznana komenda {PREFIX}{command} {args[0]}. Wpisz {PREFIX}{command}, żeby zobaczyć listę.",
+                     sensitive=sensitive)
+    params = _arg_types(tool.input_schema)
+    values = args[1:]
+    if len(values) > len(params):
+        return Reply(f"⚠️ Za dużo argumentów.\n{_tool_usage(command, tool)}", sensitive=sensitive)
+    try:
+        arguments = {name: _coerce(raw, kind) for (name, kind), raw in zip(params, values)}
+    except ValueError:
+        return Reply(f"⚠️ Zły typ argumentu.\n{_tool_usage(command, tool)}", sensitive=sensitive)
+    logger.info("%s%s %s (%d args)", PREFIX, command, tool.name, len(arguments))  # never the values
+    return Reply(await toolset.call(tool.name, arguments), sensitive=sensitive)
 
 
 async def _cmd_mcp(args, *, conversation_id, channel) -> str:
@@ -865,6 +934,13 @@ async def _cmd_help(args, *, conversation_id, channel) -> str:
             if cmd.group == group:
                 lines.append(f"{cmd.usage} — {cmd.summary}")
         lines.append("")
+    from lib.agents import MCP_SUBAGENTS
+
+    servers = [c for c in MCP_SUBAGENTS.values() if c.admin_command]
+    if servers:
+        lines.append("— Serwery narzędzi —")
+        lines += [f"{PREFIX}{c.admin_command} [komenda …] — komendy admina serwera {c.name}" for c in servers]
+        lines.append("")
     lines.append("/help — ta lista")
     return "\n".join(lines).rstrip()
 
@@ -893,6 +969,15 @@ async def maybe_handle(text: str, *, conversation_id: str, channel: str = "messe
         return await _cmd_help([], conversation_id=conversation_id, channel=channel) if is_admin else None
     name, args = parts[0].lower(), parts[1:]
     cmd = _COMMANDS.get(name)
+    if not cmd and is_admin:
+        from lib.agents import admin_command_target
+
+        if admin_command_target(name) is not None:
+            try:
+                return await _cmd_server_admin(name, args, conversation_id=conversation_id, channel=channel)
+            except Exception as e:
+                logger.exception("Server admin command %s failed", name)
+                return f"⚠️ Komenda {PREFIX}{name} wywaliła się: {type(e).__name__}"
     if not cmd:
         # Don't leak the command catalog to non-admins; just fall through.
         return (f"❓ Nieznana komenda: {PREFIX}{name}\nWpisz {PREFIX}help, żeby zobaczyć listę."

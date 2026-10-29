@@ -14,7 +14,10 @@ from lib.agents.memory_operator import create_memory_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
 from lib.agents.mcp_subagents import (
     MCP_SUBAGENTS,
+    admin_command_target,
+    admin_toolset_for,
     create_mcp_subagent,
+    is_sensitive,
     mcp_subagent_catalog,
     toolset_for,
 )
@@ -24,7 +27,10 @@ from lib.agents.coordinator import create_coordinator_agent, subagent_names
 __all__ = [
     "AGENTS",
     "MCP_SUBAGENTS",
+    "admin_command_target",
+    "admin_toolset_for",
     "agent_enabled",
+    "is_sensitive",
     "create_coordinator_agent",
     "create_composer_agent",
     "create_mcp_subagent",

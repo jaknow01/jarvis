@@ -18,6 +18,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# httpx logs every request URL at INFO, and the Send API URL carries the page access token
+# (`?access_token=…`) — keep that out of the logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 GRAPH_API_VERSION = "v22.0"
 SEND_API_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
 

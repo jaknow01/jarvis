@@ -1,6 +1,7 @@
 from lib.core import Cache, Ctx
 from lib.domain import seed_owner, apply_config_file, OWNER_USER_ID
 from lib.runtime.engine import handle_message, ensure_default_group_roster
+from lib.runtime.reply import loggable
 from lib.runtime import admin, diag
 import logging
 
@@ -34,9 +35,9 @@ class Chatbot():
             diag.record_inbound("repl")
             admin_reply = await admin.maybe_handle(text, conversation_id="repl", channel="repl")
             if admin_reply is not None:
-                logger.conversation(f"[ADMIN]\n{admin_reply}")
+                logger.conversation(f"[ADMIN]\n{loggable(admin_reply)}")
                 continue
 
             reply = await handle_message("repl", text, ctx, notify=notify, user_id=OWNER_USER_ID)
 
-            logger.conversation(f"[ASSISTANT] {reply}")
+            logger.conversation(f"[ASSISTANT] {loggable(reply)}")

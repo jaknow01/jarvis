@@ -252,6 +252,7 @@ place rather than removed.
 | `calendar_agent` | `mcp-calendar` (`identity: user`) | iCloud CalDAV account per user; gated delete |
 | `iot_operator` | `mcp-home` on the home network (`identity: group`) | Tuya devices per household; reached via host networking (compose) or the WireGuard `home-gateway` (k3s) |
 | `web_agent` | pending `mcp-web` | Lives on the `web-browsing` branch until extracted |
+| `cluster_agent` | `mcp-cluster` (**private**; sidecar in the Jarvis pod, Unix socket `MCP_CLUSTER_UDS` — no network path) | Read-only cluster status for the owner (pods, deployments, events, redacted logs, Argo apps). `sensitive: true`: off unless `AGENT_CLUSTER_AGENT_ENABLED` is explicitly on and tracing is off, live turns only, stored in history as a placeholder, reply not logged. Changes (restart) and DB queries only via the deterministic `/k` command with a separate admin key; the server hides admin-only tools from the model's key |
 
 ## Running it
 

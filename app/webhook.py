@@ -27,6 +27,7 @@ from fastapi import BackgroundTasks, FastAPI, Request, Response
 
 from lib.core import Cache, Ctx, Logger
 from lib.domain import principals, is_admin
+from lib.runtime.reply import loggable
 from lib.runtime import (
     admin,
     diag,
@@ -192,7 +193,7 @@ async def _process(ctx: Ctx, sender_id: str, text: str, user_id: str) -> None:
         logger.exception("Admin router failed for %s", sender_id)
         admin_reply = None
     if admin_reply is not None:
-        logger.conversation(f"[ADMIN -> {sender_id}] {admin_reply}")
+        logger.conversation(f"[ADMIN -> {sender_id}] {loggable(admin_reply)}")
         await send_message(PAGE_ACCESS_TOKEN, sender_id, admin_reply)
         return
 
@@ -218,7 +219,7 @@ async def _process(ctx: Ctx, sender_id: str, text: str, user_id: str) -> None:
         reply = "Przepraszam, coś poszło nie tak po mojej stronie."
     finally:
         diag.clear_running(conversation_id, turn)
-    logger.conversation(f"[ASSISTANT -> {sender_id}] {reply}")
+    logger.conversation(f"[ASSISTANT -> {sender_id}] {loggable(reply)}")
     await send_message(PAGE_ACCESS_TOKEN, sender_id, reply)
 
 

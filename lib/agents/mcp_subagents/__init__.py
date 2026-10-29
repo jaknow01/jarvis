@@ -12,6 +12,10 @@ from lib.agents.mcp_subagents.config import (
 )
 from lib.agents.mcp_subagents.factory import (
     MCP_SUBAGENTS,
+    admin_command_target,
+    admin_toolset_for,
+    is_sensitive,
+    sensitive_allowed,
     create_mcp_subagent,
     mcp_subagent_catalog,
     register_mcp_subagents,
@@ -22,6 +26,10 @@ register_mcp_subagents()
 
 __all__ = [
     "MCP_SUBAGENTS",
+    "admin_command_target",
+    "admin_toolset_for",
+    "is_sensitive",
+    "sensitive_allowed",
     "SubagentConfig",
     "SubagentsConfigError",
     "create_mcp_subagent",

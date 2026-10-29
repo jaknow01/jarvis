@@ -11,7 +11,7 @@ from lib.domain.profile import Profile
 # coordinator, so there is no import cycle.
 from lib.agents.memory_operator import create_memory_agent
 from lib.agents.scheduler_agent import create_scheduler_agent
-from lib.agents.mcp_subagents import mcp_subagent_catalog
+from lib.agents.mcp_subagents import is_sensitive, mcp_subagent_catalog, sensitive_allowed
 
 from lib.agents.coordinator.no_data import TOOL_NAME as NO_DATA_TOOL, no_data_tool
 
@@ -45,13 +45,17 @@ def subagent_names() -> list[str]:
 
 
 @agents_decorator(name="coordinator")
-def create_coordinator_agent(profile: Profile | None = None) -> FunctionAgent:
+def create_coordinator_agent(profile: Profile | None = None, allow_sensitive: bool = True) -> FunctionAgent:
+    """``allow_sensitive=False`` (scheduled / system turns) leaves sensitive sub-agents out."""
     name = "coordinator"
     llm = LLM_BY_AGENT[name]()
 
     # A turn passes the acting principal's resolved profile; without one (legacy callers,
-    # some tests) fall back to the global env toggles so behavior is unchanged.
+    # some tests) fall back to the global env toggles so behavior is unchanged. A sensitive
+    # sub-agent (e.g. cluster_agent) additionally needs its explicit switch and no tracing.
     def is_on(agent_name: str) -> bool:
+        if is_sensitive(agent_name) and not (allow_sensitive and sensitive_allowed(agent_name)):
+            return False
         return profile.is_enabled(agent_name) if profile is not None else agent_enabled(agent_name)
 
     user_id = profile.user_id if profile is not None else None

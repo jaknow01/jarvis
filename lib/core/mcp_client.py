@@ -18,11 +18,22 @@ Per call:
 
 The remote input schema is passed to the model verbatim; each call opens a short Streamable
 HTTP connection (servers are stateless). API keys are redacted from logs and messages.
+
+**Unix socket** — a toolset with ``uds_env`` set talks to a server listening on that socket
+(a sidecar in the same pod, e.g. mcp-cluster) instead of over the network; ``url_env`` then
+only names the path (default ``http://localhost/mcp``).
+
+**Admin-only tools** — tools a server marks admin-only (``_meta["jarvis/admin_only"]``, see
+jarvis-mcp-kit) are dropped from every model-facing listing, whatever key is used; the server
+already hides them from non-admin keys. Jarvis's deterministic ``/`` commands reach them
+through a separate *admin* toolset holding the admin key (:func:`register_admin_toolset`),
+which is never refreshed for or handed to an agent.
 """
 
 import asyncio
 import copy
 import logging
+import os
 import re
 import time
 from contextlib import contextmanager
@@ -46,6 +57,8 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx2").setLevel(logging.WARNING)
 
 IDENTITY_MODES = ("none", "user", "group")
+ADMIN_META_KEY = "jarvis/admin_only"   # set by jarvis-mcp-kit on admin-only tools
+DEFAULT_UDS_URL = "http://localhost/mcp"
 
 
 @dataclass(frozen=True)
@@ -124,6 +137,18 @@ class RemoteTool:
     description: str
     input_schema: dict
     read_only: Optional[bool] = None
+    admin_only: bool = False
+
+
+def _is_admin_only(tool) -> bool:
+    return bool((getattr(tool, "meta", None) or {}).get(ADMIN_META_KEY))
+
+
+def _remote_tool(t) -> RemoteTool:
+    return RemoteTool(name=t.name, description=t.description or t.name,
+                      input_schema=dict(t.input_schema or {}),
+                      read_only=getattr(t.annotations, "read_only_hint", None) if t.annotations else None,
+                      admin_only=_is_admin_only(t))
 
 
 class McpToolset:
@@ -133,12 +158,14 @@ class McpToolset:
                  enabled: Callable[[], bool] = lambda: True,
                  exclude: frozenset[str] = frozenset(),
                  identity: str = "none",
-                 budgets: Optional[dict[str, int]] = None):
+                 budgets: Optional[dict[str, int]] = None,
+                 uds_env: Optional[str] = None):
         if identity not in IDENTITY_MODES:
             raise ValueError(f"identity must be one of {IDENTITY_MODES}, got {identity!r}")
         self.name = name
         self.url_env = url_env
         self.key_env = key_env
+        self.uds_env = uds_env
         self.identity = identity
         self.budgets = dict(budgets or {})
         self._enabled = enabled
@@ -156,8 +183,17 @@ class McpToolset:
         return bool(self._enabled())
 
     @property
+    def uds(self) -> Optional[str]:
+        """The Unix socket path when this server is reached over a socket, else None."""
+        return env_str(self.uds_env) if self.uds_env else None
+
+    @property
     def url(self) -> Optional[str]:
-        return env_str(self.url_env)
+        url = env_str(self.url_env) if self.url_env else None
+        return url or (DEFAULT_UDS_URL if self.uds else None)
+
+    def _where(self) -> str:
+        return f"socket {self.uds}" if self.uds else _redact(self.url or "?")
 
     def on_behalf_of(self) -> Optional[str]:
         principal = _PRINCIPAL.get()
@@ -176,6 +212,12 @@ class McpToolset:
         return headers
 
     def _http(self, timeout: float) -> httpx2.AsyncClient:
+        uds = self.uds
+        if uds:
+            if not os.path.exists(uds):
+                raise ConnectionError(f"socket {uds} not found (is the server's container running?)")
+            return httpx2.AsyncClient(transport=httpx2.AsyncHTTPTransport(uds=uds),
+                                      headers=self._headers(), timeout=timeout)
         return httpx2.AsyncClient(headers=self._headers(), timeout=timeout)
 
     def _client(self, timeout: float) -> Client:
@@ -217,9 +259,10 @@ class McpToolset:
         if not self.enabled():
             return
         if not self.url:
+            missing = " / ".join(e for e in (self.url_env, self.uds_env) if e)
             if self.last_error is None:
-                logger.error("MCP toolset %s enabled but %s is not set", self.name, self.url_env)
-            self.last_error = f"{self.url_env} is not set"
+                logger.error("MCP toolset %s enabled but %s is not set", self.name, missing)
+            self.last_error = f"{missing} is not set"
             return
         if not force and not self._due(time.monotonic()):
             return
@@ -235,14 +278,18 @@ class McpToolset:
                 logger.warning("MCP toolset %s: listing tools failed (%s); %s", self.name, self.last_error,
                                "keeping the previous listing" if self._tools else "no remote tools yet")
                 return
-            remote = [
-                RemoteTool(name=t.name, description=t.description or t.name,
-                           input_schema=dict(t.input_schema or {}),
-                           read_only=getattr(t.annotations, "read_only_hint", None) if t.annotations else None)
-                for t in listing.tools if t.name not in self._exclude
-            ]
+            # Admin-only tools never reach an agent, even if this key happens to be admin.
+            remote = [_remote_tool(t) for t in listing.tools
+                      if t.name not in self._exclude and not _is_admin_only(t)]
             self.load_snapshot(remote, instructions)
-            logger.info("MCP toolset %s: %d tools from %s", self.name, len(remote), _redact(self.url))
+            logger.info("MCP toolset %s: %d tools from %s", self.name, len(remote), self._where())
+
+    async def list_admin_tools(self) -> list[RemoteTool]:
+        """A fresh listing of the server's admin-only tools (for ``/`` commands; not cached,
+        never given to an agent). Raises on failure."""
+        timeout = env_int("MCP_LIST_TIMEOUT_SECONDS", 10, minimum=1)
+        listing, _ = await asyncio.wait_for(self._list(timeout), timeout=timeout)
+        return [_remote_tool(t) for t in listing.tools if _is_admin_only(t)]
 
     # ── calls ─────────────────────────────────────────────────────────────────
     def _spend_budget(self, tool_name: str) -> Optional[str]:
@@ -300,6 +347,23 @@ def register_mcp_toolset(name: str, **kwargs) -> McpToolset:
     if name not in MCP_TOOLSETS:
         MCP_TOOLSETS[name] = McpToolset(name, **kwargs)
     return MCP_TOOLSETS[name]
+
+
+# Toolsets holding a server's *admin* key, used only by deterministic `/` commands. Kept apart
+# from MCP_TOOLSETS so they are never refreshed for, or handed to, an agent.
+MCP_ADMIN_TOOLSETS: dict[str, McpToolset] = {}
+
+
+def register_admin_toolset(name: str, **kwargs) -> McpToolset:
+    if name not in MCP_ADMIN_TOOLSETS:
+        MCP_ADMIN_TOOLSETS[name] = McpToolset(f"{name}:admin", **kwargs)
+    return MCP_ADMIN_TOOLSETS[name]
+
+
+def admin_toolset(name: str) -> Optional[McpToolset]:
+    """The admin toolset of sub-agent ``name``, or None when it has no admin key configured."""
+    ts = MCP_ADMIN_TOOLSETS.get(name)
+    return ts if ts is not None and env_str(ts.key_env) else None
 
 
 async def refresh_mcp_toolsets() -> None:
