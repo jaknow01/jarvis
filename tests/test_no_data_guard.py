@@ -1,16 +1,13 @@
 """Tests for the coordinator's forced-tool-choice support: the `no_data_needed` escape
-tool, the engine guard that replaces the coordinator's answer with a fixed one on a no-data turn, and the
-Anthropic `tool_choice` overlay."""
+tool (the coordinator then writes the reply itself — there are no fixed answers), the
+scheduled-turn instructions, and the Anthropic `tool_choice` overlay."""
 import asyncio
-
-import pytest
 
 from llama_index.core.tools import FunctionTool
 
 from lib.agents.coordinator.no_data import no_data_needed
 from lib.core import Ctx, bind_app_context, reset_app_context
 from lib.core.llm import ToolChoiceAnthropic
-from lib.runtime.engine import _guard_no_data_turn, scheduled_reminder_text
 
 
 def test_no_data_tool_marks_turn():
@@ -22,30 +19,6 @@ def test_no_data_tool_marks_turn():
         reset_app_context(token)
     assert turn.no_data_kind == "thanks"
     assert out.startswith("OK")
-
-
-def test_guard_replaces_answer_when_only_escape_tool_used():
-    turn = Ctx()
-    turn.no_data_kind = "thanks"
-    assert _guard_no_data_turn(turn, "Nie ma za co! WIG20: 3408 pkt (+1,2%)") == "Nie ma za co!"
-
-
-def test_guard_unknown_kind_gets_generic_answer():
-    turn = Ctx()
-    turn.no_data_kind = "something_else"
-    out = _guard_no_data_turn(turn, "EUR/PLN 4.70")
-    assert "4.70" not in out and out
-
-
-def test_guard_keeps_summary_when_a_subagent_ran():
-    turn = Ctx()
-    turn.no_data_kind = "thanks"
-    turn.subagent_calls.append("finance_agent")
-    assert _guard_no_data_turn(turn, "EUR/PLN 4.3775") == "EUR/PLN 4.3775"
-
-
-def test_guard_keeps_summary_on_normal_turn():
-    assert _guard_no_data_turn(Ctx(), "EUR/PLN 4.3775") == "EUR/PLN 4.3775"
 
 
 def _anthropic_prepare(tool_choice):
@@ -69,33 +42,36 @@ def test_anthropic_overlay_auto_and_named():
     assert _anthropic_prepare("ping")["tool_choice"] == {"type": "tool", "name": "ping"}
 
 
-# ── scheduled turns: a plain reminder needs no data, so the escape tool is expected ──
+# ── no fixed answers: the coordinator writes the reply, guided by its prompt ──
 
 
-def test_scheduled_no_data_turn_delivers_the_task_not_jasne():
+def test_reminder_is_a_no_data_kind():
     turn = Ctx()
-    turn.no_data_kind = "acknowledgement"
-    out = _guard_no_data_turn(turn, "Jasne.", scheduled_task="Przypomnij mi o zadaniach na platformie na studia.")
-    assert out == "Przypominam o zadaniach na platformie na studia."
+    token = bind_app_context(turn)
+    try:
+        out = asyncio.run(no_data_needed(ctx=None, kind="reminder"))
+    finally:
+        reset_app_context(token)
+    assert turn.no_data_kind == "reminder" and "reminder text itself" in out
 
 
-def test_scheduled_turn_with_subagent_keeps_the_answer():
-    turn = Ctx()
-    turn.no_data_kind = "acknowledgement"
-    turn.subagent_calls.append("weather_agent")
-    assert _guard_no_data_turn(turn, "Dziś 12°C.", scheduled_task="Podaj pogodę.") == "Dziś 12°C."
+def test_engine_has_no_fixed_answer_override():
+    from lib.runtime import engine
+
+    assert not hasattr(engine, "_guard_no_data_turn") and not hasattr(engine, "_NO_DATA_ANSWERS")
 
 
-def test_scheduled_turn_without_escape_tool_keeps_the_answer():
-    assert _guard_no_data_turn(Ctx(), "Pamiętaj o studiach!", scheduled_task="Przypomnij mi o studiach.") \
-        == "Pamiętaj o studiach!"
+def test_scheduled_turn_marker_says_job_exists_and_to_write_the_reminder():
+    from lib.runtime.engine import _SYSTEM_PROMPT_MARKER as marker
+
+    assert "JUŻ ISTNIEJE" in marker and "scheduler_agent" in marker
+    assert "no_data_needed" in marker and "Przypominam" in marker and "Jasne." in marker
 
 
-@pytest.mark.parametrize("task, expected", [
-    ("Przypomnij mi o spotkaniu z Anią.", "Przypominam o spotkaniu z Anią."),
-    ("przypomnij mi, że jutro jest egzamin", "Przypominam, że jutro jest egzamin"),
-    ("Zadania na platformie na studia", "Przypomnienie: Zadania na platformie na studia"),
-    ("Przypomnij mi", "Przypomnienie: Przypomnij mi"),
-])
-def test_scheduled_reminder_text(task, expected):
-    assert scheduled_reminder_text(task) == expected
+def test_coordinator_prompt_covers_scheduled_reminders():
+    from lib.agents import create_coordinator_agent
+    from tests.conftest_mcp import listed_subagents
+
+    with listed_subagents():
+        prompt = create_coordinator_agent().system_prompt
+    assert "scheduled plain reminder" in prompt and "never just 'Jasne.'" in prompt

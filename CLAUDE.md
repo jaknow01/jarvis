@@ -361,9 +361,11 @@ on every provider client, defaults 60 s / 2 retries — per-read only, which is 
 caps exist). `COORDINATOR_FORCE_TOOL` (default on): the coordinator is built with
 `initial_tool_choice="required"` so its first step must call a tool — it delegates instead
 of answering from history (weaker/local models otherwise invent figures on follow-ups). Pure
-small talk goes through the `no_data_needed` escape tool (`coordinator/no_data.py`); when that
-is the only call in a turn the engine replaces the coordinator's answer with a fixed one per
-declared kind (`_guard_no_data_turn`), so misuse can't leak invented data. The
+small talk (and a scheduled plain reminder) goes through the `no_data_needed` escape tool
+(`coordinator/no_data.py`); the coordinator then writes the reply itself under its prompt rules
+(no facts, nothing was gathered) — there are no fixed answers. A scheduled turn is prefixed with
+`_SYSTEM_PROMPT_MARKER` (engine), which says the job already exists (don't re-create it via
+the scheduler_agent) and that a plain reminder's reply is the reminder itself. The
 native Anthropic class is wrapped (`ToolChoiceAnthropic` in `lib/core/llm.py`) to translate
 `tool_choice` into Anthropic's `tool_required`. Every sub-agent prompt also gets
 `SUBAGENT_TOOL_RULES` appended by `agent_as_tool` (tools only, sanity-check results, retry

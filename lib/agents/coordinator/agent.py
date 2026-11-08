@@ -162,8 +162,12 @@ def create_coordinator_agent(profile: Profile | None = None, allow_sensitive: bo
         instructions += (
             f"\n\nYou must call at least one tool on every message. If, and only if, the message is pure "
             f"conversation that needs no data and no action (greeting, thanks, small talk, a bare 'ok', "
-            f"farewell), call `{NO_DATA_TOOL}` instead of a subagent. Never use it for a question, a "
-            f"follow-up or a request — those always go to a subagent."
+            f"farewell), or a scheduled plain reminder that only has to be delivered, call `{NO_DATA_TOOL}` "
+            f"instead of a subagent, then write a short natural reply yourself (no facts or numbers - "
+            f"nothing was gathered). For a scheduled reminder that reply IS the reminder: tell the user "
+            f"what they asked to be reminded of (e.g. 'Przypominam o zadaniach na platformie na studia.'), "
+            f"never just 'Jasne.' or 'OK'. Never use `{NO_DATA_TOOL}` for a question, a follow-up or a "
+            f"request - those always go to a subagent."
         )
 
     agent = FunctionAgent(

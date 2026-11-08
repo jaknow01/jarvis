@@ -20,7 +20,6 @@ Responses API `previous_response_id` mechanism is gone.
 
 import asyncio
 import logging
-import re
 import time
 from typing import Awaitable, Callable
 
@@ -60,10 +59,25 @@ logger = logging.getLogger(__name__)
 # is an autonomous job to execute and turn into a message for the user — not a question
 # typed by the user right now. The composer still writes the final reply in Polish.
 _SYSTEM_PROMPT_MARKER = (
-    "[ZAPLANOWANE ZADANIE — to jest automatyczne wywołanie z harmonogramu, nie "
-    "bieżąca wiadomość użytkownika. Wykonaj poniższe zadanie i przygotuj gotową "
-    "wiadomość do użytkownika:]\n"
+    "[ZAPLANOWANE ZADANIE — to jest automatyczne wywołanie z harmonogramu, nie bieżąca "
+    "wiadomość użytkownika. To zadanie JUŻ ISTNIEJE w harmonogramie i właśnie nadszedł jego "
+    "czas: NIE twórz, nie zmieniaj ani nie potwierdzaj przypomnienia (nie wołaj "
+    "scheduler_agent w jego sprawie). Wykonaj zadanie poniżej i napisz gotową wiadomość do "
+    "użytkownika. Jeśli to zwykłe przypomnienie, które nie wymaga żadnych danych, wywołaj "
+    "no_data_needed, a potem napisz samo przypomnienie, np. „Przypominam o …”, z treścią "
+    "zadania — nigdy samo „Jasne.” ani „OK”. Jeśli zadanie wymaga danych, pobierz je od "
+    "odpowiednich agentów jak zwykle.]\n"
 )
+
+# How a scheduled task is kept in the conversation history: marked, so in later turns it is
+# clear the owner did not type it (it is not a new "przypomnij mi..." request).
+SCHEDULED_HISTORY_PREFIX = "[zadanie z harmonogramu] "
+
+
+def scheduled_turn_input(task: str) -> str:
+    """The coordinator's input for a scheduled turn: the marker, then the job's task in clear
+    delimiters so it reads as the job's content, not as a request typed now."""
+    return _SYSTEM_PROMPT_MARKER + "Treść zadania: «" + task.strip() + "»"
 
 
 # Stored in the conversation history instead of a reply built from a sensitive sub-agent
@@ -96,52 +110,6 @@ def _partial_gather(results: list[tuple[str, str]], timeout: int) -> str:
         "Nie zdążyłem zebrać wszystkich informacji w wyznaczonym czasie, więc część odpowiedzi "
         "może być niepełna. Oto, co udało się ustalić:\n\n" + body
     )
-
-
-# Fixed answers for a turn where the coordinator only declared the message conversational
-# (`no_data_needed`) and ran no sub-agent. The content comes from code — not from an LLM —
-# so this path has nothing it could invent; the composer just formats it.
-_NO_DATA_ANSWERS = {
-    "greeting": "Cześć! W czym mogę pomóc?",
-    "thanks": "Nie ma za co!",
-    "small_talk": "Jestem do dyspozycji. W czym mogę pomóc?",
-    "acknowledgement": "Jasne.",
-    "farewell": "Do usłyszenia!",
-}
-_NO_DATA_DEFAULT = "Jestem do dyspozycji. W czym mogę pomóc?"
-
-
-_REMIND_ME = re.compile(r"^\s*przypomnij\s+mi\b[\s,]*", re.IGNORECASE)
-
-
-def scheduled_reminder_text(task: str) -> str:
-    """The message for a scheduled job that needed no data (a plain reminder), built from the
-    job's stored task alone: "Przypomnij mi o X." -> "Przypominam o X."; anything else is
-    shown as "Przypomnienie: <task>". Deterministic, so nothing can be invented."""
-    task = task.strip()
-    rest = _REMIND_ME.sub("", task, count=1)
-    if rest != task and rest:
-        joiner = ", " if rest.lower().startswith(("że", "żeby", "aby", "by ")) else " "
-        return "Przypominam" + joiner + rest
-    return "Przypomnienie: " + task
-
-
-def _guard_no_data_turn(turn_ctx: Ctx, answer: str, scheduled_task: str | None = None) -> str:
-    """Replace the coordinator's answer on a turn where it only called the `no_data_needed`
-    escape tool (no sub-agent ran): nothing was gathered, so any facts in that text would be
-    the model's own invention. A fixed answer for the declared kind is used instead, so
-    misuse of the escape tool yields a generic reply, never fabricated data.
-
-    On a scheduled turn (`scheduled_task` = the job's stored task) the message the user is
-    waiting for is the task itself — a plain reminder needs no data, so the escape tool is the
-    expected path there — and the fixed answer is built from that task, not "Jasne."."""
-    if turn_ctx.no_data_kind and not turn_ctx.subagent_calls:
-        logger.info("No-data turn (kind=%s, scheduled=%s): coordinator answer replaced",
-                    turn_ctx.no_data_kind, scheduled_task is not None)
-        if scheduled_task is not None:
-            return scheduled_reminder_text(scheduled_task)
-        return _NO_DATA_ANSWERS.get(turn_ctx.no_data_kind, _NO_DATA_DEFAULT)
-    return answer
 
 
 async def _gather_with_progress_ping(handler, notify, want_ping, timeout: int = 0):
@@ -310,7 +278,7 @@ async def handle_message(
         # the listing must be cached before the coordinator is built. A no-op while fresh;
         # never raises (see lib/core/mcp_client.py).
         history, _ = await asyncio.gather(build_chat_history(conversation_id), refresh_mcp_toolsets())
-        input_text = (_SYSTEM_PROMPT_MARKER + text) if origin == "system" else text
+        input_text = scheduled_turn_input(text) if origin == "system" else text
 
         # 1) Coordinator gathers results from the subagent tools and writes the answer.
         #    On a live user turn with a notify callback we watch its event stream so a
@@ -327,7 +295,6 @@ async def handle_message(
         answer = str(await _gather_with_progress_ping(
             handler, notify, want_ping, timeout=coordinator_timeout_seconds()
         ))
-        answer = _guard_no_data_turn(turn_ctx, answer, scheduled_task=text if origin == "system" else None)
 
         # 2) Composer formats the coordinator's answer, deterministically (always runs). It
         #    gets ONLY that answer — no user message, no history — so it can't add content.
@@ -343,7 +310,8 @@ async def handle_message(
         sensitive = any(is_sensitive(name) for name in turn_ctx.subagent_calls)
         stored = SENSITIVE_HISTORY_PLACEHOLDER if sensitive else reply
         trace_id = last_trace_id()
-        conversations.record_turn(conversation_id, text, stored, trace_id=trace_id)
+        stored_user = (SCHEDULED_HISTORY_PREFIX + text) if origin == "system" else text
+        conversations.record_turn(conversation_id, stored_user, stored, trace_id=trace_id)
         diag.record_turn_stats(conversation_id, time.monotonic() - started, trace_id)
 
         # 4) Fold any freshly-evicted history into the running summary in the background,
