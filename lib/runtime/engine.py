@@ -20,6 +20,7 @@ Responses API `previous_response_id` mechanism is gone.
 
 import asyncio
 import logging
+import re
 import time
 from typing import Awaitable, Callable
 
@@ -110,13 +111,35 @@ _NO_DATA_ANSWERS = {
 _NO_DATA_DEFAULT = "Jestem do dyspozycji. W czym mogę pomóc?"
 
 
-def _guard_no_data_turn(turn_ctx: Ctx, answer: str) -> str:
+_REMIND_ME = re.compile(r"^\s*przypomnij\s+mi\b[\s,]*", re.IGNORECASE)
+
+
+def scheduled_reminder_text(task: str) -> str:
+    """The message for a scheduled job that needed no data (a plain reminder), built from the
+    job's stored task alone: "Przypomnij mi o X." -> "Przypominam o X."; anything else is
+    shown as "Przypomnienie: <task>". Deterministic, so nothing can be invented."""
+    task = task.strip()
+    rest = _REMIND_ME.sub("", task, count=1)
+    if rest != task and rest:
+        joiner = ", " if rest.lower().startswith(("że", "żeby", "aby", "by ")) else " "
+        return "Przypominam" + joiner + rest
+    return "Przypomnienie: " + task
+
+
+def _guard_no_data_turn(turn_ctx: Ctx, answer: str, scheduled_task: str | None = None) -> str:
     """Replace the coordinator's answer on a turn where it only called the `no_data_needed`
     escape tool (no sub-agent ran): nothing was gathered, so any facts in that text would be
     the model's own invention. A fixed answer for the declared kind is used instead, so
-    misuse of the escape tool yields a generic reply, never fabricated data."""
+    misuse of the escape tool yields a generic reply, never fabricated data.
+
+    On a scheduled turn (`scheduled_task` = the job's stored task) the message the user is
+    waiting for is the task itself — a plain reminder needs no data, so the escape tool is the
+    expected path there — and the fixed answer is built from that task, not "Jasne."."""
     if turn_ctx.no_data_kind and not turn_ctx.subagent_calls:
-        logger.info("No-data turn (kind=%s): coordinator answer replaced", turn_ctx.no_data_kind)
+        logger.info("No-data turn (kind=%s, scheduled=%s): coordinator answer replaced",
+                    turn_ctx.no_data_kind, scheduled_task is not None)
+        if scheduled_task is not None:
+            return scheduled_reminder_text(scheduled_task)
         return _NO_DATA_ANSWERS.get(turn_ctx.no_data_kind, _NO_DATA_DEFAULT)
     return answer
 
@@ -304,7 +327,7 @@ async def handle_message(
         answer = str(await _gather_with_progress_ping(
             handler, notify, want_ping, timeout=coordinator_timeout_seconds()
         ))
-        answer = _guard_no_data_turn(turn_ctx, answer)
+        answer = _guard_no_data_turn(turn_ctx, answer, scheduled_task=text if origin == "system" else None)
 
         # 2) Composer formats the coordinator's answer, deterministically (always runs). It
         #    gets ONLY that answer — no user message, no history — so it can't add content.

@@ -3,12 +3,14 @@ tool, the engine guard that replaces the coordinator's answer with a fixed one o
 Anthropic `tool_choice` overlay."""
 import asyncio
 
+import pytest
+
 from llama_index.core.tools import FunctionTool
 
 from lib.agents.coordinator.no_data import no_data_needed
 from lib.core import Ctx, bind_app_context, reset_app_context
 from lib.core.llm import ToolChoiceAnthropic
-from lib.runtime.engine import _guard_no_data_turn
+from lib.runtime.engine import _guard_no_data_turn, scheduled_reminder_text
 
 
 def test_no_data_tool_marks_turn():
@@ -65,3 +67,35 @@ def test_anthropic_overlay_auto_and_named():
     assert _anthropic_prepare(None)["tool_choice"]["type"] == "auto"
     assert _anthropic_prepare("auto")["tool_choice"]["type"] == "auto"
     assert _anthropic_prepare("ping")["tool_choice"] == {"type": "tool", "name": "ping"}
+
+
+# ── scheduled turns: a plain reminder needs no data, so the escape tool is expected ──
+
+
+def test_scheduled_no_data_turn_delivers_the_task_not_jasne():
+    turn = Ctx()
+    turn.no_data_kind = "acknowledgement"
+    out = _guard_no_data_turn(turn, "Jasne.", scheduled_task="Przypomnij mi o zadaniach na platformie na studia.")
+    assert out == "Przypominam o zadaniach na platformie na studia."
+
+
+def test_scheduled_turn_with_subagent_keeps_the_answer():
+    turn = Ctx()
+    turn.no_data_kind = "acknowledgement"
+    turn.subagent_calls.append("weather_agent")
+    assert _guard_no_data_turn(turn, "Dziś 12°C.", scheduled_task="Podaj pogodę.") == "Dziś 12°C."
+
+
+def test_scheduled_turn_without_escape_tool_keeps_the_answer():
+    assert _guard_no_data_turn(Ctx(), "Pamiętaj o studiach!", scheduled_task="Przypomnij mi o studiach.") \
+        == "Pamiętaj o studiach!"
+
+
+@pytest.mark.parametrize("task, expected", [
+    ("Przypomnij mi o spotkaniu z Anią.", "Przypominam o spotkaniu z Anią."),
+    ("przypomnij mi, że jutro jest egzamin", "Przypominam, że jutro jest egzamin"),
+    ("Zadania na platformie na studia", "Przypomnienie: Zadania na platformie na studia"),
+    ("Przypomnij mi", "Przypomnienie: Przypomnij mi"),
+])
+def test_scheduled_reminder_text(task, expected):
+    assert scheduled_reminder_text(task) == expected
